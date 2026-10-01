@@ -1,0 +1,12 @@
+Window.SetBackgroundTopColor(0.0, 0.0, 0.0);
+Window.SetBackgroundBottomColor(0.0, 0.0, 0.0);
+
+title_image = Image.Text("TCRADIOS", 0.92, 0.95, 1.0);
+title_sprite = Sprite(title_image);
+title_sprite.SetX(Window.GetWidth() / 2 - title_image.GetWidth() / 2);
+title_sprite.SetY(Window.GetHeight() / 2 - title_image.GetHeight());
+
+subtitle_image = Image.Text("by JayathaSoft", 0.38, 0.48, 0.64);
+subtitle_sprite = Sprite(subtitle_image);
+subtitle_sprite.SetX(Window.GetWidth() / 2 - subtitle_image.GetWidth() / 2);
+subtitle_sprite.SetY(Window.GetHeight() / 2 + 18);

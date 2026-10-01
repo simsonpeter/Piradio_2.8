@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=TCRADIOS
+Description=TCRADIOS branded black boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/tcradios
+ScriptFile=/usr/share/plymouth/themes/tcradios/tcradios.script

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=TCRADIOS
+Comment=Start TCRADIOS in fullscreen mode
+Exec=/usr/local/bin/tcradios-start
+Terminal=false
+X-GNOME-Autostart-enabled=true
+X-LXDE-Autostart-enabled=true

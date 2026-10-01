@@ -3498,6 +3498,17 @@ try:
 except:
     screen = pygame.display.set_mode((320, 480))
 
+# Cover application initialization with the same branding as the boot splash.
+screen.fill((0, 0, 0))
+splash_title_font = get_unicode_font(38, bold=True)
+splash_subtitle_font = get_unicode_font(16)
+splash_title = splash_title_font.render("TCRADIOS", True, (235, 242, 255))
+splash_subtitle = splash_subtitle_font.render("by JayathaSoft", True, (92, 112, 145))
+screen.blit(splash_title, splash_title.get_rect(center=(160, 218)))
+screen.blit(splash_subtitle, splash_subtitle.get_rect(center=(160, 257)))
+pygame.draw.line(screen, (38, 150, 210), (100, 282), (220, 282), 2)
+pygame.display.flip()
+
 UI_BG_TOP = (0, 0, 0)
 UI_BG_BOTTOM = (7, 7, 10)
 UI_SURFACE = (15, 18, 25)
