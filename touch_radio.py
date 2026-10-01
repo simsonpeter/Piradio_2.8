@@ -3498,17 +3498,30 @@ try:
 except:
     screen = pygame.display.set_mode((320, 480))
 
-UI_BG_TOP = (7, 13, 29)
-UI_BG_BOTTOM = (20, 13, 43)
-UI_SURFACE = (19, 28, 49)
-UI_SURFACE_RAISED = (27, 38, 64)
+UI_BG_TOP = (0, 0, 0)
+UI_BG_BOTTOM = (7, 7, 10)
+UI_SURFACE = (15, 18, 25)
+UI_SURFACE_RAISED = (24, 28, 38)
 UI_TEXT = (241, 245, 255)
-UI_MUTED = (139, 153, 181)
+UI_MUTED = (120, 126, 140)
 UI_BLUE = (50, 205, 255)
 UI_PURPLE = (145, 92, 255)
 UI_PINK = (255, 83, 148)
 UI_AMBER = (255, 193, 74)
 UI_GREEN = (54, 222, 159)
+
+def mix_colors(first, second, amount):
+    return tuple(
+        int(first[i] + (second[i] - first[i]) * amount)
+        for i in range(3)
+    )
+
+def ensure_bright(color, minimum=125):
+    luminance = color[0] * 0.2126 + color[1] * 0.7152 + color[2] * 0.0722
+    if luminance >= minimum:
+        return color
+    amount = (minimum - luminance) / max(1, 255 - luminance)
+    return mix_colors(color, (255, 255, 255), amount)
 
 def create_ui_background():
     background = pygame.Surface((320, 480))
@@ -3521,10 +3534,31 @@ def create_ui_background():
         pygame.draw.line(background, color, (0, y), (319, y))
 
     glow = pygame.Surface((320, 480), pygame.SRCALPHA)
-    pygame.draw.circle(glow, (*UI_BLUE, 18), (292, 108), 115)
-    pygame.draw.circle(glow, (*UI_PURPLE, 20), (12, 360), 135)
+    pygame.draw.circle(glow, (*UI_BLUE, 10), (292, 108), 115)
+    pygame.draw.circle(glow, (*UI_PURPLE, 12), (12, 360), 135)
     background.blit(glow, (0, 0))
     return background
+
+def refresh_ui_palette():
+    global UI_BG_TOP, UI_BG_BOTTOM, UI_SURFACE, UI_SURFACE_RAISED
+    global UI_TEXT, UI_MUTED, UI_BLUE, UI_PURPLE, UI_AMBER
+    global ui_background, ui_palette_theme
+
+    background = current_theme.pygame_background
+    theme_text = ensure_bright(current_theme.pygame_text, 195)
+    UI_BLUE = ensure_bright(current_theme.pygame_primary)
+    UI_PURPLE = ensure_bright(current_theme.pygame_secondary)
+    UI_AMBER = ensure_bright(current_theme.pygame_accent, 140)
+
+    # Keep every theme dark and calm; themes alter the accent pattern.
+    UI_BG_TOP = mix_colors((0, 0, 0), background, 0.08)
+    UI_BG_BOTTOM = mix_colors(UI_BG_TOP, UI_PURPLE, 0.07)
+    UI_SURFACE = mix_colors(UI_BG_TOP, theme_text, 0.07)
+    UI_SURFACE_RAISED = mix_colors(UI_BG_TOP, theme_text, 0.12)
+    UI_TEXT = theme_text
+    UI_MUTED = mix_colors(UI_BG_TOP, theme_text, 0.48)
+    ui_background = create_ui_background()
+    ui_palette_theme = current_theme.name
 
 def draw_centered_text(surface, font, text, color, rect):
     rendered = font.render(text, True, color)
@@ -3536,7 +3570,9 @@ def draw_modern_button(surface, rect, fill, border, radius=14, border_width=1):
     pygame.draw.rect(surface, border, rect, border_width, border_radius=radius)
     return rect
 
-ui_background = create_ui_background()
+ui_background = None
+ui_palette_theme = None
+refresh_ui_palette()
 
 instance = vlc.Instance('--no-video')
 player = instance.media_player_new()
@@ -3728,28 +3764,32 @@ def handle_sleep_timer():
 
 def draw_weather_icon(surface, x, y, type, size=30):
     line_width = max(2, size // 8)
+    sun_color = tuple(int(channel * 0.3) for channel in GOLD)
+    rain_color = tuple(int(channel * 0.28) for channel in CYAN)
+    cloud_dark = (38, 38, 38)
+    cloud_light = (58, 58, 58)
     if type == "clear":
         sun_radius = size * 3 // 5
-        pygame.draw.circle(surface, GOLD, (x, y), sun_radius)
+        pygame.draw.circle(surface, sun_color, (x, y), sun_radius)
         for i in range(8):
             angle = i * (math.pi / 4)
             x1 = x + math.cos(angle) * (sun_radius + 3)
             y1 = y + math.sin(angle) * (sun_radius + 3)
             x2 = x + math.cos(angle) * size
             y2 = y + math.sin(angle) * size
-            pygame.draw.line(surface, GOLD, (x1, y1), (x2, y2), line_width)
+            pygame.draw.line(surface, sun_color, (x1, y1), (x2, y2), line_width)
     elif type == "cloud":
-        pygame.draw.circle(surface, GRAY, (x-size//2, y+size//6), size//3)
-        pygame.draw.circle(surface, WHITE, (x, y-size//8), size*2//5)
-        pygame.draw.circle(surface, GRAY, (x+size//2, y+size//6), size//3)
-        pygame.draw.rect(surface, GRAY, (x-size//2, y, size, size//3))
+        pygame.draw.circle(surface, cloud_dark, (x-size//2, y+size//6), size//3)
+        pygame.draw.circle(surface, cloud_light, (x, y-size//8), size*2//5)
+        pygame.draw.circle(surface, cloud_dark, (x+size//2, y+size//6), size//3)
+        pygame.draw.rect(surface, cloud_dark, (x-size//2, y, size, size//3))
     elif type == "rain":
         cloud_radius = size * 2 // 5
-        pygame.draw.circle(surface, (70,70,70), (x, y-size//5), cloud_radius)
+        pygame.draw.circle(surface, cloud_dark, (x, y-size//5), cloud_radius)
         for i in range(3):
             rx = x - size//2 + (i * size//2)
             pygame.draw.line(
-                surface, CYAN,
+                surface, rain_color,
                 (rx, y+size//3),
                 (rx-size//8, y+size),
                 line_width
@@ -3763,14 +3803,14 @@ def draw_screensaver():
     # Dim the time display (not too bright)
     time_now = datetime.now().strftime("%H:%M")
     # Use darker gray for time (not pure white)
-    time_surf = f_xl.render(time_now, True, (100, 100, 100))
+    time_surf = f_xl.render(time_now, True, (68, 68, 68))
     time_rect = time_surf.get_rect(center=(160, 75))
     screen.blit(time_surf, time_rect)
     
     # Second line: extra-large weather icon and temperature
     weather_icon_size = 42
     weather_gap = 16
-    temp_surf = f_weather.render(f"{current_temp}°C", True, (100, 100, 100))
+    temp_surf = f_weather.render(f"{current_temp}°C", True, (70, 70, 70))
     weather_width = weather_icon_size * 2 + weather_gap + temp_surf.get_width()
     weather_left = (320 - weather_width) // 2
     weather_center_y = 190
@@ -3786,7 +3826,7 @@ def draw_screensaver():
     
     # Third line: scrolling station name
     station_name = f"RADIO: {sanitize_text(stations[current_idx]['name']).upper()}"
-    station_surf = f_med.render(station_name, True, (0, 100, 100))
+    station_surf = f_med.render(station_name, True, (0, 62, 62))
     saver_scroll_x -= 1
     if saver_scroll_x < -station_surf.get_width():
         saver_scroll_x = 320
@@ -3794,21 +3834,21 @@ def draw_screensaver():
 
     # Fourth line: alarm on the left and volume on the right
     alarm_label = f"Alarm {alarm_system.alarm_time}" if alarm_system.alarm_enabled else "Alarm off"
-    alarm_color = (100, 80, 0) if alarm_system.alarm_enabled else (60, 60, 60)
+    alarm_color = (70, 55, 0) if alarm_system.alarm_enabled else (42, 42, 42)
     alarm_text = f_sm.render(alarm_label, True, alarm_color)
     screen.blit(alarm_text, (16, 385))
 
-    vol_surf = f_sm.render(f"Vol: {vol_level}%", True, (60, 60, 60))
+    vol_surf = f_sm.render(f"Vol: {vol_level}%", True, (42, 42, 42))
     screen.blit(vol_surf, (304 - vol_surf.get_width(), 385))
 
     if alarm_system.sleep_timer_enabled:
         remaining = alarm_system.get_sleep_remaining()
-        sleep_color = (0, 80, 0) if remaining > 10 else (80, 0, 0)
+        sleep_color = (0, 55, 0) if remaining > 10 else (55, 0, 0)
         sleep_text = f_sm.render(f"Sleep: {remaining} min", True, sleep_color)
         screen.blit(sleep_text, (160 - sleep_text.get_width()//2, 425))
     
     # Exit hint - very dim
-    hint_surf = f_tiny.render("Tap to exit", True, (40, 40, 40))
+    hint_surf = f_tiny.render("Tap to exit", True, (28, 28, 28))
     screen.blit(hint_surf, (160 - hint_surf.get_width()//2, 460))
 
 adjusting_volume = False
@@ -3864,6 +3904,8 @@ while True:
         draw_screensaver()
     else:
         pygame.mouse.set_visible(True)
+        if ui_palette_theme != current_theme.name:
+            refresh_ui_palette()
         screen.blit(ui_background, (0, 0))
 
         # Compact header
