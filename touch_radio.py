@@ -3482,6 +3482,7 @@ try:
     f_xl = get_unicode_font(80, bold=True)
     f_med = get_unicode_font(24, bold=True)
     f_tiny = get_unicode_font(12, bold=True)
+    f_weather = get_unicode_font(32, bold=True)
     print("Unicode fonts loaded successfully")
 except Exception as e:
     print(f"Font error: {e}, using defaults")
@@ -3490,6 +3491,7 @@ except Exception as e:
     f_xl = pygame.font.Font(None, 80)
     f_med = pygame.font.Font(None, 24)
     f_tiny = pygame.font.Font(None, 12)
+    f_weather = pygame.font.Font(None, 32)
 
 try:
     screen = pygame.display.set_mode((320, 480), pygame.FULLSCREEN | pygame.NOFRAME)
@@ -3660,23 +3662,34 @@ def handle_sleep_timer():
         elif alarm_system.sleep_stop_method == "stop":
             player.stop()
 
-def draw_weather_icon(surface, x, y, type):
+def draw_weather_icon(surface, x, y, type, size=30):
+    line_width = max(2, size // 8)
     if type == "clear":
-        pygame.draw.circle(surface, GOLD, (x, y), 15)
+        sun_radius = size * 3 // 5
+        pygame.draw.circle(surface, GOLD, (x, y), sun_radius)
         for i in range(8):
             angle = i * (math.pi / 4)
-            x2 = x + math.cos(angle) * 22
-            y2 = y + math.sin(angle) * 22
-            pygame.draw.line(surface, GOLD, (x, y), (x2, y2), 2)
+            x1 = x + math.cos(angle) * (sun_radius + 3)
+            y1 = y + math.sin(angle) * (sun_radius + 3)
+            x2 = x + math.cos(angle) * size
+            y2 = y + math.sin(angle) * size
+            pygame.draw.line(surface, GOLD, (x1, y1), (x2, y2), line_width)
     elif type == "cloud":
-        pygame.draw.circle(surface, GRAY, (x-8, y+5), 10)
-        pygame.draw.circle(surface, WHITE, (x, y), 12)
-        pygame.draw.circle(surface, GRAY, (x+8, y+5), 10)
+        pygame.draw.circle(surface, GRAY, (x-size//2, y+size//6), size//3)
+        pygame.draw.circle(surface, WHITE, (x, y-size//8), size*2//5)
+        pygame.draw.circle(surface, GRAY, (x+size//2, y+size//6), size//3)
+        pygame.draw.rect(surface, GRAY, (x-size//2, y, size, size//3))
     elif type == "rain":
-        pygame.draw.circle(surface, (70,70,70), (x, y), 12)
+        cloud_radius = size * 2 // 5
+        pygame.draw.circle(surface, (70,70,70), (x, y-size//5), cloud_radius)
         for i in range(3):
-            rx = x - 10 + (i * 10)
-            pygame.draw.line(surface, CYAN, (rx, y+15), (rx-2, y+22), 2)
+            rx = x - size//2 + (i * size//2)
+            pygame.draw.line(
+                surface, CYAN,
+                (rx, y+size//3),
+                (rx-size//8, y+size),
+                line_width
+            )
 
 def draw_screensaver():
     global saver_scroll_x
@@ -3715,14 +3728,26 @@ def draw_screensaver():
         screen.blit(alarm_text, (160 - alarm_text.get_width()//2, y_pos))
         y_pos += 20
     
-    # Weather - dim
-    draw_weather_icon(screen, 160, y_pos + 10, weather_type)
-    temp_surf = f_sm.render(f"{current_temp}°C", True, (80, 80, 80))
-    screen.blit(temp_surf, (160 - temp_surf.get_width()//2, y_pos + 30))
+    # Large weather row for readability at a distance
+    weather_icon_size = 30
+    weather_gap = 14
+    temp_surf = f_weather.render(f"{current_temp}°C", True, (100, 100, 100))
+    weather_width = weather_icon_size * 2 + weather_gap + temp_surf.get_width()
+    weather_left = (320 - weather_width) // 2
+    weather_center_y = min(y_pos + weather_icon_size, 390)
+    draw_weather_icon(
+        screen,
+        weather_left + weather_icon_size,
+        weather_center_y,
+        weather_type,
+        weather_icon_size
+    )
+    temp_y = weather_center_y - temp_surf.get_height() // 2
+    screen.blit(temp_surf, (weather_left + weather_icon_size * 2 + weather_gap, temp_y))
     
     # Volume - very dim
     vol_surf = f_sm.render(f"Vol: {vol_level}%", True, (60, 60, 60))
-    screen.blit(vol_surf, (160 - vol_surf.get_width()//2, 420))
+    screen.blit(vol_surf, (160 - vol_surf.get_width()//2, 430))
     
     # Exit hint - very dim
     hint_surf = f_tiny.render("Tap to exit", True, (40, 40, 40))
