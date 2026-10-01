@@ -121,9 +121,8 @@ if [[ -d /etc/xdg/labwc ]]; then
     rm -f "${AUTOSTART_DIR}/tcradios.desktop"
     install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${LABWC_DIR}"
     touch "${LABWC_AUTOSTART}"
-    if ! grep -qxF "/usr/local/bin/tcradios-start &" "${LABWC_AUTOSTART}"; then
-        printf '\n/usr/local/bin/tcradios-start &\n' >> "${LABWC_AUTOSTART}"
-    fi
+    sed -i '\|/usr/local/bin/tcradios-start|d' "${LABWC_AUTOSTART}"
+    printf '\n/usr/local/bin/tcradios-start &\n' >> "${LABWC_AUTOSTART}"
     chown "${INSTALL_USER}:${INSTALL_USER}" "${LABWC_AUTOSTART}"
     chmod 0755 "${LABWC_AUTOSTART}"
 else
@@ -132,7 +131,7 @@ else
         "${SCRIPT_DIR}/boot/tcradios-autostart.desktop" \
         "${AUTOSTART_DIR}/tcradios.desktop"
     if [[ -f "${LABWC_AUTOSTART}" ]]; then
-        sed -i '\|^/usr/local/bin/tcradios-start &$|d' "${LABWC_AUTOSTART}"
+        sed -i '\|/usr/local/bin/tcradios-start|d' "${LABWC_AUTOSTART}"
     fi
 fi
 
