@@ -21,3 +21,11 @@ backs up `config.txt` and `cmdline.txt` before changing them.
 
 The earliest firmware output can vary by Raspberry Pi model and attached
 display. Normal Raspberry Pi OS boot logos and console messages are hidden.
+
+If automatic launch fails, inspect:
+
+```bash
+cat ~/.tcradios-start.log
+```
+
+The launcher waits for display `:0` before starting the radio.
