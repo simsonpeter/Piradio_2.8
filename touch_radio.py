@@ -3582,8 +3582,58 @@ def draw_modern_button(surface, rect, fill, border, radius=14, border_width=1):
     pygame.draw.rect(surface, border, rect, border_width, border_radius=radius)
     return rect
 
+def draw_animated_ui_glow(surface, now):
+    ui_animation_layer.fill((0, 0, 0, 0))
+    pulse = (math.sin(now * 1.1) + 1) / 2
+    blue_center = (
+        278 + int(math.sin(now * 0.35) * 18),
+        112 + int(math.cos(now * 0.42) * 16)
+    )
+    purple_center = (
+        28 + int(math.cos(now * 0.3) * 20),
+        365 + int(math.sin(now * 0.38) * 18)
+    )
+
+    for radius, alpha in ((105, 3), (78, 5), (52, 7)):
+        pygame.draw.circle(
+            ui_animation_layer,
+            (*UI_BLUE, alpha + int(pulse * 3)),
+            blue_center,
+            radius
+        )
+    for radius, alpha in ((120, 3), (88, 5), (58, 7)):
+        pygame.draw.circle(
+            ui_animation_layer,
+            (*UI_PURPLE, alpha + int((1 - pulse) * 3)),
+            purple_center,
+            radius
+        )
+    surface.blit(ui_animation_layer, (0, 0))
+
+def draw_pulsing_border(surface, rect, color, now):
+    ui_animation_layer.fill((0, 0, 0, 0))
+    pulse = (math.sin(now * 2.2) + 1) / 2
+    outer = rect.inflate(8, 8)
+    inner = rect.inflate(4, 4)
+    pygame.draw.rect(
+        ui_animation_layer,
+        (*color, 10 + int(pulse * 12)),
+        outer,
+        2,
+        border_radius=22
+    )
+    pygame.draw.rect(
+        ui_animation_layer,
+        (*color, 20 + int(pulse * 18)),
+        inner,
+        2,
+        border_radius=20
+    )
+    surface.blit(ui_animation_layer, (0, 0))
+
 ui_background = None
 ui_palette_theme = None
+ui_animation_layer = pygame.Surface((320, 480), pygame.SRCALPHA)
 refresh_ui_palette()
 
 instance = vlc.Instance('--no-video')
@@ -3923,6 +3973,7 @@ while True:
         if ui_palette_theme != current_theme.name:
             refresh_ui_palette()
         screen.blit(ui_background, (0, 0))
+        draw_animated_ui_glow(screen, now)
 
         # Compact header
         header_rect = pygame.Rect(8, 7, 304, 52)
@@ -4029,6 +4080,12 @@ while True:
         btn_prev = pygame.Rect(12, 329, 92, 53)
         btn_toggle = pygame.Rect(114, 325, 92, 61)
         btn_next = pygame.Rect(216, 329, 92, 53)
+        draw_pulsing_border(
+            screen,
+            btn_toggle,
+            UI_AMBER if is_playing else UI_GREEN,
+            now
+        )
         draw_modern_button(screen, btn_prev, UI_SURFACE_RAISED, UI_BLUE, 16)
         draw_modern_button(
             screen, btn_toggle,
