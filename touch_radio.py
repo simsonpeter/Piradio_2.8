@@ -88,7 +88,227 @@ class AudioOutputManager:
         self.outputs = {}
         self.current_output = 'auto'
         self.multi_mode = False
+        self.bluetooth_lock = threading.Lock()
+        self.settings_file = os.path.expanduser('~/.radio_audio')
+        self.default_bluetooth_address = None
+        self.load_settings()
         self.scan_outputs()
+        if self.default_bluetooth_address:
+            threading.Thread(
+                target=self._restore_bluetooth_default,
+                daemon=True
+            ).start()
+
+    def _run(self, command, timeout=15, input_text=None):
+        try:
+            return subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                input=input_text,
+                timeout=timeout
+            )
+        except FileNotFoundError:
+            raise RuntimeError(f"{command[0]} is not installed")
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"{command[0]} timed out")
+
+    def load_settings(self):
+        try:
+            with open(self.settings_file, 'r') as settings:
+                data = json.load(settings)
+                address = data.get('default_bluetooth_address')
+                if address and self._valid_bluetooth_address(address):
+                    self.default_bluetooth_address = address.upper()
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def save_settings(self):
+        try:
+            with open(self.settings_file, 'w') as settings:
+                json.dump({
+                    'default_bluetooth_address': self.default_bluetooth_address
+                }, settings)
+        except OSError as e:
+            print(f"Audio settings save error: {e}")
+
+    @staticmethod
+    def _valid_bluetooth_address(address):
+        return isinstance(address, str) and bool(
+            re.fullmatch(r'(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}', address)
+        )
+
+    @staticmethod
+    def _parse_bluetooth_devices(output):
+        devices = {}
+        for line in output.splitlines():
+            match = re.match(r'^Device ((?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s+(.+)$', line.strip())
+            if match:
+                address = match.group(1).upper()
+                devices[address] = {
+                    'address': address,
+                    'name': match.group(2).strip()
+                }
+        return devices
+
+    def _bluetooth_device_sets(self):
+        all_result = self._run(['bluetoothctl', 'devices'])
+        if all_result.returncode != 0:
+            error = all_result.stderr.strip() or all_result.stdout.strip()
+            raise RuntimeError(error or 'Bluetooth service is unavailable')
+
+        devices = self._parse_bluetooth_devices(all_result.stdout)
+        paired_result = self._run(['bluetoothctl', 'devices', 'Paired'])
+        connected_result = self._run(['bluetoothctl', 'devices', 'Connected'])
+        paired = set(self._parse_bluetooth_devices(paired_result.stdout))
+        connected = set(self._parse_bluetooth_devices(connected_result.stdout))
+
+        # Older bluetoothctl versions use "paired-devices".
+        paired_output = (paired_result.stdout + paired_result.stderr).lower()
+        if paired_result.returncode != 0 or 'invalid command' in paired_output:
+            paired_result = self._run(['bluetoothctl', 'paired-devices'])
+            paired = set(self._parse_bluetooth_devices(paired_result.stdout))
+
+        connected_output = (connected_result.stdout + connected_result.stderr).lower()
+        if connected_result.returncode != 0 or 'invalid command' in connected_output:
+            for address in devices:
+                info_result = self._run(['bluetoothctl', 'info', address])
+                if re.search(r'^\s*Connected:\s+yes\s*$', info_result.stdout, re.MULTILINE | re.IGNORECASE):
+                    connected.add(address)
+
+        for address in paired | connected:
+            devices.setdefault(address, {'address': address, 'name': address})
+        return devices, paired, connected
+
+    def get_bluetooth_devices(self):
+        devices, paired, connected = self._bluetooth_device_sets()
+        result = []
+        for address, device in devices.items():
+            result.append({
+                **device,
+                'paired': address in paired,
+                'connected': address in connected,
+                'default': address == self.default_bluetooth_address
+            })
+        return sorted(
+            result,
+            key=lambda device: (
+                not device['connected'],
+                not device['paired'],
+                device['name'].lower()
+            )
+        )
+
+    def scan_bluetooth(self):
+        with self.bluetooth_lock:
+            power_result = self._run(['bluetoothctl', 'power', 'on'])
+            if power_result.returncode != 0:
+                error = power_result.stderr.strip() or power_result.stdout.strip()
+                raise RuntimeError(error or 'Could not power on Bluetooth')
+            # bluetoothctl performs discovery until its timeout expires.
+            self._run(['bluetoothctl', '--timeout', '8', 'scan', 'on'], timeout=12)
+            return self.get_bluetooth_devices()
+
+    def _find_bluetooth_sink(self, address):
+        result = self._run(['pactl', 'list', 'sinks', 'short'])
+        address_token = address.replace(':', '_').lower()
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and address_token in parts[1].lower():
+                return parts[1]
+        return None
+
+    def _make_sink_default(self, address):
+        sink_name = None
+        for _ in range(12):
+            sink_name = self._find_bluetooth_sink(address)
+            if sink_name:
+                break
+            time.sleep(0.5)
+        if not sink_name:
+            raise RuntimeError('Connected, but no Bluetooth audio output appeared')
+
+        result = self._run(['pactl', 'set-default-sink', sink_name])
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or 'Could not set the default audio output')
+
+        # Move audio that was already playing to the newly selected speaker.
+        inputs = self._run(['pactl', 'list', 'sink-inputs', 'short'])
+        for line in inputs.stdout.splitlines():
+            parts = line.split()
+            if parts and parts[0].isdigit():
+                self._run(['pactl', 'move-sink-input', parts[0], sink_name])
+        return sink_name
+
+    def connect_bluetooth(self, address):
+        if not self._valid_bluetooth_address(address):
+            raise ValueError('Invalid Bluetooth address')
+        address = address.upper()
+
+        with self.bluetooth_lock:
+            power_result = self._run(['bluetoothctl', 'power', 'on'])
+            if power_result.returncode != 0:
+                raise RuntimeError(
+                    power_result.stderr.strip()
+                    or power_result.stdout.strip()
+                    or 'Could not power on Bluetooth'
+                )
+            _, paired, connected = self._bluetooth_device_sets()
+
+            if address not in paired:
+                pair_result = self._run(
+                    ['bluetoothctl', '--timeout', '35'],
+                    timeout=40,
+                    input_text=(
+                        'agent NoInputNoOutput\n'
+                        'default-agent\n'
+                        f'pair {address}\n'
+                        'quit\n'
+                    )
+                )
+                pair_output = (pair_result.stdout + pair_result.stderr).lower()
+                if pair_result.returncode != 0 or 'failed' in pair_output:
+                    raise RuntimeError(
+                        pair_result.stderr.strip()
+                        or pair_result.stdout.strip()
+                        or 'Bluetooth pairing failed'
+                    )
+
+            trust_result = self._run(['bluetoothctl', 'trust', address])
+            trust_output = (trust_result.stdout + trust_result.stderr).lower()
+            if trust_result.returncode != 0 or 'failed' in trust_output:
+                raise RuntimeError(
+                    trust_result.stderr.strip()
+                    or trust_result.stdout.strip()
+                    or 'Could not trust the Bluetooth device'
+                )
+            if address not in connected:
+                connect_result = self._run(
+                    ['bluetoothctl', '--timeout', '20', 'connect', address],
+                    timeout=25
+                )
+                connect_output = (connect_result.stdout + connect_result.stderr).lower()
+                if connect_result.returncode != 0 or 'failed' in connect_output:
+                    raise RuntimeError(
+                        connect_result.stderr.strip()
+                        or connect_result.stdout.strip()
+                        or 'Bluetooth connection failed'
+                    )
+
+            sink_name = self._make_sink_default(address)
+            self.default_bluetooth_address = address
+            self.current_output = 'bluetooth'
+            self.save_settings()
+            self.scan_outputs()
+            self.current_output = 'bluetooth'
+            return sink_name
+
+    def _restore_bluetooth_default(self):
+        try:
+            self.connect_bluetooth(self.default_bluetooth_address)
+            print(f"Restored Bluetooth default: {self.default_bluetooth_address}")
+        except Exception as e:
+            print(f"Bluetooth restore error: {e}")
     
     def scan_outputs(self):
         self.outputs = {
@@ -133,25 +353,31 @@ class AudioOutputManager:
     def set_output(self, output_name):
         if output_name not in self.outputs:
             return False
-        
-        self.current_output = output_name
-        
+
         if output_name == 'auto':
             os.system("amixer cset numid=3 0")
+            self.current_output = output_name
             return True
         elif output_name == 'analog':
             os.system("amixer cset numid=3 1")
+            self.current_output = output_name
             return True
         elif output_name == 'hdmi':
             os.system("amixer cset numid=3 2")
+            self.current_output = output_name
             return True
         elif output_name == 'bluetooth':
             try:
-                result = subprocess.run(['pactl', 'list', 'sinks', 'short'], capture_output=True, text=True)
-                for line in result.stdout.split('\n'):
-                    if 'bluez' in line:
-                        sink_name = line.split()[1]
-                        subprocess.run(['pactl', 'set-default-sink', sink_name])
+                if self.default_bluetooth_address:
+                    self._make_sink_default(self.default_bluetooth_address)
+                    self.current_output = output_name
+                    return True
+                result = self._run(['pactl', 'list', 'sinks', 'short'])
+                for line in result.stdout.splitlines():
+                    parts = line.split()
+                    if len(parts) >= 2 and 'bluez' in parts[1].lower():
+                        self._run(['pactl', 'set-default-sink', parts[1]])
+                        self.current_output = output_name
                         return True
             except Exception as e:
                 print(f"Bluetooth switch error: {e}")
@@ -1524,6 +1750,78 @@ HTML_TEMPLATE = """
             color: rgba(255,255,255,0.5);
             margin-top: 2px;
         }
+
+        .bluetooth-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .bluetooth-status {
+            color: rgba(255,255,255,0.65);
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .bluetooth-device {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 13px 0;
+            border-top: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .bluetooth-device:first-child {
+            border-top: none;
+        }
+
+        .bluetooth-device-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: rgba(0,210,255,0.12);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .bluetooth-device-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .bluetooth-device-name {
+            font-size: 14px;
+            font-weight: 600;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .bluetooth-device-meta {
+            color: rgba(255,255,255,0.55);
+            font-size: 11px;
+            margin-top: 3px;
+        }
+
+        .bluetooth-connect {
+            border: 1px solid var(--primary);
+            border-radius: 9px;
+            padding: 8px 11px;
+            background: transparent;
+            color: var(--primary);
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .bluetooth-connect:disabled {
+            cursor: default;
+            opacity: 0.65;
+        }
         
         .toggle-switch {
             width: 50px;
@@ -1910,6 +2208,25 @@ HTML_TEMPLATE = """
                     <button class="btn-primary" onclick="enableMultiOutput()" style="margin-top: 15px;">
                         🔊 Enable Multi-Output
                     </button>
+                </div>
+
+                <div class="section-header">
+                    <span class="section-title">Bluetooth Devices</span>
+                </div>
+                <div class="card">
+                    <div class="bluetooth-header">
+                        <div class="bluetooth-status" id="bluetooth-status">
+                            Search for nearby speakers and headphones.
+                        </div>
+                        <button class="bluetooth-connect" id="bluetooth-scan-btn" onclick="scanBluetooth()">
+                            Search
+                        </button>
+                    </div>
+                    <div id="bluetooth-devices">
+                        <div class="empty-state" style="padding: 24px 10px;">
+                            <div class="empty-text">Tap Search to find Bluetooth devices</div>
+                        </div>
+                    </div>
                 </div>
                 
                 <div class="section-header">
@@ -2326,17 +2643,115 @@ HTML_TEMPLATE = """
         }
         
         function setOutput(output) {
-            fetch(apiBase + '/api/audio/output/' + output, {method: 'POST'}).then(() => {
-                document.querySelectorAll('.output-btn').forEach(b => b.classList.remove('active'));
-                document.getElementById('out-' + output).classList.add('active');
-                showToast('Output: ' + output);
-            });
+            fetch(apiBase + '/api/audio/output/' + output, {method: 'POST'})
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.success) throw new Error(data.error || 'Could not change output');
+                    document.querySelectorAll('.output-btn').forEach(b => b.classList.remove('active'));
+                    document.getElementById('out-' + output).classList.add('active');
+                    showToast('Output: ' + output);
+                })
+                .catch(error => showToast(error.message));
         }
         
         function enableMultiOutput() {
             fetch(apiBase + '/api/audio/multi', {method: 'POST'}).then(() => {
                 showToast('Multi-output enabled');
             });
+        }
+
+        function displayBluetoothDevices(devices) {
+            const container = document.getElementById('bluetooth-devices');
+            const status = document.getElementById('bluetooth-status');
+            if (!devices.length) {
+                status.textContent = 'No devices found. Put your speaker in pairing mode and search again.';
+                container.innerHTML = '<div class="empty-state" style="padding: 24px 10px;"><div class="empty-text">No Bluetooth devices found</div></div>';
+                return;
+            }
+
+            const connected = devices.find(device => device.connected && device.default)
+                || devices.find(device => device.connected);
+            status.textContent = connected
+                ? `Connected to ${connected.name}${connected.default ? ' • Default audio output' : ''}`
+                : `${devices.length} device${devices.length === 1 ? '' : 's'} found`;
+            container.innerHTML = devices.map(device => {
+                const state = device.connected
+                    ? (device.default ? 'Connected • Default output' : 'Connected')
+                    : (device.paired ? 'Paired' : 'Available');
+                return `
+                    <div class="bluetooth-device">
+                        <div class="bluetooth-device-icon">${device.connected ? '🔊' : '📡'}</div>
+                        <div class="bluetooth-device-info">
+                            <div class="bluetooth-device-name">${escapeHtml(device.name)}</div>
+                            <div class="bluetooth-device-meta">${state} • ${device.address}</div>
+                        </div>
+                        <button class="bluetooth-connect"
+                                onclick="connectBluetooth('${device.address}', this)"
+                                ${device.connected && device.default ? 'disabled' : ''}>
+                            ${device.connected && device.default ? 'Default' : 'Connect'}
+                        </button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function loadBluetoothDevices() {
+            fetch(apiBase + '/api/bluetooth/devices')
+                .then(async response => {
+                    const data = await response.json();
+                    if (!response.ok || !data.success) throw new Error(data.error || 'Bluetooth is unavailable');
+                    displayBluetoothDevices(data.devices);
+                })
+                .catch(error => {
+                    document.getElementById('bluetooth-status').textContent = error.message;
+                });
+        }
+
+        function scanBluetooth() {
+            const button = document.getElementById('bluetooth-scan-btn');
+            button.disabled = true;
+            button.textContent = 'Searching…';
+            document.getElementById('bluetooth-status').textContent = 'Searching for nearby devices…';
+            fetch(apiBase + '/api/bluetooth/scan', {method: 'POST'})
+                .then(async response => {
+                    const data = await response.json();
+                    if (!response.ok || !data.success) throw new Error(data.error || 'Bluetooth search failed');
+                    displayBluetoothDevices(data.devices);
+                })
+                .catch(error => {
+                    document.getElementById('bluetooth-status').textContent = error.message;
+                    showToast(error.message);
+                })
+                .finally(() => {
+                    button.disabled = false;
+                    button.textContent = 'Search';
+                });
+        }
+
+        function connectBluetooth(address, button) {
+            button.disabled = true;
+            button.textContent = 'Connecting…';
+            document.getElementById('bluetooth-status').textContent = 'Pairing and connecting…';
+            fetch(apiBase + '/api/bluetooth/connect', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({address: address})
+            })
+                .then(async response => {
+                    const data = await response.json();
+                    if (!response.ok || !data.success) throw new Error(data.error || 'Connection failed');
+                    document.querySelectorAll('.output-btn').forEach(item => item.classList.remove('active'));
+                    document.getElementById('out-bluetooth').classList.remove('disabled');
+                    document.getElementById('out-bluetooth').classList.add('active');
+                    showToast('Bluetooth connected and set as default');
+                    loadBluetoothDevices();
+                })
+                .catch(error => {
+                    showToast(error.message);
+                    document.getElementById('bluetooth-status').textContent = error.message;
+                    button.disabled = false;
+                    button.textContent = 'Connect';
+                });
         }
         
         function setTheme(themeName) {
@@ -2349,6 +2764,7 @@ HTML_TEMPLATE = """
         function showThemeModal() {
             switchView('audio');
             document.querySelectorAll('.nav-item')[4].classList.add('active');
+            loadBluetoothDevices();
         }
         
         // Alarm functions
@@ -2868,6 +3284,43 @@ def scan_audio():
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/bluetooth/devices')
+def bluetooth_devices():
+    try:
+        return jsonify({
+            'success': True,
+            'devices': audio_manager.get_bluetooth_devices()
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 503
+
+@app.route('/api/bluetooth/scan', methods=['POST'])
+def bluetooth_scan():
+    try:
+        return jsonify({
+            'success': True,
+            'devices': audio_manager.scan_bluetooth()
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 503
+
+@app.route('/api/bluetooth/connect', methods=['POST'])
+def bluetooth_connect():
+    try:
+        data = request.get_json(silent=True) or {}
+        address = data.get('address', '')
+        sink_name = audio_manager.connect_bluetooth(address)
+        return jsonify({
+            'success': True,
+            'address': address.upper(),
+            'sink': sink_name,
+            'output': 'bluetooth'
+        })
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 503
 
 # YouTube API Routes
 @app.route('/api/youtube/search', methods=['POST'])
