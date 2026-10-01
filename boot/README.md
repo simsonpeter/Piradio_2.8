@@ -6,7 +6,7 @@ The installer configures:
 - quiet Linux boot options that hide the Raspberry Pi logo, text, and cursor;
 - desktop auto-login where `raspi-config` is available;
 - automatic fullscreen launch of `touch_radio.py`;
-- an in-app splash that covers the remaining application startup time.
+- a five-second in-app splash that covers the remaining application startup time.
 
 Run from the repository directory on the Raspberry Pi:
 
@@ -28,4 +28,6 @@ If automatic launch fails, inspect:
 cat ~/.tcradios-start.log
 ```
 
-The launcher waits for display `:0` before starting the radio.
+The installer selects one autostart mechanism for the installed desktop and
+uses a shared process lock to prevent duplicate radio launches. The launcher
+waits for display `:0` before starting the radio.

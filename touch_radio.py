@@ -3508,6 +3508,7 @@ screen.blit(splash_title, splash_title.get_rect(center=(160, 218)))
 screen.blit(splash_subtitle, splash_subtitle.get_rect(center=(160, 257)))
 pygame.draw.line(screen, (38, 150, 210), (100, 282), (220, 282), 2)
 pygame.display.flip()
+splash_started_at = time.time()
 
 UI_BG_TOP = (0, 0, 0)
 UI_BG_BOTTOM = (7, 7, 10)
@@ -3737,6 +3738,10 @@ def play():
             f.write(str(current_idx))
     except:
         pass
+
+splash_remaining = 5.0 - (time.time() - splash_started_at)
+if splash_remaining > 0:
+    time.sleep(splash_remaining)
 
 play()
 ip_display_time = time.time() + 10
