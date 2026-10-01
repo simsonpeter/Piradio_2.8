@@ -3482,7 +3482,7 @@ try:
     f_xl = get_unicode_font(80, bold=True)
     f_med = get_unicode_font(24, bold=True)
     f_tiny = get_unicode_font(12, bold=True)
-    f_weather = get_unicode_font(32, bold=True)
+    f_weather = get_unicode_font(42, bold=True)
     print("Unicode fonts loaded successfully")
 except Exception as e:
     print(f"Font error: {e}, using defaults")
@@ -3491,7 +3491,7 @@ except Exception as e:
     f_xl = pygame.font.Font(None, 80)
     f_med = pygame.font.Font(None, 24)
     f_tiny = pygame.font.Font(None, 12)
-    f_weather = pygame.font.Font(None, 32)
+    f_weather = pygame.font.Font(None, 42)
 
 try:
     screen = pygame.display.set_mode((320, 480), pygame.FULLSCREEN | pygame.NOFRAME)
@@ -3700,41 +3700,16 @@ def draw_screensaver():
     time_now = datetime.now().strftime("%H:%M")
     # Use darker gray for time (not pure white)
     time_surf = f_xl.render(time_now, True, (100, 100, 100))
-    time_rect = time_surf.get_rect(center=(160, 150))
+    time_rect = time_surf.get_rect(center=(160, 95))
     screen.blit(time_surf, time_rect)
     
-    # Scrolling station name - dim cyan
-    station_name = f"RADIO: {sanitize_text(stations[current_idx]['name']).upper()}"
-    # Darker cyan for less brightness
-    station_surf = f_med.render(station_name, True, (0, 100, 100))
-    
-    saver_scroll_x -= 1  # Slower scroll
-    if saver_scroll_x < -station_surf.get_width():
-        saver_scroll_x = 320
-    screen.blit(station_surf, (saver_scroll_x, 250))
-    
-    y_pos = 320
-    if alarm_system.sleep_timer_enabled:
-        remaining = alarm_system.get_sleep_remaining()
-        # Dark green/red
-        sleep_color = (0, 80, 0) if remaining > 10 else (80, 0, 0)
-        sleep_text = f_tiny.render(f"Sleep: {remaining} min", True, sleep_color)
-        screen.blit(sleep_text, (160 - sleep_text.get_width()//2, y_pos))
-        y_pos += 25
-    
-    if alarm_system.alarm_enabled:
-        # Dark gold
-        alarm_text = f_tiny.render(f"ALARM {alarm_system.alarm_time}", True, (100, 80, 0))
-        screen.blit(alarm_text, (160 - alarm_text.get_width()//2, y_pos))
-        y_pos += 20
-    
-    # Large weather row for readability at a distance
-    weather_icon_size = 30
-    weather_gap = 14
+    # Second line: extra-large weather icon and temperature
+    weather_icon_size = 42
+    weather_gap = 16
     temp_surf = f_weather.render(f"{current_temp}°C", True, (100, 100, 100))
     weather_width = weather_icon_size * 2 + weather_gap + temp_surf.get_width()
     weather_left = (320 - weather_width) // 2
-    weather_center_y = min(y_pos + weather_icon_size, 390)
+    weather_center_y = 195
     draw_weather_icon(
         screen,
         weather_left + weather_icon_size,
@@ -3745,9 +3720,28 @@ def draw_screensaver():
     temp_y = weather_center_y - temp_surf.get_height() // 2
     screen.blit(temp_surf, (weather_left + weather_icon_size * 2 + weather_gap, temp_y))
     
-    # Volume - very dim
+    # Third line: scrolling station name
+    station_name = f"RADIO: {sanitize_text(stations[current_idx]['name']).upper()}"
+    station_surf = f_med.render(station_name, True, (0, 100, 100))
+    saver_scroll_x -= 1
+    if saver_scroll_x < -station_surf.get_width():
+        saver_scroll_x = 320
+    screen.blit(station_surf, (saver_scroll_x, 270))
+
+    # Fourth line: alarm on the left and volume on the right
+    alarm_label = f"Alarm {alarm_system.alarm_time}" if alarm_system.alarm_enabled else "Alarm off"
+    alarm_color = (100, 80, 0) if alarm_system.alarm_enabled else (60, 60, 60)
+    alarm_text = f_sm.render(alarm_label, True, alarm_color)
+    screen.blit(alarm_text, (16, 325))
+
     vol_surf = f_sm.render(f"Vol: {vol_level}%", True, (60, 60, 60))
-    screen.blit(vol_surf, (160 - vol_surf.get_width()//2, 430))
+    screen.blit(vol_surf, (304 - vol_surf.get_width(), 325))
+
+    if alarm_system.sleep_timer_enabled:
+        remaining = alarm_system.get_sleep_remaining()
+        sleep_color = (0, 80, 0) if remaining > 10 else (80, 0, 0)
+        sleep_text = f_sm.render(f"Sleep: {remaining} min", True, sleep_color)
+        screen.blit(sleep_text, (160 - sleep_text.get_width()//2, 365))
     
     # Exit hint - very dim
     hint_surf = f_tiny.render("Tap to exit", True, (40, 40, 40))
