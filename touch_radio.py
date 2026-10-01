@@ -3580,13 +3580,15 @@ alarm_fade_data = {}
 saver_active = False
 
 # Logo setup
-logo = pygame.Surface((140, 140), pygame.SRCALPHA)
+LOGO_SIZE = 112
+LOGO_CENTER = LOGO_SIZE // 2
+logo = pygame.Surface((LOGO_SIZE, LOGO_SIZE), pygame.SRCALPHA)
 logo.fill((0, 0, 0, 0))
-pygame.draw.circle(logo, (40, 40, 40), (70, 70), 70)
-pygame.draw.circle(logo, CYAN, (70, 70), 70, 2)
+pygame.draw.circle(logo, (40, 40, 40), (LOGO_CENTER, LOGO_CENTER), LOGO_CENTER)
+pygame.draw.circle(logo, CYAN, (LOGO_CENTER, LOGO_CENTER), LOGO_CENTER, 2)
 initials = stations[current_idx]['name'][:2].upper()
 text = f_lg.render(initials, True, CYAN)
-text_rect = text.get_rect(center=(70, 70))
+text_rect = text.get_rect(center=(LOGO_CENTER, LOGO_CENTER))
 logo.blit(text, text_rect)
 
 try:
@@ -3621,26 +3623,48 @@ def update_logo(url):
             raise ValueError("No logo URL")
         raw = urlopen(url, timeout=2).read()
         img = pygame.image.load(io.BytesIO(raw)).convert_alpha()
-        img = pygame.transform.scale(img, (140, 140))
+        img = pygame.transform.smoothscale(img, (LOGO_SIZE, LOGO_SIZE))
         
-        mask = pygame.Surface((140, 140), pygame.SRCALPHA)
+        mask = pygame.Surface((LOGO_SIZE, LOGO_SIZE), pygame.SRCALPHA)
         mask.fill((0, 0, 0, 0))
-        pygame.draw.circle(mask, (255, 255, 255, 255), (70, 70), 70)
+        pygame.draw.circle(
+            mask,
+            (255, 255, 255, 255),
+            (LOGO_CENTER, LOGO_CENTER),
+            LOGO_CENTER
+        )
         
-        circular_logo = pygame.Surface((140, 140), pygame.SRCALPHA)
+        circular_logo = pygame.Surface((LOGO_SIZE, LOGO_SIZE), pygame.SRCALPHA)
         circular_logo.blit(img, (0, 0))
         circular_logo.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
-        pygame.draw.circle(circular_logo, CYAN, (70, 70), 70, 2)
+        pygame.draw.circle(
+            circular_logo,
+            CYAN,
+            (LOGO_CENTER, LOGO_CENTER),
+            LOGO_CENTER,
+            2
+        )
         logo = circular_logo
     except Exception as e:
-        logo = pygame.Surface((140, 140), pygame.SRCALPHA)
+        logo = pygame.Surface((LOGO_SIZE, LOGO_SIZE), pygame.SRCALPHA)
         logo.fill((0, 0, 0, 0))
-        pygame.draw.circle(logo, (40, 40, 40), (70, 70), 70)
-        pygame.draw.circle(logo, CYAN, (70, 70), 70, 2)
+        pygame.draw.circle(
+            logo,
+            (40, 40, 40),
+            (LOGO_CENTER, LOGO_CENTER),
+            LOGO_CENTER
+        )
+        pygame.draw.circle(
+            logo,
+            CYAN,
+            (LOGO_CENTER, LOGO_CENTER),
+            LOGO_CENTER,
+            2
+        )
         if stations[current_idx]['name']:
             initials = stations[current_idx]['name'][:2].upper()
             text = f_lg.render(initials, True, CYAN)
-            text_rect = text.get_rect(center=(70, 70))
+            text_rect = text.get_rect(center=(LOGO_CENTER, LOGO_CENTER))
             logo.blit(text, text_rect)
 
 def sanitize_text(text):
@@ -3867,10 +3891,10 @@ while True:
         try: is_playing = player.get_state() == vlc.State.Playing
         except: is_playing = False
 
-        # Artwork focus area
-        pygame.draw.circle(screen, (17, 31, 53), (160, 140), 80)
-        pygame.draw.circle(screen, (40, 58, 91), (160, 140), 78, 1)
-        logo_rect = pygame.Rect(90, 70, 140, 140)
+        # Smaller artwork area leaves breathing room between sections
+        pygame.draw.circle(screen, (17, 31, 53), (160, 128), 60)
+        pygame.draw.circle(screen, (40, 58, 91), (160, 128), 58, 1)
+        logo_rect = pygame.Rect(104, 72, LOGO_SIZE, LOGO_SIZE)
         screen.blit(logo, logo_rect)
 
         if is_playing:
@@ -3880,13 +3904,12 @@ while True:
                 int(UI_BLUE[1] * 0.75),
                 int(UI_BLUE[2] * 0.75)
             )
-            pygame.draw.circle(screen, pulse_color, (160, 140), 72 + int(pulse * 5), 2)
+            pygame.draw.circle(screen, pulse_color, (160, 128), 58 + int(pulse * 4), 2)
         else:
-            pygame.draw.circle(screen, UI_MUTED, (160, 140), 72, 1)
+            pygame.draw.circle(screen, UI_MUTED, (160, 128), 58, 1)
 
-        # Now-playing title is clipped to its own clean row
-        name_area = pygame.Rect(14, 218, 292, 34)
-        pygame.draw.rect(screen, UI_SURFACE, name_area, border_radius=12)
+        # Now-playing title has a dedicated row without a heavy container
+        name_area = pygame.Rect(16, 198, 288, 34)
         display_text = sanitize_text(meta_text)
         name_render = f_lg.render(display_text, True, UI_TEXT)
         screen.set_clip(name_area.inflate(-12, 0))
@@ -3900,35 +3923,26 @@ while True:
         screen.blit(name_render, (name_x, name_area.y + 5))
         screen.set_clip(None)
 
-        # Clear status chips
-        alarm_chip = pygame.Rect(17, 258, 132, 23)
-        sleep_chip = pygame.Rect(171, 258, 132, 23)
-        alarm_fill = (72, 57, 29) if alarm_system.alarm_enabled else UI_SURFACE
-        alarm_border = UI_AMBER if alarm_system.alarm_enabled else (55, 66, 88)
-        draw_modern_button(screen, alarm_chip, alarm_fill, alarm_border, 10)
-        alarm_label = f"ALARM {alarm_system.alarm_time}" if alarm_system.alarm_enabled else "ALARM OFF"
-        draw_centered_text(
-            screen, f_tiny, alarm_label,
-            UI_AMBER if alarm_system.alarm_enabled else UI_MUTED,
-            alarm_chip
-        )
-
-        sleep_fill = (41, 45, 79) if alarm_system.sleep_timer_enabled else UI_SURFACE
-        sleep_border = UI_PURPLE if alarm_system.sleep_timer_enabled else (55, 66, 88)
-        draw_modern_button(screen, sleep_chip, sleep_fill, sleep_border, 10)
+        # Status chips appear only when active; controls remain in the dock
+        alarm_chip = pygame.Rect(18, 242, 128, 22)
+        sleep_chip = pygame.Rect(174, 242, 128, 22)
+        if alarm_system.alarm_enabled:
+            draw_modern_button(screen, alarm_chip, (57, 48, 31), (112, 88, 41), 10)
+            draw_centered_text(
+                screen, f_tiny, f"ALARM {alarm_system.alarm_time}",
+                UI_AMBER, alarm_chip
+            )
         if alarm_system.sleep_timer_enabled:
             rem = alarm_system.get_sleep_remaining()
             sleep_label = f"SLEEP {rem} MIN"
             sleep_color = UI_GREEN if rem > 5 else UI_PINK
-        else:
-            sleep_label = "SLEEP OFF"
-            sleep_color = UI_MUTED
-        draw_centered_text(screen, f_tiny, sleep_label, sleep_color, sleep_chip)
+            draw_modern_button(screen, sleep_chip, (35, 40, 67), (75, 61, 126), 10)
+            draw_centered_text(screen, f_tiny, sleep_label, sleep_color, sleep_chip)
 
-        # Volume strip remains visible so its function is obvious
-        vol_minus_rect = pygame.Rect(12, 288, 42, 38)
-        vol_plus_rect = pygame.Rect(266, 288, 42, 38)
-        vol_bar_rect = pygame.Rect(64, 297, 192, 20)
+        # Volume strip
+        vol_minus_rect = pygame.Rect(12, 277, 42, 36)
+        vol_plus_rect = pygame.Rect(266, 277, 42, 36)
+        vol_bar_rect = pygame.Rect(67, 285, 186, 18)
         draw_modern_button(screen, vol_minus_rect, UI_SURFACE_RAISED, UI_AMBER, 12)
         mc = vol_minus_rect.center
         pygame.draw.line(screen, UI_AMBER, (mc[0] - 9, mc[1]), (mc[0] + 9, mc[1]), 3)
@@ -3946,7 +3960,7 @@ while True:
         pygame.draw.circle(screen, UI_TEXT, (knob_x, vol_bar_rect.centery), 7)
         if show_volume_bar or adjusting_volume:
             vol_pct_surf = f_tiny.render(f"{vol_level}%", True, UI_TEXT)
-            screen.blit(vol_pct_surf, (160 - vol_pct_surf.get_width() // 2, 318))
+            screen.blit(vol_pct_surf, (160 - vol_pct_surf.get_width() // 2, 307))
 
         draw_modern_button(screen, vol_plus_rect, UI_SURFACE_RAISED, UI_GREEN, 12)
         pc = vol_plus_rect.center
@@ -3954,9 +3968,9 @@ while True:
         pygame.draw.line(screen, UI_GREEN, (pc[0] - 9, pc[1]), (pc[0] + 9, pc[1]), 3)
 
         # Primary transport controls
-        btn_prev = pygame.Rect(12, 343, 92, 57)
-        btn_toggle = pygame.Rect(114, 338, 92, 67)
-        btn_next = pygame.Rect(216, 343, 92, 57)
+        btn_prev = pygame.Rect(12, 329, 92, 53)
+        btn_toggle = pygame.Rect(114, 325, 92, 61)
+        btn_next = pygame.Rect(216, 329, 92, 53)
         draw_modern_button(screen, btn_prev, UI_SURFACE_RAISED, UI_BLUE, 16)
         draw_modern_button(
             screen, btn_toggle,
@@ -3973,34 +3987,23 @@ while True:
         )
         draw_centered_text(screen, f_sm, "NEXT", UI_TEXT, btn_next)
 
-        # Simple bottom dock: all original quick actions remain available
-        dock_rect = pygame.Rect(8, 416, 304, 58)
+        # Airy bottom dock: inactive actions are intentionally borderless
+        dock_rect = pygame.Rect(8, 420, 304, 54)
         pygame.draw.rect(screen, UI_SURFACE, dock_rect, border_radius=18)
         pygame.draw.rect(screen, (54, 64, 91), dock_rect, 1, border_radius=18)
 
-        btn_sleep = pygame.Rect(13, 421, 56, 48)
-        btn_saver = pygame.Rect(73, 421, 56, 48)
-        btn_alarm = pygame.Rect(133, 421, 68, 48)
-        vol_rect = pygame.Rect(205, 421, 51, 48)
-        btn_mute = pygame.Rect(260, 421, 47, 48)
+        btn_sleep = pygame.Rect(13, 423, 56, 46)
+        btn_saver = pygame.Rect(73, 423, 56, 46)
+        btn_alarm = pygame.Rect(133, 423, 68, 46)
+        vol_rect = pygame.Rect(205, 423, 51, 46)
+        btn_mute = pygame.Rect(260, 423, 47, 46)
 
-        draw_modern_button(
-            screen, btn_sleep,
-            (60, 45, 98) if alarm_system.sleep_timer_enabled else (31, 38, 61),
-            UI_PURPLE, 13
-        )
-        draw_modern_button(screen, btn_saver, (29, 46, 72), UI_BLUE, 13)
-        draw_modern_button(
-            screen, btn_alarm,
-            (86, 65, 27) if alarm_system.alarm_enabled else (31, 38, 61),
-            UI_AMBER, 13
-        )
-        draw_modern_button(screen, vol_rect, (31, 38, 61), (63, 77, 108), 13)
-        draw_modern_button(
-            screen, btn_mute,
-            (72, 30, 51) if vol_level == 0 else (31, 38, 61),
-            UI_PINK if vol_level == 0 else (63, 77, 108), 13
-        )
+        if alarm_system.sleep_timer_enabled:
+            pygame.draw.rect(screen, (55, 43, 87), btn_sleep, border_radius=12)
+        if alarm_system.alarm_enabled:
+            pygame.draw.rect(screen, (76, 60, 31), btn_alarm, border_radius=12)
+        if vol_level == 0:
+            pygame.draw.rect(screen, (68, 31, 50), btn_mute, border_radius=12)
         draw_centered_text(screen, f_tiny, "SLEEP", UI_TEXT, btn_sleep)
         draw_centered_text(screen, f_tiny, "MOON", UI_TEXT, btn_saver)
         draw_centered_text(
