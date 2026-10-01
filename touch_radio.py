@@ -3700,7 +3700,7 @@ def draw_screensaver():
     time_now = datetime.now().strftime("%H:%M")
     # Use darker gray for time (not pure white)
     time_surf = f_xl.render(time_now, True, (100, 100, 100))
-    time_rect = time_surf.get_rect(center=(160, 95))
+    time_rect = time_surf.get_rect(center=(160, 75))
     screen.blit(time_surf, time_rect)
     
     # Second line: extra-large weather icon and temperature
@@ -3709,7 +3709,7 @@ def draw_screensaver():
     temp_surf = f_weather.render(f"{current_temp}°C", True, (100, 100, 100))
     weather_width = weather_icon_size * 2 + weather_gap + temp_surf.get_width()
     weather_left = (320 - weather_width) // 2
-    weather_center_y = 195
+    weather_center_y = 190
     draw_weather_icon(
         screen,
         weather_left + weather_icon_size,
@@ -3726,22 +3726,22 @@ def draw_screensaver():
     saver_scroll_x -= 1
     if saver_scroll_x < -station_surf.get_width():
         saver_scroll_x = 320
-    screen.blit(station_surf, (saver_scroll_x, 270))
+    screen.blit(station_surf, (saver_scroll_x, 290))
 
     # Fourth line: alarm on the left and volume on the right
     alarm_label = f"Alarm {alarm_system.alarm_time}" if alarm_system.alarm_enabled else "Alarm off"
     alarm_color = (100, 80, 0) if alarm_system.alarm_enabled else (60, 60, 60)
     alarm_text = f_sm.render(alarm_label, True, alarm_color)
-    screen.blit(alarm_text, (16, 325))
+    screen.blit(alarm_text, (16, 385))
 
     vol_surf = f_sm.render(f"Vol: {vol_level}%", True, (60, 60, 60))
-    screen.blit(vol_surf, (304 - vol_surf.get_width(), 325))
+    screen.blit(vol_surf, (304 - vol_surf.get_width(), 385))
 
     if alarm_system.sleep_timer_enabled:
         remaining = alarm_system.get_sleep_remaining()
         sleep_color = (0, 80, 0) if remaining > 10 else (80, 0, 0)
         sleep_text = f_sm.render(f"Sleep: {remaining} min", True, sleep_color)
-        screen.blit(sleep_text, (160 - sleep_text.get_width()//2, 365))
+        screen.blit(sleep_text, (160 - sleep_text.get_width()//2, 425))
     
     # Exit hint - very dim
     hint_surf = f_tiny.render("Tap to exit", True, (40, 40, 40))
