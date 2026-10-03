@@ -35,9 +35,10 @@ launcher waits for display `:0` before starting the radio.
 
 ## Bluetooth audio
 
-The installer adds the Bluetooth audio profile package for the sound server
-installed on the Pi. If a speaker reports `br-connection-profile-unavailable`
-after an upgrade, run the installer again and reboot:
+The installer adds the complete Bluetooth-capable audio stack for the sound
+server installed on the Pi. If a speaker reports
+`br-connection-profile-unavailable` after an upgrade, run the installer again
+and reboot:
 
 ```bash
 sudo ./install_raspberry_pi_kiosk.sh

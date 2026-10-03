@@ -44,7 +44,13 @@ echo "Installing TCRADIOS system and Bluetooth audio dependencies..."
 apt-get update
 AUDIO_PACKAGES=(pulseaudio-module-bluetooth)
 if dpkg-query -W -f='${Status}' pipewire 2>/dev/null | grep -q "install ok installed"; then
-    AUDIO_PACKAGES=(libspa-0.2-bluetooth wireplumber)
+    AUDIO_PACKAGES=(
+        pipewire-audio
+        pipewire-pulse
+        libpipewire-0.3-modules
+        libspa-0.2-bluetooth
+        wireplumber
+    )
 fi
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
     plymouth \
