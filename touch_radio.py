@@ -65,7 +65,7 @@ server_url = f"http://{current_ip}:8080"
 tunnel_url = None
 
 print(f"\n{'='*50}")
-print(f"🚀 TC RADIO STARTED SUCCESSFULLY!")
+print(f"🚀 TC RADIOS STARTED SUCCESSFULLY!")
 print(f"{'='*50}")
 print(f"📱 LOCAL URL (same WiFi):")
 print(f"   \033[96mhttp://{current_ip}:8080\033[0m")
@@ -899,7 +899,7 @@ HTML_TEMPLATE = """
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="{{ theme.background }}">
-    <title>TC Radio</title>
+    <title>TC RADIOS</title>
     <link rel="manifest" href="/manifest.json">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3011/3011244.png">
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -1997,7 +1997,7 @@ HTML_TEMPLATE = """
 <body>
     <div class="connection-screen" id="connection-screen">
         <div class="connection-logo">📻</div>
-        <div class="connection-title">TC Radio</div>
+        <div class="connection-title">TC RADIOS</div>
         <div class="connection-subtitle">Connect to your Raspberry Pi radio</div>
         
         <div class="remote-info" style="width: 100%; max-width: 300px; margin-bottom: 20px; text-align: left;">
@@ -2033,7 +2033,7 @@ HTML_TEMPLATE = """
     
     <div class="app-container" id="app-container" style="display: none;">
         <div class="app-header">
-            <div class="app-title">🎵 TC Radio</div>
+            <div class="app-title">🎵 TC RADIOS</div>
             <div class="header-actions">
                 <button class="icon-btn" onclick="refreshStatus()" title="Refresh">🔄</button>
                 <button class="icon-btn" onclick="showThemeModal()" title="Theme">🎨</button>
@@ -3038,8 +3038,8 @@ def home():
 @app.route('/manifest.json')
 def manifest():
     return Response(json.dumps({
-        "short_name": "TC Radio",
-        "name": "TC Radio Remote",
+        "short_name": "TC RADIOS",
+        "name": "TC RADIOS Remote",
         "icons": [{
             "src": "https://cdn-icons-png.flaticon.com/512/3011/3011244.png",
             "sizes": "512x512",
@@ -3751,6 +3751,9 @@ system_stats = {
     'bluetooth': 'Not connected'
 }
 system_stats_updating = False
+touch_bluetooth_devices = []
+touch_bluetooth_status = "Tap Search to find nearby devices"
+touch_bluetooth_busy = False
 
 # Logo setup
 LOGO_SIZE = 112
@@ -3924,6 +3927,34 @@ def refresh_system_stats():
     finally:
         system_stats_updating = False
 
+def scan_touch_bluetooth():
+    global touch_bluetooth_devices, touch_bluetooth_status
+    global touch_bluetooth_busy
+    try:
+        touch_bluetooth_status = "Searching for nearby devices…"
+        touch_bluetooth_devices = audio_manager.scan_bluetooth()
+        count = len(touch_bluetooth_devices)
+        touch_bluetooth_status = (
+            f"{count} device{'s' if count != 1 else ''} found"
+        )
+    except Exception as error:
+        touch_bluetooth_status = str(error)
+    finally:
+        touch_bluetooth_busy = False
+
+def connect_touch_bluetooth(address, name):
+    global touch_bluetooth_devices, touch_bluetooth_status
+    global touch_bluetooth_busy
+    try:
+        touch_bluetooth_status = f"Connecting to {name}…"
+        audio_manager.connect_bluetooth(address)
+        touch_bluetooth_devices = audio_manager.get_bluetooth_devices()
+        touch_bluetooth_status = f"Connected to {name}"
+    except Exception as error:
+        touch_bluetooth_status = str(error)
+    finally:
+        touch_bluetooth_busy = False
+
 splash_remaining = 5.0 - (time.time() - splash_started_at)
 if splash_remaining > 0:
     time.sleep(splash_remaining)
@@ -4096,7 +4127,7 @@ def fit_label(text, length=16):
     return text if len(text) <= length else text[:length - 1] + "…"
 
 def draw_menu_screen(now):
-    draw_page_base("TC RADIO", now)
+    draw_page_base("TC RADIOS", now)
     labels = [
         ("NOW PLAYING", "Radio controls"),
         ("FAVORITES", "Quick stations"),
@@ -4280,7 +4311,7 @@ def draw_settings_screen(now):
     ):
         active = audio_manager.current_output == output_name
         available = (
-            output_name == "auto"
+            output_name in ("auto", "bluetooth")
             or audio_manager.outputs.get(output_name, {}).get(
                 'available', False
             )
@@ -4323,6 +4354,62 @@ def draw_settings_screen(now):
     draw_modern_button(screen, btn_theme_next, UI_SURFACE, UI_BLUE, 14)
     draw_centered_text(screen, f_lg, "›", UI_TEXT, btn_theme_next)
     draw_pages_button()
+
+def draw_bluetooth_screen(now):
+    draw_page_base("BLUETOOTH", now)
+    draw_modern_button(
+        screen, btn_bluetooth_search, UI_SURFACE_RAISED,
+        UI_PURPLE if touch_bluetooth_busy else UI_BLUE, 15
+    )
+    draw_centered_text(
+        screen, f_sm,
+        "SEARCHING…" if touch_bluetooth_busy else "SEARCH DEVICES",
+        UI_TEXT, btn_bluetooth_search
+    )
+
+    status_surface = f_tiny.render(
+        fit_label(touch_bluetooth_status, 42), True, UI_MUTED
+    )
+    screen.blit(
+        status_surface,
+        (160 - status_surface.get_width() // 2, 124)
+    )
+
+    if touch_bluetooth_devices:
+        for index, rect in enumerate(bluetooth_device_rects):
+            if index >= len(touch_bluetooth_devices):
+                break
+            device = touch_bluetooth_devices[index]
+            connected = device.get('connected', False)
+            border = UI_GREEN if connected else (48, 54, 72)
+            draw_modern_button(screen, rect, UI_SURFACE, border, 13)
+            name_surface = f_sm.render(
+                fit_label(device.get('name', 'Bluetooth device'), 23),
+                True, UI_TEXT
+            )
+            screen.blit(name_surface, (rect.x + 13, rect.y + 5))
+            state = (
+                "CONNECTED" if connected
+                else ("PAIRED • TAP TO CONNECT" if device.get('paired')
+                      else "AVAILABLE • TAP TO PAIR")
+            )
+            state_surface = f_tiny.render(
+                state, True, UI_GREEN if connected else UI_MUTED
+            )
+            screen.blit(state_surface, (rect.x + 13, rect.y + 24))
+    else:
+        empty_rect = pygame.Rect(18, 142, 284, 272)
+        draw_modern_button(screen, empty_rect, UI_SURFACE, (45, 50, 65), 16)
+        draw_centered_text(
+            screen, f_sm, "No devices loaded", UI_MUTED, empty_rect
+        )
+
+    draw_modern_button(
+        screen, btn_bluetooth_back, UI_SURFACE_RAISED, UI_BLUE, 16
+    )
+    draw_centered_text(
+        screen, f_sm, "‹  SETTINGS", UI_TEXT, btn_bluetooth_back
+    )
 
 def draw_screensaver():
     global saver_scroll_x
@@ -4418,6 +4505,11 @@ btn_audio_outputs = [
 btn_wifi_qr = pygame.Rect(190, 216, 95, 50)
 btn_theme_previous = pygame.Rect(18, 331, 50, 63)
 btn_theme_next = pygame.Rect(252, 331, 50, 63)
+btn_bluetooth_search = pygame.Rect(70, 75, 180, 42)
+bluetooth_device_rects = [
+    pygame.Rect(18, 142 + index * 46, 284, 42) for index in range(6)
+]
+btn_bluetooth_back = pygame.Rect(70, 430, 180, 38)
 
 while True:
     now = time.time()
@@ -4509,7 +4601,7 @@ while True:
         draw_centered_text(screen, f_sm, "QR", UI_BLUE, btn_qr)
 
         title_rect = pygame.Rect(65, 10, 190, 38)
-        draw_centered_text(screen, f_lg, "TC RADIO", UI_TEXT, title_rect)
+        draw_centered_text(screen, f_lg, "TC RADIOS", UI_TEXT, title_rect)
         if show_startup_ip and now < ip_display_time:
             ip_surface = f_tiny.render(f"{current_ip}:8080", True, UI_MUTED)
             screen.blit(ip_surface, (160 - ip_surface.get_width() // 2, 43))
@@ -4683,6 +4775,8 @@ while True:
                 draw_system_screen(now)
             elif active_page == "settings":
                 draw_settings_screen(now)
+            elif active_page == "bluetooth":
+                draw_bluetooth_screen(now)
     
     for event in pygame.event.get():
         if event.type == pygame.MOUSEBUTTONDOWN:
@@ -4699,6 +4793,35 @@ while True:
                     if card.collidepoint(event.pos):
                         active_page = PAGE_ORDER[page_index]
                         break
+                continue
+
+            if active_page == "bluetooth":
+                if btn_bluetooth_back.collidepoint(event.pos):
+                    active_page = "settings"
+                elif (
+                    btn_bluetooth_search.collidepoint(event.pos)
+                    and not touch_bluetooth_busy
+                ):
+                    touch_bluetooth_busy = True
+                    threading.Thread(
+                        target=scan_touch_bluetooth, daemon=True
+                    ).start()
+                elif not touch_bluetooth_busy:
+                    for device_index, rect in enumerate(
+                        bluetooth_device_rects
+                    ):
+                        if (
+                            rect.collidepoint(event.pos)
+                            and device_index < len(touch_bluetooth_devices)
+                        ):
+                            device = touch_bluetooth_devices[device_index]
+                            touch_bluetooth_busy = True
+                            threading.Thread(
+                                target=connect_touch_bluetooth,
+                                args=(device['address'], device['name']),
+                                daemon=True
+                            ).start()
+                            break
                 continue
 
             if active_page != "radio":
@@ -4753,13 +4876,16 @@ while True:
                         ("auto", "analog", "hdmi", "bluetooth")
                     ):
                         available = (
-                            output_name == "auto"
+                            output_name in ("auto", "bluetooth")
                             or audio_manager.outputs.get(
                                 output_name, {}
                             ).get('available', False)
                         )
                         if rect.collidepoint(event.pos) and available:
-                            audio_manager.set_output(output_name)
+                            if output_name == "bluetooth":
+                                active_page = "bluetooth"
+                            else:
+                                audio_manager.set_output(output_name)
                             break
                     if btn_wifi_qr.collidepoint(event.pos):
                         show_qr = True
