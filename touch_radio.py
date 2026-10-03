@@ -2035,6 +2035,7 @@ HTML_TEMPLATE = """
         <div class="app-header">
             <div class="app-title">🎵 TC RADIOS</div>
             <div class="header-actions">
+                <button class="icon-btn" onclick="window.open('/simulator', '_blank')" title="Touchscreen Simulator">📱</button>
                 <button class="icon-btn" onclick="refreshStatus()" title="Refresh">🔄</button>
                 <button class="icon-btn" onclick="showThemeModal()" title="Theme">🎨</button>
             </div>
@@ -3034,6 +3035,22 @@ def home():
         outputs=outputs_data,
         current_output=audio_manager.current_output
     )
+
+@app.route('/simulator')
+def touchscreen_simulator():
+    simulator_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        'touchscreen_simulator.html'
+    )
+    try:
+        with open(simulator_path, 'r', encoding='utf-8') as simulator_file:
+            return Response(simulator_file.read(), mimetype='text/html')
+    except OSError as error:
+        return Response(
+            f"Touchscreen simulator unavailable: {error}",
+            status=404,
+            mimetype='text/plain'
+        )
 
 @app.route('/manifest.json')
 def manifest():
