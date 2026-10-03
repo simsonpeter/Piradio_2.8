@@ -3993,10 +3993,12 @@ def draw_forecast_screen(now):
             screen, f_sm, "Forecast unavailable", UI_MUTED, loading_rect
         )
 
-    pygame.draw.circle(screen, UI_MUTED, (151, 451), 4)
-    pygame.draw.circle(screen, UI_BLUE, (169, 451), 5)
-    hint_surface = f_tiny.render("SWIPE RIGHT FOR RADIO", True, UI_MUTED)
-    screen.blit(hint_surface, (160 - hint_surface.get_width() // 2, 465))
+    draw_modern_button(
+        screen, btn_radio_page, UI_SURFACE_RAISED, UI_BLUE, 16
+    )
+    draw_centered_text(
+        screen, f_sm, "‹  RADIO", UI_TEXT, btn_radio_page
+    )
 
 def draw_screensaver():
     global saver_scroll_x
@@ -4060,6 +4062,8 @@ volume_bar_timer = 0
 touch_start_pos = (0,0)
 touch_start_time = 0
 active_page = "radio"
+btn_weather_page = pygame.Rect(90, 388, 140, 30)
+btn_radio_page = pygame.Rect(70, 430, 180, 38)
 
 while True:
     now = time.time()
@@ -4288,8 +4292,12 @@ while True:
             btn_mute
         )
 
-        pygame.draw.circle(screen, UI_BLUE, (151, 406), 5)
-        pygame.draw.circle(screen, UI_MUTED, (169, 406), 4)
+        draw_modern_button(
+            screen, btn_weather_page, UI_SURFACE, UI_BLUE, 11
+        )
+        draw_centered_text(
+            screen, f_sm, "WEATHER  ›", UI_TEXT, btn_weather_page
+        )
 
         if show_qr:
             qr_panel = pygame.Rect(31, 87, 258, 258)
@@ -4310,7 +4318,12 @@ while True:
             if show_qr:
                 show_qr = False
                 continue
-            if active_page != "radio":
+            if active_page == "forecast":
+                if btn_radio_page.collidepoint(event.pos):
+                    active_page = "radio"
+                continue
+            if btn_weather_page.collidepoint(event.pos):
+                active_page = "forecast"
                 continue
             if btn_exit.collidepoint(event.pos):
                 pygame.quit()
@@ -4368,7 +4381,7 @@ while True:
             dx = event.pos[0] - touch_start_pos[0]
             dy = event.pos[1] - touch_start_pos[1]
             dt = time.time() - touch_start_time
-            if abs(dx) > 70 and abs(dx) > abs(dy) and dt < 1.25:
+            if abs(dx) > 45 and abs(dx) > abs(dy) and dt < 2.5:
                 active_page = "forecast" if dx < 0 else "radio"
                 adjusting_volume = False
                 continue
