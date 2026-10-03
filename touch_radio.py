@@ -180,6 +180,16 @@ class AudioOutputManager:
             devices.setdefault(address, {'address': address, 'name': address})
         return devices, paired, connected
 
+    def _bluetooth_info_flag(self, address, flag):
+        result = self._run(['bluetoothctl', 'info', address])
+        if result.returncode != 0:
+            return False
+        return bool(re.search(
+            rf'^\s*{re.escape(flag)}:\s+yes\s*$',
+            result.stdout,
+            re.MULTILINE | re.IGNORECASE
+        ))
+
     def get_bluetooth_devices(self):
         devices, paired, connected = self._bluetooth_device_sets()
         result = []
@@ -253,21 +263,23 @@ class AudioOutputManager:
                     or power_result.stdout.strip()
                     or 'Could not power on Bluetooth'
                 )
-            _, paired, connected = self._bluetooth_device_sets()
+            _, paired, _ = self._bluetooth_device_sets()
 
             if address not in paired:
                 pair_result = self._run(
-                    ['bluetoothctl', '--timeout', '35'],
+                    [
+                        'bluetoothctl', '--timeout', '35',
+                        '--agent', 'NoInputNoOutput',
+                        'pair', address
+                    ],
                     timeout=40,
-                    input_text=(
-                        'agent NoInputNoOutput\n'
-                        'default-agent\n'
-                        f'pair {address}\n'
-                        'quit\n'
-                    )
                 )
                 pair_output = (pair_result.stdout + pair_result.stderr).lower()
-                if pair_result.returncode != 0 or 'failed' in pair_output:
+                if (
+                    pair_result.returncode != 0
+                    or 'failed' in pair_output
+                    or not self._bluetooth_info_flag(address, 'Paired')
+                ):
                     raise RuntimeError(
                         pair_result.stderr.strip()
                         or pair_result.stdout.strip()
@@ -282,13 +294,21 @@ class AudioOutputManager:
                     or trust_result.stdout.strip()
                     or 'Could not trust the Bluetooth device'
                 )
-            if address not in connected:
+
+            # Pairing an audio device commonly connects it as well. Query its
+            # current state instead of using the snapshot from before pairing;
+            # otherwise a second connect reports AlreadyConnected as a failure.
+            if not self._bluetooth_info_flag(address, 'Connected'):
                 connect_result = self._run(
                     ['bluetoothctl', '--timeout', '20', 'connect', address],
                     timeout=25
                 )
                 connect_output = (connect_result.stdout + connect_result.stderr).lower()
-                if connect_result.returncode != 0 or 'failed' in connect_output:
+                if (
+                    connect_result.returncode != 0
+                    or 'failed' in connect_output
+                    or not self._bluetooth_info_flag(address, 'Connected')
+                ):
                     raise RuntimeError(
                         connect_result.stderr.strip()
                         or connect_result.stdout.strip()
