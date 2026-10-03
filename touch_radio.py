@@ -190,6 +190,21 @@ class AudioOutputManager:
             re.MULTILINE | re.IGNORECASE
         ))
 
+    def _restart_bluetooth_audio_profile(self):
+        # WirePlumber registers the A2DP profile with BlueZ. It can be late to
+        # start in a desktop session, leaving paired devices unable to connect.
+        self._run(
+            ['systemctl', '--user', 'restart', 'wireplumber.service'],
+            timeout=20
+        )
+        # On older Raspberry Pi OS releases PulseAudio supplies the profile.
+        # Loading an existing module is harmless; errors are handled by retry.
+        self._run(
+            ['pactl', 'load-module', 'module-bluetooth-discover'],
+            timeout=10
+        )
+        time.sleep(2)
+
     def get_bluetooth_devices(self):
         devices, paired, connected = self._bluetooth_device_sets()
         result = []
@@ -304,11 +319,25 @@ class AudioOutputManager:
                     timeout=25
                 )
                 connect_output = (connect_result.stdout + connect_result.stderr).lower()
+                if 'br-connection-profile-unavailable' in connect_output:
+                    self._restart_bluetooth_audio_profile()
+                    connect_result = self._run(
+                        ['bluetoothctl', '--timeout', '20', 'connect', address],
+                        timeout=25
+                    )
+                    connect_output = (
+                        connect_result.stdout + connect_result.stderr
+                    ).lower()
                 if (
                     connect_result.returncode != 0
                     or 'failed' in connect_output
                     or not self._bluetooth_info_flag(address, 'Connected')
                 ):
+                    if 'br-connection-profile-unavailable' in connect_output:
+                        raise RuntimeError(
+                            'Bluetooth audio profile unavailable. Re-run the '
+                            'TCRADIOS installer, reboot, and try again.'
+                        )
                     raise RuntimeError(
                         connect_result.stderr.strip()
                         or connect_result.stdout.strip()

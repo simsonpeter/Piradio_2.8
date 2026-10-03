@@ -40,9 +40,17 @@ if [[ -z "${CONFIG_FILE}" || -z "${CMDLINE_FILE}" ]]; then
     exit 1
 fi
 
-echo "Installing Plymouth and the TCRADIOS boot theme..."
+echo "Installing TCRADIOS system and Bluetooth audio dependencies..."
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y plymouth plymouth-themes
+AUDIO_PACKAGES=(pulseaudio-module-bluetooth)
+if dpkg-query -W -f='${Status}' pipewire 2>/dev/null | grep -q "install ok installed"; then
+    AUDIO_PACKAGES=(libspa-0.2-bluetooth wireplumber)
+fi
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    plymouth \
+    plymouth-themes \
+    bluez \
+    "${AUDIO_PACKAGES[@]}"
 
 THEME_DIR="/usr/share/plymouth/themes/tcradios"
 install -d "${THEME_DIR}"
