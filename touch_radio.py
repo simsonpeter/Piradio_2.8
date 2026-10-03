@@ -3718,6 +3718,7 @@ LANGUAGE_BASE_URL = (
     "8d31b80bed64167d2887313baf5b3bb12879308d/languages"
 )
 LANGUAGE_STREAMS = {
+    "Tamil": None,
     "Kannada": f"{LANGUAGE_BASE_URL}/Kannada.json",
     "Dutch": f"{LANGUAGE_BASE_URL}/dutch.json",
     "English": f"{LANGUAGE_BASE_URL}/english.json",
@@ -3737,6 +3738,8 @@ except:
         {"name": "BBC Radio 2", "url": "http://stream.live.vc.bbcmedia.co.uk/bbc_radio_two", "genre": "Adult Contemporary"},
         {"name": "Classic FM", "url": "http://media-ice.musicradio.com/ClassicFMMP3", "genre": "Classical"},
     ]
+
+base_stations = [station.copy() for station in stations]
 
 current_idx = 0
 if os.path.exists(LAST_STATION_FILE):
@@ -3993,11 +3996,15 @@ def connect_touch_bluetooth(address, name):
 def load_language_streams(language):
     global language_stream_status, language_stream_busy
     try:
-        response = requests.get(LANGUAGE_STREAMS[language], timeout=12)
-        response.raise_for_status()
+        if language == "Tamil":
+            catalog = base_stations
+        else:
+            response = requests.get(LANGUAGE_STREAMS[language], timeout=12)
+            response.raise_for_status()
+            catalog = response.json()
         loaded_streams = []
         seen_urls = set()
-        for stream in response.json():
+        for stream in catalog:
             name = str(stream.get('name', '')).strip()
             url = str(stream.get('url', '')).strip()
             if not name or not url or url in seen_urls:
@@ -4677,7 +4684,7 @@ bluetooth_device_rects = [
 btn_bluetooth_back = pygame.Rect(70, 430, 180, 38)
 language_card_rects = [
     pygame.Rect(16 + (index % 2) * 152, 75 + (index // 2) * 83, 136, 70)
-    for index in range(7)
+    for index in range(8)
 ]
 language_station_rects = [
     pygame.Rect(18, 89 + index * 52, 284, 46) for index in range(5)
