@@ -3696,6 +3696,19 @@ WEATHER_URL = (
     "&daily=weather_code,temperature_2m_max,temperature_2m_min"
     "&forecast_days=5&timezone=auto"
 )
+LANGUAGE_BASE_URL = (
+    "https://raw.githubusercontent.com/simsonpeter/Tcradios/"
+    "8d31b80bed64167d2887313baf5b3bb12879308d/languages"
+)
+LANGUAGE_STREAMS = {
+    "Kannada": f"{LANGUAGE_BASE_URL}/Kannada.json",
+    "Dutch": f"{LANGUAGE_BASE_URL}/dutch.json",
+    "English": f"{LANGUAGE_BASE_URL}/english.json",
+    "Hindi": f"{LANGUAGE_BASE_URL}/hindi.json",
+    "Malayalam": f"{LANGUAGE_BASE_URL}/malayalam.json",
+    "Sinhala": f"{LANGUAGE_BASE_URL}/sinhala.json",
+    "Telugu": f"{LANGUAGE_BASE_URL}/telugu.json"
+}
 LAST_STATION_FILE = "/home/raspberry/.last_station"
 
 try:
@@ -3754,6 +3767,11 @@ system_stats_updating = False
 touch_bluetooth_devices = []
 touch_bluetooth_status = "Tap Search to find nearby devices"
 touch_bluetooth_busy = False
+language_stream_cache = {}
+selected_language = None
+language_stream_status = "Choose a language"
+language_stream_busy = False
+language_stream_offset = 0
 
 # Logo setup
 LOGO_SIZE = 112
@@ -3955,6 +3973,55 @@ def connect_touch_bluetooth(address, name):
     finally:
         touch_bluetooth_busy = False
 
+def load_language_streams(language):
+    global language_stream_status, language_stream_busy
+    try:
+        response = requests.get(LANGUAGE_STREAMS[language], timeout=12)
+        response.raise_for_status()
+        loaded_streams = []
+        seen_urls = set()
+        for stream in response.json():
+            name = str(stream.get('name', '')).strip()
+            url = str(stream.get('url', '')).strip()
+            if not name or not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            loaded_streams.append({
+                'name': name,
+                'url': url,
+                'logo': str(stream.get('logo', '')).strip(),
+                'genre': str(
+                    stream.get('genre') or f"{language} Radio"
+                ).strip(),
+                'metadata': bool(stream.get('metadata', True)),
+                'language': language
+            })
+        language_stream_cache[language] = loaded_streams
+        count = len(loaded_streams)
+        language_stream_status = (
+            f"{count} station{'s' if count != 1 else ''}"
+        )
+    except Exception as error:
+        language_stream_status = str(error)
+    finally:
+        language_stream_busy = False
+
+def play_language_stream(stream):
+    global current_idx
+    existing_index = next(
+        (
+            index for index, station in enumerate(stations)
+            if station.get('url') == stream['url']
+        ),
+        None
+    )
+    if existing_index is None:
+        stations.append(stream.copy())
+        current_idx = len(stations) - 1
+    else:
+        current_idx = existing_index
+    play()
+
 splash_remaining = 5.0 - (time.time() - splash_started_at)
 if splash_remaining > 0:
     time.sleep(splash_remaining)
@@ -4135,6 +4202,7 @@ def draw_menu_screen(now):
         ("CLOCK", "Time dashboard"),
         ("ALARM / SLEEP", "Timers"),
         ("SYSTEM", "Pi status"),
+        ("LANGUAGES", "More streams"),
         ("SETTINGS", "Sound • Wi-Fi • Themes")
     ]
     for index, (title, subtitle) in enumerate(labels):
@@ -4142,16 +4210,14 @@ def draw_menu_screen(now):
         border = (UI_BLUE, UI_PURPLE, UI_AMBER)[index % 3]
         draw_modern_button(screen, rect, UI_SURFACE_RAISED, border, 16)
         title_surface = f_sm.render(title, True, UI_TEXT)
-        title_y = rect.y + (12 if index == 6 else 27)
         screen.blit(
             title_surface,
-            (rect.centerx - title_surface.get_width() // 2, title_y)
+            (rect.centerx - title_surface.get_width() // 2, rect.y + 18)
         )
         subtitle_surface = f_tiny.render(subtitle, True, UI_MUTED)
-        subtitle_y = rect.y + (34 if index == 6 else 52)
         screen.blit(
             subtitle_surface,
-            (rect.centerx - subtitle_surface.get_width() // 2, subtitle_y)
+            (rect.centerx - subtitle_surface.get_width() // 2, rect.y + 43)
         )
 def draw_favorites_screen(now):
     draw_page_base("FAVORITES", now)
@@ -4411,6 +4477,88 @@ def draw_bluetooth_screen(now):
         screen, f_sm, "‹  SETTINGS", UI_TEXT, btn_bluetooth_back
     )
 
+def draw_languages_screen(now):
+    draw_page_base("LANGUAGES", now)
+    for index, (language, rect) in enumerate(
+        zip(LANGUAGE_STREAMS, language_card_rects)
+    ):
+        border = (UI_BLUE, UI_PURPLE, UI_AMBER)[index % 3]
+        draw_modern_button(screen, rect, UI_SURFACE_RAISED, border, 15)
+        draw_centered_text(screen, f_sm, language.upper(), UI_TEXT, rect)
+    draw_pages_button()
+
+def draw_language_stations_screen(now):
+    title = selected_language.upper() if selected_language else "LANGUAGE"
+    draw_page_base(title, now)
+
+    status_surface = f_tiny.render(
+        fit_label(language_stream_status, 42), True, UI_MUTED
+    )
+    screen.blit(
+        status_surface,
+        (160 - status_surface.get_width() // 2, 67)
+    )
+
+    streams = language_stream_cache.get(selected_language, [])
+    visible_streams = streams[
+        language_stream_offset:language_stream_offset + 5
+    ]
+    if language_stream_busy:
+        loading_rect = pygame.Rect(18, 89, 284, 257)
+        draw_modern_button(
+            screen, loading_rect, UI_SURFACE, (45, 50, 65), 16
+        )
+        draw_centered_text(
+            screen, f_sm, "Loading stations…", UI_MUTED, loading_rect
+        )
+    elif visible_streams:
+        for stream, rect in zip(visible_streams, language_station_rects):
+            draw_modern_button(screen, rect, UI_SURFACE, (48, 54, 72), 13)
+            name_surface = f_sm.render(
+                fit_label(stream['name'], 28), True, UI_TEXT
+            )
+            screen.blit(name_surface, (rect.x + 13, rect.y + 7))
+            genre_surface = f_tiny.render(
+                fit_label(stream.get('genre', 'Radio'), 34),
+                True, UI_MUTED
+            )
+            screen.blit(genre_surface, (rect.x + 13, rect.y + 29))
+    elif selected_language:
+        empty_rect = pygame.Rect(18, 89, 284, 257)
+        draw_modern_button(
+            screen, empty_rect, UI_SURFACE, (45, 50, 65), 16
+        )
+        draw_centered_text(
+            screen, f_sm, "No stations available", UI_MUTED, empty_rect
+        )
+
+    page_number = language_stream_offset // 5 + 1
+    page_count = max(1, math.ceil(len(streams) / 5))
+    draw_modern_button(
+        screen, btn_language_previous, UI_SURFACE_RAISED,
+        UI_BLUE if language_stream_offset > 0 else (55, 61, 77), 13
+    )
+    draw_centered_text(
+        screen, f_lg, "‹", UI_TEXT, btn_language_previous
+    )
+    page_rect = pygame.Rect(118, 360, 84, 44)
+    draw_centered_text(
+        screen, f_sm, f"{page_number} / {page_count}", UI_MUTED, page_rect
+    )
+    has_next = language_stream_offset + 5 < len(streams)
+    draw_modern_button(
+        screen, btn_language_next, UI_SURFACE_RAISED,
+        UI_BLUE if has_next else (55, 61, 77), 13
+    )
+    draw_centered_text(screen, f_lg, "›", UI_TEXT, btn_language_next)
+
+    draw_modern_button(
+        screen, btn_language_back, UI_SURFACE_RAISED, UI_BLUE, 16
+    )
+    draw_centered_text(
+        screen, f_sm, "‹  LANGUAGES", UI_TEXT, btn_language_back
+    )
+
 def draw_screensaver():
     global saver_scroll_x
     # COMPLETELY BLACK BACKGROUND - no brightness
@@ -4474,15 +4622,15 @@ touch_start_pos = (0,0)
 touch_start_time = 0
 active_page = "radio"
 PAGE_ORDER = [
-    "radio", "favorites", "forecast", "clock", "alarm", "system", "settings"
+    "radio", "favorites", "forecast", "clock",
+    "alarm", "system", "languages", "settings"
 ]
 btn_open_pages = pygame.Rect(90, 388, 140, 30)
 btn_pages = pygame.Rect(70, 430, 180, 38)
 menu_card_rects = [
-    pygame.Rect(16 + (index % 2) * 152, 75 + (index // 2) * 110, 136, 95)
-    for index in range(6)
+    pygame.Rect(16 + (index % 2) * 152, 72 + (index // 2) * 84, 136, 75)
+    for index in range(8)
 ]
-menu_card_rects.append(pygame.Rect(16, 405, 288, 55))
 btn_favorite_toggle = pygame.Rect(90, 67, 140, 34)
 favorite_card_rects = [
     pygame.Rect(16 + (index % 2) * 152, 112 + (index // 2) * 96, 136, 86)
@@ -4510,6 +4658,16 @@ bluetooth_device_rects = [
     pygame.Rect(18, 142 + index * 46, 284, 42) for index in range(6)
 ]
 btn_bluetooth_back = pygame.Rect(70, 430, 180, 38)
+language_card_rects = [
+    pygame.Rect(16 + (index % 2) * 152, 75 + (index // 2) * 83, 136, 70)
+    for index in range(7)
+]
+language_station_rects = [
+    pygame.Rect(18, 89 + index * 52, 284, 46) for index in range(5)
+]
+btn_language_previous = pygame.Rect(18, 360, 88, 44)
+btn_language_next = pygame.Rect(214, 360, 88, 44)
+btn_language_back = pygame.Rect(70, 430, 180, 38)
 
 while True:
     now = time.time()
@@ -4777,6 +4935,10 @@ while True:
                 draw_settings_screen(now)
             elif active_page == "bluetooth":
                 draw_bluetooth_screen(now)
+            elif active_page == "languages":
+                draw_languages_screen(now)
+            elif active_page == "language_stations":
+                draw_language_stations_screen(now)
     
     for event in pygame.event.get():
         if event.type == pygame.MOUSEBUTTONDOWN:
@@ -4821,6 +4983,68 @@ while True:
                                 args=(device['address'], device['name']),
                                 daemon=True
                             ).start()
+                            break
+                continue
+
+            if active_page == "languages":
+                if btn_pages.collidepoint(event.pos):
+                    active_page = "menu"
+                else:
+                    for language, rect in zip(
+                        LANGUAGE_STREAMS, language_card_rects
+                    ):
+                        if rect.collidepoint(event.pos):
+                            if (
+                                language_stream_busy
+                                and language not in language_stream_cache
+                            ):
+                                break
+                            selected_language = language
+                            language_stream_offset = 0
+                            active_page = "language_stations"
+                            if language in language_stream_cache:
+                                count = len(language_stream_cache[language])
+                                language_stream_status = (
+                                    f"{count} station"
+                                    f"{'s' if count != 1 else ''}"
+                                )
+                            elif not language_stream_busy:
+                                language_stream_busy = True
+                                language_stream_status = "Loading stations…"
+                                threading.Thread(
+                                    target=load_language_streams,
+                                    args=(language,),
+                                    daemon=True
+                                ).start()
+                            break
+                continue
+
+            if active_page == "language_stations":
+                streams = language_stream_cache.get(selected_language, [])
+                if btn_language_back.collidepoint(event.pos):
+                    active_page = "languages"
+                elif (
+                    btn_language_previous.collidepoint(event.pos)
+                    and language_stream_offset > 0
+                ):
+                    language_stream_offset = max(
+                        0, language_stream_offset - 5
+                    )
+                elif (
+                    btn_language_next.collidepoint(event.pos)
+                    and language_stream_offset + 5 < len(streams)
+                ):
+                    language_stream_offset += 5
+                elif not language_stream_busy:
+                    visible_streams = streams[
+                        language_stream_offset:language_stream_offset + 5
+                    ]
+                    for stream, rect in zip(
+                        visible_streams, language_station_rects
+                    ):
+                        if rect.collidepoint(event.pos):
+                            play_language_stream(stream)
+                            active_page = "radio"
                             break
                 continue
 
