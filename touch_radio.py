@@ -3718,8 +3718,20 @@ if os.path.exists(LAST_STATION_FILE):
     except:
         pass
 
+FAVORITES_FILE = os.path.expanduser("~/.radio_favorites")
+favorite_indices = []
+try:
+    with open(FAVORITES_FILE, "r") as favorites_file:
+        favorite_indices = [
+            index for index in json.load(favorites_file)
+            if isinstance(index, int) and 0 <= index < len(stations)
+        ][:6]
+except (OSError, ValueError, TypeError):
+    favorite_indices = list(range(min(4, len(stations))))
+
 vol_level = 80
 last_weather_update = 0
+last_system_update = 0
 saver_mode = False
 show_qr = False
 weather_str = "HOVE: --C"
@@ -3732,6 +3744,12 @@ saver_scroll_x = 320
 alarm_fade_active = False
 alarm_fade_data = {}
 saver_active = False
+system_stats = {
+    'cpu_temp': '--',
+    'disk_free': '--',
+    'wifi': '--',
+    'bluetooth': 'Not connected'
+}
 
 # Logo setup
 LOGO_SIZE = 112
@@ -3844,6 +3862,59 @@ def play():
             f.write(str(current_idx))
     except:
         pass
+
+def save_favorites():
+    try:
+        with open(FAVORITES_FILE, "w") as favorites_file:
+            json.dump(favorite_indices[:6], favorites_file)
+    except OSError as error:
+        print(f"Could not save favorites: {error}")
+
+def toggle_current_favorite():
+    if current_idx in favorite_indices:
+        favorite_indices.remove(current_idx)
+    else:
+        favorite_indices.insert(0, current_idx)
+        del favorite_indices[6:]
+    save_favorites()
+
+def read_system_stats():
+    stats = {
+        'cpu_temp': '--',
+        'disk_free': '--',
+        'wifi': '--',
+        'bluetooth': 'Not connected'
+    }
+    try:
+        with open('/sys/class/thermal/thermal_zone0/temp', 'r') as temp_file:
+            stats['cpu_temp'] = f"{int(temp_file.read().strip()) / 1000:.0f}°C"
+    except (OSError, ValueError):
+        pass
+
+    try:
+        filesystem = os.statvfs('/')
+        free_gb = filesystem.f_bavail * filesystem.f_frsize / (1024 ** 3)
+        stats['disk_free'] = f"{free_gb:.1f} GB free"
+    except OSError:
+        pass
+
+    try:
+        with open('/proc/net/wireless', 'r') as wireless_file:
+            wireless_lines = wireless_file.readlines()[2:]
+        if wireless_lines:
+            quality = float(wireless_lines[0].split()[2].rstrip('.'))
+            stats['wifi'] = f"{max(0, min(100, int(quality / 70 * 100)))}%"
+    except (OSError, ValueError, IndexError):
+        pass
+
+    try:
+        devices, _, connected = audio_manager._bluetooth_device_sets()
+        if connected:
+            address = next(iter(connected))
+            stats['bluetooth'] = devices.get(address, {}).get('name', address)
+    except Exception:
+        pass
+    return stats
 
 splash_remaining = 5.0 - (time.time() - splash_started_at)
 if splash_remaining > 0:
@@ -3994,11 +4065,200 @@ def draw_forecast_screen(now):
         )
 
     draw_modern_button(
-        screen, btn_radio_page, UI_SURFACE_RAISED, UI_BLUE, 16
+        screen, btn_pages, UI_SURFACE_RAISED, UI_BLUE, 16
     )
     draw_centered_text(
-        screen, f_sm, "‹  RADIO", UI_TEXT, btn_radio_page
+        screen, f_sm, "PAGES", UI_TEXT, btn_pages
     )
+
+def draw_page_base(title, now):
+    screen.blit(ui_background, (0, 0))
+    draw_animated_ui_glow(screen, now)
+    header = pygame.Rect(8, 7, 304, 52)
+    pygame.draw.rect(screen, UI_SURFACE, header, border_radius=17)
+    pygame.draw.rect(screen, (54, 75, 112), header, 1, border_radius=17)
+    draw_centered_text(screen, f_lg, title, UI_TEXT, header)
+
+def draw_pages_button():
+    draw_modern_button(screen, btn_pages, UI_SURFACE_RAISED, UI_BLUE, 16)
+    draw_centered_text(screen, f_sm, "PAGES", UI_TEXT, btn_pages)
+
+def fit_label(text, length=16):
+    text = sanitize_text(text)
+    return text if len(text) <= length else text[:length - 1] + "…"
+
+def draw_menu_screen(now):
+    draw_page_base("TC RADIO", now)
+    labels = [
+        ("NOW PLAYING", "Radio controls"),
+        ("FAVORITES", "Quick stations"),
+        ("FORECAST", "Five days"),
+        ("CLOCK", "Time dashboard"),
+        ("ALARM / SLEEP", "Timers"),
+        ("SYSTEM", "Pi status")
+    ]
+    for index, (title, subtitle) in enumerate(labels):
+        rect = menu_card_rects[index]
+        border = (UI_BLUE, UI_PURPLE, UI_AMBER)[index % 3]
+        draw_modern_button(screen, rect, UI_SURFACE_RAISED, border, 16)
+        title_surface = f_sm.render(title, True, UI_TEXT)
+        screen.blit(
+            title_surface,
+            (rect.centerx - title_surface.get_width() // 2, rect.y + 27)
+        )
+        subtitle_surface = f_tiny.render(subtitle, True, UI_MUTED)
+        screen.blit(
+            subtitle_surface,
+            (rect.centerx - subtitle_surface.get_width() // 2, rect.y + 52)
+        )
+    hint = f_tiny.render("TAP A PAGE", True, UI_MUTED)
+    screen.blit(hint, (160 - hint.get_width() // 2, 455))
+
+def draw_favorites_screen(now):
+    draw_page_base("FAVORITES", now)
+    add_border = UI_PINK if current_idx in favorite_indices else UI_GREEN
+    add_label = (
+        "REMOVE CURRENT" if current_idx in favorite_indices
+        else "ADD CURRENT"
+    )
+    draw_modern_button(
+        screen, btn_favorite_toggle, UI_SURFACE_RAISED, add_border, 13
+    )
+    draw_centered_text(
+        screen, f_tiny, add_label, UI_TEXT, btn_favorite_toggle
+    )
+
+    for index, rect in enumerate(favorite_card_rects):
+        if index < len(favorite_indices):
+            station_index = favorite_indices[index]
+            station = stations[station_index]
+            border = UI_BLUE if station_index == current_idx else (48, 54, 72)
+            draw_modern_button(screen, rect, UI_SURFACE, border, 14)
+            number = f_tiny.render(f"{index + 1}", True, UI_BLUE)
+            screen.blit(number, (rect.x + 10, rect.y + 9))
+            name = f_sm.render(fit_label(station['name'], 15), True, UI_TEXT)
+            screen.blit(name, (rect.x + 10, rect.y + 31))
+            genre = f_tiny.render(
+                fit_label(station.get('genre', 'Radio'), 18),
+                True, UI_MUTED
+            )
+            screen.blit(genre, (rect.x + 10, rect.y + 54))
+        else:
+            draw_modern_button(screen, rect, UI_SURFACE, (42, 47, 61), 14)
+            draw_centered_text(screen, f_tiny, "EMPTY", UI_MUTED, rect)
+    draw_pages_button()
+
+def draw_clock_screen(now):
+    draw_page_base("CLOCK", now)
+    current_time = datetime.now()
+    time_surface = f_xl.render(current_time.strftime("%H:%M"), True, UI_TEXT)
+    screen.blit(time_surface, (160 - time_surface.get_width() // 2, 82))
+    date_surface = f_med.render(
+        current_time.strftime("%A").upper(), True, UI_BLUE
+    )
+    screen.blit(date_surface, (160 - date_surface.get_width() // 2, 177))
+    full_date = f_sm.render(
+        current_time.strftime("%d %B %Y"), True, UI_MUTED
+    )
+    screen.blit(full_date, (160 - full_date.get_width() // 2, 213))
+
+    weather_card = pygame.Rect(28, 252, 264, 78)
+    draw_modern_button(screen, weather_card, UI_SURFACE_RAISED, UI_PURPLE, 18)
+    draw_weather_icon(
+        screen, 76, weather_card.centery, weather_type, 22, dimmed=False
+    )
+    temp = f_weather.render(f"{current_temp}°C", True, UI_TEXT)
+    screen.blit(temp, (112, weather_card.y + 11))
+    city = f_tiny.render("HOVE", True, UI_MUTED)
+    screen.blit(city, (116, weather_card.y + 53))
+
+    station_card = pygame.Rect(28, 344, 264, 58)
+    draw_modern_button(screen, station_card, UI_SURFACE, (48, 54, 72), 15)
+    draw_centered_text(
+        screen, f_sm, fit_label(stations[current_idx]['name'], 28),
+        UI_TEXT, station_card
+    )
+    draw_pages_button()
+
+def draw_alarm_screen(now):
+    draw_page_base("ALARM & SLEEP", now)
+    alarm_card = pygame.Rect(18, 75, 284, 115)
+    draw_modern_button(
+        screen, alarm_card, UI_SURFACE_RAISED,
+        UI_AMBER if alarm_system.alarm_enabled else (55, 61, 77), 18
+    )
+    alarm_label = f_weather.render(alarm_system.alarm_time, True, UI_TEXT)
+    screen.blit(
+        alarm_label,
+        (alarm_card.centerx - alarm_label.get_width() // 2, 91)
+    )
+    state = "ALARM ON" if alarm_system.alarm_enabled else "ALARM OFF"
+    state_surface = f_sm.render(
+        state, True, UI_AMBER if alarm_system.alarm_enabled else UI_MUTED
+    )
+    screen.blit(
+        state_surface,
+        (alarm_card.centerx - state_surface.get_width() // 2, 150)
+    )
+
+    for rect, label in (
+        (btn_alarm_minus, "− 5 MIN"),
+        (btn_alarm_toggle_page, "ON / OFF"),
+        (btn_alarm_plus, "+ 5 MIN")
+    ):
+        draw_modern_button(screen, rect, UI_SURFACE, UI_BLUE, 13)
+        draw_centered_text(screen, f_tiny, label, UI_TEXT, rect)
+
+    sleep_title = f_sm.render("SLEEP TIMER", True, UI_TEXT)
+    screen.blit(sleep_title, (20, 261))
+    for rect, minutes in zip(btn_sleep_presets, (15, 30, 60)):
+        active = (
+            alarm_system.sleep_timer_enabled
+            and alarm_system.sleep_duration == minutes * 60
+        )
+        draw_modern_button(
+            screen, rect, UI_SURFACE_RAISED,
+            UI_GREEN if active else (55, 61, 77), 13
+        )
+        draw_centered_text(screen, f_sm, f"{minutes} MIN", UI_TEXT, rect)
+
+    sleep_status = (
+        f"{alarm_system.get_sleep_remaining()} min remaining"
+        if alarm_system.sleep_timer_enabled else "Timer off"
+    )
+    draw_modern_button(
+        screen, btn_sleep_cancel, UI_SURFACE,
+        UI_PINK if alarm_system.sleep_timer_enabled else (55, 61, 77), 13
+    )
+    draw_centered_text(
+        screen, f_tiny, sleep_status.upper(), UI_TEXT, btn_sleep_cancel
+    )
+    draw_pages_button()
+
+def draw_system_screen(now):
+    draw_page_base("SYSTEM STATUS", now)
+    values = [
+        ("WI-FI", system_stats['wifi']),
+        ("IP ADDRESS", current_ip),
+        ("CPU", system_stats['cpu_temp']),
+        ("STORAGE", system_stats['disk_free'])
+    ]
+    for rect, (label, value) in zip(system_card_rects, values):
+        draw_modern_button(screen, rect, UI_SURFACE_RAISED, (48, 54, 72), 16)
+        label_surface = f_tiny.render(label, True, UI_MUTED)
+        screen.blit(label_surface, (rect.x + 14, rect.y + 15))
+        value_surface = f_sm.render(fit_label(value, 18), True, UI_TEXT)
+        screen.blit(value_surface, (rect.x + 14, rect.y + 43))
+
+    bluetooth_card = pygame.Rect(18, 328, 284, 78)
+    draw_modern_button(screen, bluetooth_card, UI_SURFACE, UI_BLUE, 16)
+    bt_label = f_tiny.render("BLUETOOTH AUDIO", True, UI_MUTED)
+    screen.blit(bt_label, (34, bluetooth_card.y + 15))
+    bt_value = f_sm.render(
+        fit_label(system_stats['bluetooth'], 28), True, UI_TEXT
+    )
+    screen.blit(bt_value, (34, bluetooth_card.y + 43))
+    draw_pages_button()
 
 def draw_screensaver():
     global saver_scroll_x
@@ -4062,8 +4322,29 @@ volume_bar_timer = 0
 touch_start_pos = (0,0)
 touch_start_time = 0
 active_page = "radio"
-btn_weather_page = pygame.Rect(90, 388, 140, 30)
-btn_radio_page = pygame.Rect(70, 430, 180, 38)
+PAGE_ORDER = ["radio", "favorites", "forecast", "clock", "alarm", "system"]
+btn_open_pages = pygame.Rect(90, 388, 140, 30)
+btn_pages = pygame.Rect(70, 430, 180, 38)
+menu_card_rects = [
+    pygame.Rect(16 + (index % 2) * 152, 75 + (index // 2) * 110, 136, 95)
+    for index in range(6)
+]
+btn_favorite_toggle = pygame.Rect(90, 67, 140, 34)
+favorite_card_rects = [
+    pygame.Rect(16 + (index % 2) * 152, 112 + (index // 2) * 96, 136, 86)
+    for index in range(6)
+]
+btn_alarm_minus = pygame.Rect(18, 204, 88, 42)
+btn_alarm_toggle_page = pygame.Rect(116, 204, 88, 42)
+btn_alarm_plus = pygame.Rect(214, 204, 88, 42)
+btn_sleep_presets = [
+    pygame.Rect(18 + index * 98, 282, 88, 48) for index in range(3)
+]
+btn_sleep_cancel = pygame.Rect(18, 344, 284, 54)
+system_card_rects = [
+    pygame.Rect(18 + (index % 2) * 146, 76 + (index // 2) * 126, 138, 110)
+    for index in range(4)
+]
 
 while True:
     now = time.time()
@@ -4105,6 +4386,10 @@ while True:
                     })
         except: pass
         last_weather_update = now
+
+    if active_page == "system" and now - last_system_update > 10:
+        system_stats = read_system_stats()
+        last_system_update = now
     
     try:
         media = player.get_media()
@@ -4293,10 +4578,10 @@ while True:
         )
 
         draw_modern_button(
-            screen, btn_weather_page, UI_SURFACE, UI_BLUE, 11
+            screen, btn_open_pages, UI_SURFACE, UI_BLUE, 11
         )
         draw_centered_text(
-            screen, f_sm, "WEATHER  ›", UI_TEXT, btn_weather_page
+            screen, f_sm, "PAGES", UI_TEXT, btn_open_pages
         )
 
         if show_qr:
@@ -4305,8 +4590,19 @@ while True:
             pygame.draw.rect(screen, UI_BLUE, qr_panel, 2, border_radius=18)
             screen.blit(qr_surface, (40, 96))
 
-        if active_page == "forecast" and not show_qr:
-            draw_forecast_screen(now)
+        if not show_qr:
+            if active_page == "menu":
+                draw_menu_screen(now)
+            elif active_page == "favorites":
+                draw_favorites_screen(now)
+            elif active_page == "forecast":
+                draw_forecast_screen(now)
+            elif active_page == "clock":
+                draw_clock_screen(now)
+            elif active_page == "alarm":
+                draw_alarm_screen(now)
+            elif active_page == "system":
+                draw_system_screen(now)
     
     for event in pygame.event.get():
         if event.type == pygame.MOUSEBUTTONDOWN:
@@ -4318,12 +4614,63 @@ while True:
             if show_qr:
                 show_qr = False
                 continue
-            if active_page == "forecast":
-                if btn_radio_page.collidepoint(event.pos):
-                    active_page = "radio"
+            if active_page == "menu":
+                for page_index, card in enumerate(menu_card_rects):
+                    if card.collidepoint(event.pos):
+                        active_page = PAGE_ORDER[page_index]
+                        break
                 continue
-            if btn_weather_page.collidepoint(event.pos):
-                active_page = "forecast"
+
+            if active_page != "radio":
+                if btn_pages.collidepoint(event.pos):
+                    active_page = "menu"
+                elif active_page == "favorites":
+                    if btn_favorite_toggle.collidepoint(event.pos):
+                        toggle_current_favorite()
+                    else:
+                        for favorite_index, card in enumerate(
+                            favorite_card_rects
+                        ):
+                            if (
+                                card.collidepoint(event.pos)
+                                and favorite_index < len(favorite_indices)
+                            ):
+                                current_idx = favorite_indices[favorite_index]
+                                play()
+                                break
+                elif active_page == "alarm":
+                    if btn_alarm_toggle_page.collidepoint(event.pos):
+                        alarm_system.alarm_enabled = (
+                            not alarm_system.alarm_enabled
+                        )
+                        alarm_system.save_alarm_settings()
+                    elif (
+                        btn_alarm_minus.collidepoint(event.pos)
+                        or btn_alarm_plus.collidepoint(event.pos)
+                    ):
+                        alarm_time = datetime.strptime(
+                            alarm_system.alarm_time, "%H:%M"
+                        )
+                        minutes = (
+                            -5 if btn_alarm_minus.collidepoint(event.pos) else 5
+                        )
+                        alarm_system.alarm_time = (
+                            alarm_time + timedelta(minutes=minutes)
+                        ).strftime("%H:%M")
+                        alarm_system.save_alarm_settings()
+                    else:
+                        for preset, minutes in zip(
+                            btn_sleep_presets, (15, 30, 60)
+                        ):
+                            if preset.collidepoint(event.pos):
+                                alarm_system.start_sleep_timer(minutes)
+                                break
+                        if btn_sleep_cancel.collidepoint(event.pos):
+                            alarm_system.stop_sleep_timer()
+                continue
+
+            if btn_open_pages.collidepoint(event.pos):
+                active_page = "menu"
                 continue
             if btn_exit.collidepoint(event.pos):
                 pygame.quit()
@@ -4381,8 +4728,17 @@ while True:
             dx = event.pos[0] - touch_start_pos[0]
             dy = event.pos[1] - touch_start_pos[1]
             dt = time.time() - touch_start_time
-            if abs(dx) > 45 and abs(dx) > abs(dy) and dt < 2.5:
-                active_page = "forecast" if dx < 0 else "radio"
+            if (
+                active_page in PAGE_ORDER
+                and abs(dx) > 45
+                and abs(dx) > abs(dy)
+                and dt < 2.5
+            ):
+                page_index = PAGE_ORDER.index(active_page)
+                direction = 1 if dx < 0 else -1
+                active_page = PAGE_ORDER[
+                    (page_index + direction) % len(PAGE_ORDER)
+                ]
                 adjusting_volume = False
                 continue
 
