@@ -3750,6 +3750,7 @@ system_stats = {
     'wifi': '--',
     'bluetooth': 'Not connected'
 }
+system_stats_updating = False
 
 # Logo setup
 LOGO_SIZE = 112
@@ -3915,6 +3916,13 @@ def read_system_stats():
     except Exception:
         pass
     return stats
+
+def refresh_system_stats():
+    global system_stats, system_stats_updating
+    try:
+        system_stats = read_system_stats()
+    finally:
+        system_stats_updating = False
 
 splash_remaining = 5.0 - (time.time() - splash_started_at)
 if splash_remaining > 0:
@@ -4452,9 +4460,14 @@ while True:
         except: pass
         last_weather_update = now
 
-    if active_page in ("system", "settings") and now - last_system_update > 10:
-        system_stats = read_system_stats()
+    if (
+        active_page in ("system", "settings")
+        and now - last_system_update > 10
+        and not system_stats_updating
+    ):
+        system_stats_updating = True
         last_system_update = now
+        threading.Thread(target=refresh_system_stats, daemon=True).start()
     
     try:
         media = player.get_media()
