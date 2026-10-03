@@ -4539,7 +4539,7 @@ def draw_language_stations_screen(now):
         UI_BLUE if language_stream_offset > 0 else (55, 61, 77), 13
     )
     draw_centered_text(
-        screen, f_lg, "‹", UI_TEXT, btn_language_previous
+        screen, f_tiny, "PREV", UI_TEXT, btn_language_previous
     )
     page_rect = pygame.Rect(118, 360, 84, 44)
     draw_centered_text(
@@ -4550,13 +4550,13 @@ def draw_language_stations_screen(now):
         screen, btn_language_next, UI_SURFACE_RAISED,
         UI_BLUE if has_next else (55, 61, 77), 13
     )
-    draw_centered_text(screen, f_lg, "›", UI_TEXT, btn_language_next)
+    draw_centered_text(screen, f_tiny, "NEXT", UI_TEXT, btn_language_next)
 
     draw_modern_button(
         screen, btn_language_back, UI_SURFACE_RAISED, UI_BLUE, 16
     )
     draw_centered_text(
-        screen, f_sm, "‹  LANGUAGES", UI_TEXT, btn_language_back
+        screen, f_sm, "<  LANGUAGES", UI_TEXT, btn_language_back
     )
 
 def draw_screensaver():
