@@ -28,9 +28,10 @@ If automatic launch fails, inspect:
 cat ~/.tcradios-start.log
 ```
 
-The installer selects one autostart mechanism for the installed desktop and
-uses a shared process lock to prevent duplicate radio launches. The launcher
-waits for display `:0` before starting the radio.
+The installer registers both XDG and Labwc autostart when Labwc is present,
+because some Raspberry Pi OS images include Labwc without using it for the
+active session. A shared process lock prevents duplicate radio launches. The
+launcher waits for display `:0` before starting the radio.
 
 ## Bluetooth audio
 

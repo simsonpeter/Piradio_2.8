@@ -120,27 +120,23 @@ chmod 0755 /usr/local/bin/tcradios-start
 
 AUTOSTART_DIR="${INSTALL_HOME}/.config/autostart"
 install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${AUTOSTART_DIR}"
+install -m 0644 -o "${INSTALL_USER}" -g "${INSTALL_USER}" \
+    "${SCRIPT_DIR}/boot/tcradios-autostart.desktop" \
+    "${AUTOSTART_DIR}/tcradios.desktop"
 
 LABWC_DIR="${INSTALL_HOME}/.config/labwc"
 LABWC_AUTOSTART="${LABWC_DIR}/autostart"
 
 if [[ -d /etc/xdg/labwc ]]; then
-    # Raspberry Pi OS Bookworm: use only the compositor autostart.
-    rm -f "${AUTOSTART_DIR}/tcradios.desktop"
+    # Register with Labwc as well. Some Raspberry Pi OS images include Labwc
+    # while the selected desktop still uses XDG autostart. The launcher lock
+    # safely prevents both mechanisms from creating duplicate radio processes.
     install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${LABWC_DIR}"
     touch "${LABWC_AUTOSTART}"
     sed -i '\|/usr/local/bin/tcradios-start|d' "${LABWC_AUTOSTART}"
     printf '\n/usr/local/bin/tcradios-start &\n' >> "${LABWC_AUTOSTART}"
     chown "${INSTALL_USER}:${INSTALL_USER}" "${LABWC_AUTOSTART}"
     chmod 0755 "${LABWC_AUTOSTART}"
-else
-    # Legacy Raspberry Pi desktop: use only the XDG autostart entry.
-    install -m 0644 -o "${INSTALL_USER}" -g "${INSTALL_USER}" \
-        "${SCRIPT_DIR}/boot/tcradios-autostart.desktop" \
-        "${AUTOSTART_DIR}/tcradios.desktop"
-    if [[ -f "${LABWC_AUTOSTART}" ]]; then
-        sed -i '\|/usr/local/bin/tcradios-start|d' "${LABWC_AUTOSTART}"
-    fi
 fi
 
 if command -v raspi-config >/dev/null 2>&1; then
