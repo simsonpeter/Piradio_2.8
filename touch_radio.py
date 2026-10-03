@@ -4095,25 +4095,25 @@ def draw_menu_screen(now):
         ("FORECAST", "Five days"),
         ("CLOCK", "Time dashboard"),
         ("ALARM / SLEEP", "Timers"),
-        ("SYSTEM", "Pi status")
+        ("SYSTEM", "Pi status"),
+        ("SETTINGS", "Sound • Wi-Fi • Themes")
     ]
     for index, (title, subtitle) in enumerate(labels):
         rect = menu_card_rects[index]
         border = (UI_BLUE, UI_PURPLE, UI_AMBER)[index % 3]
         draw_modern_button(screen, rect, UI_SURFACE_RAISED, border, 16)
         title_surface = f_sm.render(title, True, UI_TEXT)
+        title_y = rect.y + (12 if index == 6 else 27)
         screen.blit(
             title_surface,
-            (rect.centerx - title_surface.get_width() // 2, rect.y + 27)
+            (rect.centerx - title_surface.get_width() // 2, title_y)
         )
         subtitle_surface = f_tiny.render(subtitle, True, UI_MUTED)
+        subtitle_y = rect.y + (34 if index == 6 else 52)
         screen.blit(
             subtitle_surface,
-            (rect.centerx - subtitle_surface.get_width() // 2, rect.y + 52)
+            (rect.centerx - subtitle_surface.get_width() // 2, subtitle_y)
         )
-    hint = f_tiny.render("TAP A PAGE", True, UI_MUTED)
-    screen.blit(hint, (160 - hint.get_width() // 2, 455))
-
 def draw_favorites_screen(now):
     draw_page_base("FAVORITES", now)
     add_border = UI_PINK if current_idx in favorite_indices else UI_GREEN
@@ -4260,6 +4260,62 @@ def draw_system_screen(now):
     screen.blit(bt_value, (34, bluetooth_card.y + 43))
     draw_pages_button()
 
+def draw_settings_screen(now):
+    draw_page_base("SETTINGS", now)
+
+    audio_title = f_sm.render("SOUND OUTPUT", True, UI_TEXT)
+    screen.blit(audio_title, (18, 73))
+    audio_labels = ("AUTO", "JACK", "HDMI", "BLUETOOTH")
+    audio_names = ("auto", "analog", "hdmi", "bluetooth")
+    for rect, label, output_name in zip(
+        btn_audio_outputs, audio_labels, audio_names
+    ):
+        active = audio_manager.current_output == output_name
+        available = (
+            output_name == "auto"
+            or audio_manager.outputs.get(output_name, {}).get(
+                'available', False
+            )
+        )
+        border = UI_GREEN if active else (UI_BLUE if available else (55, 61, 77))
+        fill = UI_SURFACE_RAISED if available else UI_SURFACE
+        draw_modern_button(screen, rect, fill, border, 12)
+        draw_centered_text(
+            screen, f_tiny, label, UI_TEXT if available else UI_MUTED, rect
+        )
+
+    wifi_title = f_sm.render("WI-FI CONNECTION", True, UI_TEXT)
+    screen.blit(wifi_title, (18, 174))
+    wifi_card = pygame.Rect(18, 196, 284, 91)
+    draw_modern_button(screen, wifi_card, UI_SURFACE_RAISED, UI_PURPLE, 16)
+    wifi_value = f_sm.render(
+        f"Signal {system_stats['wifi']}", True, UI_TEXT
+    )
+    screen.blit(wifi_value, (34, 213))
+    ip_value = f_tiny.render(current_ip, True, UI_MUTED)
+    screen.blit(ip_value, (34, 241))
+    draw_modern_button(screen, btn_wifi_qr, UI_SURFACE, UI_BLUE, 12)
+    draw_centered_text(screen, f_tiny, "WEB / QR", UI_TEXT, btn_wifi_qr)
+
+    theme_title = f_sm.render("THEME", True, UI_TEXT)
+    screen.blit(theme_title, (18, 307))
+    current_theme_rect = pygame.Rect(78, 331, 164, 63)
+    draw_modern_button(
+        screen, current_theme_rect, UI_SURFACE_RAISED, UI_AMBER, 14
+    )
+    draw_centered_text(
+        screen, f_sm, current_theme.name.upper(), UI_TEXT, current_theme_rect
+    )
+    draw_modern_button(
+        screen, btn_theme_previous, UI_SURFACE, UI_BLUE, 14
+    )
+    draw_centered_text(
+        screen, f_lg, "‹", UI_TEXT, btn_theme_previous
+    )
+    draw_modern_button(screen, btn_theme_next, UI_SURFACE, UI_BLUE, 14)
+    draw_centered_text(screen, f_lg, "›", UI_TEXT, btn_theme_next)
+    draw_pages_button()
+
 def draw_screensaver():
     global saver_scroll_x
     # COMPLETELY BLACK BACKGROUND - no brightness
@@ -4322,13 +4378,16 @@ volume_bar_timer = 0
 touch_start_pos = (0,0)
 touch_start_time = 0
 active_page = "radio"
-PAGE_ORDER = ["radio", "favorites", "forecast", "clock", "alarm", "system"]
+PAGE_ORDER = [
+    "radio", "favorites", "forecast", "clock", "alarm", "system", "settings"
+]
 btn_open_pages = pygame.Rect(90, 388, 140, 30)
 btn_pages = pygame.Rect(70, 430, 180, 38)
 menu_card_rects = [
     pygame.Rect(16 + (index % 2) * 152, 75 + (index // 2) * 110, 136, 95)
     for index in range(6)
 ]
+menu_card_rects.append(pygame.Rect(16, 405, 288, 55))
 btn_favorite_toggle = pygame.Rect(90, 67, 140, 34)
 favorite_card_rects = [
     pygame.Rect(16 + (index % 2) * 152, 112 + (index // 2) * 96, 136, 86)
@@ -4345,6 +4404,12 @@ system_card_rects = [
     pygame.Rect(18 + (index % 2) * 146, 76 + (index // 2) * 126, 138, 110)
     for index in range(4)
 ]
+btn_audio_outputs = [
+    pygame.Rect(14 + index * 76, 95, 70, 60) for index in range(4)
+]
+btn_wifi_qr = pygame.Rect(190, 216, 95, 50)
+btn_theme_previous = pygame.Rect(18, 331, 50, 63)
+btn_theme_next = pygame.Rect(252, 331, 50, 63)
 
 while True:
     now = time.time()
@@ -4387,7 +4452,7 @@ while True:
         except: pass
         last_weather_update = now
 
-    if active_page == "system" and now - last_system_update > 10:
+    if active_page in ("system", "settings") and now - last_system_update > 10:
         system_stats = read_system_stats()
         last_system_update = now
     
@@ -4603,6 +4668,8 @@ while True:
                 draw_alarm_screen(now)
             elif active_page == "system":
                 draw_system_screen(now)
+            elif active_page == "settings":
+                draw_settings_screen(now)
     
     for event in pygame.event.get():
         if event.type == pygame.MOUSEBUTTONDOWN:
@@ -4667,6 +4734,45 @@ while True:
                                 break
                         if btn_sleep_cancel.collidepoint(event.pos):
                             alarm_system.stop_sleep_timer()
+                elif active_page == "settings":
+                    for rect, output_name in zip(
+                        btn_audio_outputs,
+                        ("auto", "analog", "hdmi", "bluetooth")
+                    ):
+                        available = (
+                            output_name == "auto"
+                            or audio_manager.outputs.get(
+                                output_name, {}
+                            ).get('available', False)
+                        )
+                        if rect.collidepoint(event.pos) and available:
+                            audio_manager.set_output(output_name)
+                            break
+                    if btn_wifi_qr.collidepoint(event.pos):
+                        show_qr = True
+                    elif (
+                        btn_theme_previous.collidepoint(event.pos)
+                        or btn_theme_next.collidepoint(event.pos)
+                    ):
+                        current_theme_index = next(
+                            (
+                                index for index, theme_name
+                                in enumerate(theme_names)
+                                if THEMES[theme_name].name
+                                == current_theme.name
+                            ),
+                            0
+                        )
+                        direction = (
+                            -1 if btn_theme_previous.collidepoint(event.pos)
+                            else 1
+                        )
+                        set_theme(
+                            theme_names[
+                                (current_theme_index + direction)
+                                % len(theme_names)
+                            ]
+                        )
                 continue
 
             if btn_open_pages.collidepoint(event.pos):
