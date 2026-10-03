@@ -3689,7 +3689,13 @@ instance = vlc.Instance('--no-video')
 player = instance.media_player_new()
 
 URL = "https://raw.githubusercontent.com/simsonpeter/Tcradios/refs/heads/main/stations.json"
-WEATHER_URL = "https://api.open-meteo.com/v1/forecast?latitude=50.83&longitude=-0.17&current_weather=true"
+WEATHER_URL = (
+    "https://api.open-meteo.com/v1/forecast"
+    "?latitude=50.83&longitude=-0.17"
+    "&current_weather=true"
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min"
+    "&forecast_days=5&timezone=auto"
+)
 LAST_STATION_FILE = "/home/raspberry/.last_station"
 
 try:
@@ -3719,6 +3725,7 @@ show_qr = False
 weather_str = "HOVE: --C"
 current_temp = 0
 weather_type = "clear"
+weather_forecast = []
 meta_text = ""
 scroll_x = 320
 saver_scroll_x = 320
@@ -3877,12 +3884,18 @@ def handle_sleep_timer():
         elif alarm_system.sleep_stop_method == "stop":
             player.stop()
 
-def draw_weather_icon(surface, x, y, type, size=30):
+def draw_weather_icon(surface, x, y, type, size=30, dimmed=True):
     line_width = max(2, size // 8)
-    sun_color = tuple(int(channel * 0.3) for channel in GOLD)
-    rain_color = tuple(int(channel * 0.28) for channel in CYAN)
-    cloud_dark = (38, 38, 38)
-    cloud_light = (58, 58, 58)
+    if dimmed:
+        sun_color = tuple(int(channel * 0.3) for channel in GOLD)
+        rain_color = tuple(int(channel * 0.28) for channel in CYAN)
+        cloud_dark = (38, 38, 38)
+        cloud_light = (58, 58, 58)
+    else:
+        sun_color = UI_AMBER
+        rain_color = UI_BLUE
+        cloud_dark = mix_colors(UI_SURFACE, UI_MUTED, 0.75)
+        cloud_light = mix_colors(UI_MUTED, UI_TEXT, 0.4)
     if type == "clear":
         sun_radius = size * 3 // 5
         pygame.draw.circle(surface, sun_color, (x, y), sun_radius)
@@ -3909,6 +3922,81 @@ def draw_weather_icon(surface, x, y, type, size=30):
                 (rx-size//8, y+size),
                 line_width
             )
+
+def weather_code_to_type(code):
+    if code == 0:
+        return "clear"
+    if code < 50:
+        return "cloud"
+    return "rain"
+
+def weather_code_label(code):
+    if code == 0:
+        return "Clear"
+    if code in (1, 2):
+        return "Partly cloudy"
+    if code in (3, 45, 48):
+        return "Cloudy"
+    if code in (51, 53, 55, 56, 57):
+        return "Drizzle"
+    if code in (61, 63, 65, 66, 67, 80, 81, 82):
+        return "Rain"
+    if code in (71, 73, 75, 77, 85, 86):
+        return "Snow"
+    if code in (95, 96, 99):
+        return "Thunder"
+    return "Mixed"
+
+def draw_forecast_screen(now):
+    screen.blit(ui_background, (0, 0))
+    draw_animated_ui_glow(screen, now)
+
+    header_rect = pygame.Rect(8, 7, 304, 52)
+    pygame.draw.rect(screen, UI_SURFACE, header_rect, border_radius=17)
+    pygame.draw.rect(screen, (54, 75, 112), header_rect, 1, border_radius=17)
+    draw_centered_text(screen, f_lg, "5-DAY FORECAST", UI_TEXT, header_rect)
+
+    current_rect = pygame.Rect(14, 72, 292, 84)
+    draw_modern_button(screen, current_rect, UI_SURFACE_RAISED, UI_BLUE, 18)
+    draw_weather_icon(screen, 65, 111, weather_type, 25, dimmed=False)
+    current_surface = f_weather.render(f"{current_temp}°C", True, UI_TEXT)
+    screen.blit(current_surface, (103, 82))
+    now_surface = f_tiny.render("HOVE  •  NOW", True, UI_BLUE)
+    screen.blit(now_surface, (106, 127))
+
+    if weather_forecast:
+        for index, forecast in enumerate(weather_forecast[:5]):
+            row = pygame.Rect(14, 166 + index * 52, 292, 45)
+            fill = UI_SURFACE_RAISED if index == 0 else UI_SURFACE
+            border = UI_PURPLE if index == 0 else (48, 54, 72)
+            draw_modern_button(screen, row, fill, border, 13)
+
+            day_surface = f_sm.render(forecast['day'].upper(), True, UI_TEXT)
+            screen.blit(day_surface, (29, row.y + 7))
+            label_surface = f_tiny.render(forecast['label'], True, UI_MUTED)
+            screen.blit(label_surface, (29, row.y + 25))
+
+            draw_weather_icon(
+                screen, 196, row.centery - 2,
+                forecast['type'], 12, dimmed=False
+            )
+            temperature = f"{forecast['high']}° / {forecast['low']}°"
+            temperature_surface = f_sm.render(temperature, True, UI_TEXT)
+            screen.blit(
+                temperature_surface,
+                (292 - temperature_surface.get_width(), row.y + 14)
+            )
+    else:
+        loading_rect = pygame.Rect(14, 166, 292, 253)
+        draw_modern_button(screen, loading_rect, UI_SURFACE, (48, 54, 72), 16)
+        draw_centered_text(
+            screen, f_sm, "Forecast unavailable", UI_MUTED, loading_rect
+        )
+
+    pygame.draw.circle(screen, UI_MUTED, (151, 451), 4)
+    pygame.draw.circle(screen, UI_BLUE, (169, 451), 5)
+    hint_surface = f_tiny.render("SWIPE RIGHT FOR RADIO", True, UI_MUTED)
+    screen.blit(hint_surface, (160 - hint_surface.get_width() // 2, 465))
 
 def draw_screensaver():
     global saver_scroll_x
@@ -3971,6 +4059,7 @@ show_volume_bar = False
 volume_bar_timer = 0
 touch_start_pos = (0,0)
 touch_start_time = 0
+active_page = "radio"
 
 while True:
     now = time.time()
@@ -3987,12 +4076,29 @@ while True:
         try:
             r = requests.get(WEATHER_URL, timeout=5)
             if r.status_code == 200:
-                data = r.json()['current_weather']
-                current_temp = int(data['temperature'])
+                weather_data = r.json()
+                data = weather_data['current_weather']
+                current_temp = int(round(data['temperature']))
                 code = data['weathercode']
-                if code == 0: weather_type = "clear"
-                elif code < 50: weather_type = "cloud"
-                else: weather_type = "rain"
+                weather_type = weather_code_to_type(code)
+
+                daily = weather_data.get('daily', {})
+                dates = daily.get('time', [])
+                codes = daily.get('weather_code', [])
+                highs = daily.get('temperature_2m_max', [])
+                lows = daily.get('temperature_2m_min', [])
+                weather_forecast = []
+                for date, daily_code, high, low in zip(
+                    dates, codes, highs, lows
+                ):
+                    forecast_date = datetime.strptime(date, "%Y-%m-%d")
+                    weather_forecast.append({
+                        'day': forecast_date.strftime("%a"),
+                        'type': weather_code_to_type(daily_code),
+                        'label': weather_code_label(daily_code),
+                        'high': int(round(high)),
+                        'low': int(round(low))
+                    })
         except: pass
         last_weather_update = now
     
@@ -4182,11 +4288,17 @@ while True:
             btn_mute
         )
 
+        pygame.draw.circle(screen, UI_BLUE, (151, 406), 5)
+        pygame.draw.circle(screen, UI_MUTED, (169, 406), 4)
+
         if show_qr:
             qr_panel = pygame.Rect(31, 87, 258, 258)
             pygame.draw.rect(screen, UI_SURFACE, qr_panel, border_radius=18)
             pygame.draw.rect(screen, UI_BLUE, qr_panel, 2, border_radius=18)
             screen.blit(qr_surface, (40, 96))
+
+        if active_page == "forecast" and not show_qr:
+            draw_forecast_screen(now)
     
     for event in pygame.event.get():
         if event.type == pygame.MOUSEBUTTONDOWN:
@@ -4197,6 +4309,8 @@ while True:
                 continue
             if show_qr:
                 show_qr = False
+                continue
+            if active_page != "radio":
                 continue
             if btn_exit.collidepoint(event.pos):
                 pygame.quit()
@@ -4251,9 +4365,16 @@ while True:
                 volume_bar_timer = time.time()
         
         elif event.type == pygame.MOUSEBUTTONUP:
-            if logo_rect.collidepoint(touch_start_pos):
+            dx = event.pos[0] - touch_start_pos[0]
+            dy = event.pos[1] - touch_start_pos[1]
+            dt = time.time() - touch_start_time
+            if abs(dx) > 70 and abs(dx) > abs(dy) and dt < 1.25:
+                active_page = "forecast" if dx < 0 else "radio"
+                adjusting_volume = False
+                continue
+
+            if active_page == "radio" and logo_rect.collidepoint(touch_start_pos):
                 dy = touch_start_pos[1] - event.pos[1]
-                dt = time.time() - touch_start_time
                 if dt > 1.0:
                     if alarm_system.sleep_timer_enabled:
                         alarm_system.stop_sleep_timer()
