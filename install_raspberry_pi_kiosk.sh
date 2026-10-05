@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+INSTALL_LCD=true
+if [[ ${1:-} == "--skip-lcd" ]]; then
+    INSTALL_LCD=false
+elif [[ $# -gt 0 ]]; then
+    echo "Usage: sudo $0 [--skip-lcd]" >&2
+    exit 1
+fi
+
 if [[ ${EUID} -ne 0 ]]; then
     echo "Run this installer with sudo: sudo ./install_raspberry_pi_kiosk.sh" >&2
     exit 1
@@ -40,6 +48,9 @@ if [[ -z "${CONFIG_FILE}" || -z "${CMDLINE_FILE}" ]]; then
     exit 1
 fi
 
+cp -an "${CONFIG_FILE}" "${CONFIG_FILE}.tcradios-backup"
+cp -an "${CMDLINE_FILE}" "${CMDLINE_FILE}.tcradios-backup"
+
 echo "Installing TCRADIOS system and Bluetooth audio dependencies..."
 apt-get update
 AUDIO_PACKAGES=(pulseaudio-module-bluetooth)
@@ -53,18 +64,60 @@ if dpkg-query -W -f='${Status}' pipewire 2>/dev/null | grep -q "install ok insta
     )
 fi
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    git \
     plymouth \
     plymouth-themes \
     bluez \
     "${AUDIO_PACKAGES[@]}"
 
+if [[ "${INSTALL_LCD}" == true ]]; then
+    LCD_SHOW_DIR="/opt/tcradios-LCD-show"
+    LCD_SHOW_COMMIT="a36c00a55e11f0de3b4be0e66f0a2cec47076e23"
+
+    echo
+    echo "Installing the GoodTFT LCD35 driver with 270-degree rotation..."
+    if [[ -e "${LCD_SHOW_DIR}" && ! -d "${LCD_SHOW_DIR}/.git" ]]; then
+        echo "${LCD_SHOW_DIR} exists but is not a Git checkout." >&2
+        echo "Move or remove it, then run this installer again." >&2
+        exit 1
+    fi
+    if [[ ! -d "${LCD_SHOW_DIR}/.git" ]]; then
+        git clone https://github.com/goodtft/LCD-show.git "${LCD_SHOW_DIR}"
+    fi
+    git -C "${LCD_SHOW_DIR}" fetch origin "${LCD_SHOW_COMMIT}"
+    git -C "${LCD_SHOW_DIR}" -c advice.detachedHead=false \
+        checkout --detach "${LCD_SHOW_COMMIT}"
+    chmod -R 0755 "${LCD_SHOW_DIR}"
+
+    # The vendor scripts reboot twice and switch the Pi to console auto-login.
+    # Defer those reboots so this installer can restore graphical auto-login
+    # and finish the TCRADIOS boot configuration first.
+    python3 - \
+        "${LCD_SHOW_DIR}/LCD35-show" \
+        "${LCD_SHOW_DIR}/rotate.sh" <<'PY'
+import pathlib
+import sys
+
+marker = ": # reboot deferred to the TCRADIOS installer"
+for filename in sys.argv[1:]:
+    path = pathlib.Path(filename)
+    content = path.read_text()
+    if marker not in content:
+        path.write_text(content.replace("sudo reboot", marker))
+    if "sudo reboot" in path.read_text():
+        raise SystemExit(f"Could not defer reboot in {filename}")
+PY
+
+    (
+        cd "${LCD_SHOW_DIR}"
+        ./LCD35-show 270
+    )
+fi
+
 THEME_DIR="/usr/share/plymouth/themes/tcradios"
 install -d "${THEME_DIR}"
 install -m 0644 "${SCRIPT_DIR}/boot/tcradios.plymouth" "${THEME_DIR}/tcradios.plymouth"
 install -m 0644 "${SCRIPT_DIR}/boot/tcradios.script" "${THEME_DIR}/tcradios.script"
-
-cp -an "${CONFIG_FILE}" "${CONFIG_FILE}.tcradios-backup"
-cp -an "${CMDLINE_FILE}" "${CMDLINE_FILE}.tcradios-backup"
 
 if ! grep -qF "# TCRADIOS quiet boot" "${CONFIG_FILE}"; then
     printf '\n[all]\n# TCRADIOS quiet boot\ndisable_splash=1\n' >> "${CONFIG_FILE}"
@@ -158,4 +211,13 @@ echo "TCRADIOS branded boot is installed."
 echo "Backups:"
 echo "  ${CONFIG_FILE}.tcradios-backup"
 echo "  ${CMDLINE_FILE}.tcradios-backup"
-echo "Reboot to activate it: sudo reboot"
+
+if [[ "${INSTALL_LCD}" == true ]]; then
+    echo "GoodTFT LCD35 installed at 270 degrees."
+    echo "Rebooting to activate the display and TCRADIOS..."
+    sync
+    reboot
+    exit 0
+fi
+
+echo "LCD installation skipped. Reboot to activate TCRADIOS: sudo reboot"
