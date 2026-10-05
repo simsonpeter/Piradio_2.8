@@ -40,7 +40,7 @@ if [[ -z "${CONFIG_FILE}" || -z "${CMDLINE_FILE}" ]]; then
     exit 1
 fi
 
-echo "Installing TCRADIOS system and Bluetooth audio dependencies..."
+echo "Installing all TCRADIOS application, audio, and boot dependencies..."
 apt-get update
 AUDIO_PACKAGES=(pulseaudio-module-bluetooth)
 if dpkg-query -W -f='${Status}' pipewire 2>/dev/null | grep -q "install ok installed"; then
@@ -53,10 +53,37 @@ if dpkg-query -W -f='${Status}' pipewire 2>/dev/null | grep -q "install ok insta
     )
 fi
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    git \
+    vlc \
+    python3-vlc \
+    python3-pygame \
+    python3-flask \
+    python3-requests \
+    python3-pil \
+    python3-qrcode \
+    alsa-utils \
+    pulseaudio-utils \
+    espeak \
+    fonts-noto-core \
+    fonts-noto-extra \
+    yt-dlp \
+    util-linux \
     plymouth \
     plymouth-themes \
     bluez \
     "${AUDIO_PACKAGES[@]}"
+
+echo "Verifying Python dependencies..."
+/usr/bin/python3 - <<'PY'
+import pygame
+import qrcode
+import requests
+import vlc
+from flask import Flask
+from PIL import Image, ImageDraw
+
+print("All TCRADIOS Python dependencies are available.")
+PY
 
 THEME_DIR="/usr/share/plymouth/themes/tcradios"
 install -d "${THEME_DIR}"
@@ -126,6 +153,8 @@ chmod 0755 /usr/local/bin/tcradios-start
 
 AUTOSTART_DIR="${INSTALL_HOME}/.config/autostart"
 install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${AUTOSTART_DIR}"
+# Remove the legacy direct launcher, which bypasses the shared process lock.
+rm -f "${AUTOSTART_DIR}/tcradio.desktop"
 install -m 0644 -o "${INSTALL_USER}" -g "${INSTALL_USER}" \
     "${SCRIPT_DIR}/boot/tcradios-autostart.desktop" \
     "${AUTOSTART_DIR}/tcradios.desktop"
@@ -140,9 +169,16 @@ if [[ -d /etc/xdg/labwc ]]; then
     install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${LABWC_DIR}"
     touch "${LABWC_AUTOSTART}"
     sed -i '\|/usr/local/bin/tcradios-start|d' "${LABWC_AUTOSTART}"
+    sed -i '\|touch_radio.py|d' "${LABWC_AUTOSTART}"
     printf '\n/usr/local/bin/tcradios-start &\n' >> "${LABWC_AUTOSTART}"
     chown "${INSTALL_USER}:${INSTALL_USER}" "${LABWC_AUTOSTART}"
     chmod 0755 "${LABWC_AUTOSTART}"
+fi
+
+# Disable the legacy service used by older PiRadio installations. It starts a
+# second process outside the launcher's shared lock.
+if systemctl list-unit-files tcradio.service --no-legend 2>/dev/null | grep -q '^tcradio.service'; then
+    systemctl disable --now tcradio.service || true
 fi
 
 if command -v raspi-config >/dev/null 2>&1; then
@@ -152,6 +188,8 @@ if command -v raspi-config >/dev/null 2>&1; then
 fi
 
 systemctl set-default graphical.target
+systemctl mask plymouth-quit-wait.service
+systemctl disable NetworkManager-wait-online.service || true
 
 echo
 echo "TCRADIOS branded boot is installed."

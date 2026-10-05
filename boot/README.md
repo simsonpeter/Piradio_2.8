@@ -2,8 +2,12 @@
 
 The installer configures:
 
+- every required Python, VLC, YouTube, audio, Bluetooth, font, and boot package;
+- a dependency import check that stops immediately if anything is unavailable;
 - a black Plymouth splash displaying `TCRADIOS` and `by JayathaSoft`;
 - quiet Linux boot options that hide the Raspberry Pi logo, text, and cursor;
+- removal of known legacy launchers that can start the radio twice;
+- removal of the long Plymouth and network-online boot waits;
 - desktop auto-login where `raspi-config` is available;
 - automatic fullscreen launch of `touch_radio.py`;
 - a five-second in-app splash that covers the remaining application startup time.
@@ -17,7 +21,9 @@ sudo reboot
 ```
 
 The installer supports both `/boot/firmware` and legacy `/boot` layouts. It
-backs up `config.txt` and `cmdline.txt` before changing them.
+backs up `config.txt` and `cmdline.txt` before changing them. On a fresh
+Raspberry Pi OS Desktop installation, no separate dependency-install command
+is required.
 
 The earliest firmware output can vary by Raspberry Pi model and attached
 display. Normal Raspberry Pi OS boot logos and console messages are hidden.
