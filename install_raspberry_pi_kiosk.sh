@@ -8,6 +8,8 @@ fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_USER="${SUDO_USER:-}"
+LCD_DRIVER_DIR=""
+LCD_SHOW_COMMIT="a36c00a55e11f0de3b4be0e66f0a2cec47076e23"
 
 if [[ -z "${INSTALL_USER}" || "${INSTALL_USER}" == "root" ]]; then
     echo "Run this installer with sudo from the desktop user account." >&2
@@ -19,6 +21,7 @@ if [[ -z "${INSTALL_HOME}" || ! -d "${INSTALL_HOME}" ]]; then
     echo "Could not determine the home directory for ${INSTALL_USER}." >&2
     exit 1
 fi
+LCD_DRIVER_DIR="${INSTALL_HOME}/LCD-show"
 
 CONFIG_FILE=""
 CMDLINE_FILE=""
@@ -196,4 +199,26 @@ echo "TCRADIOS branded boot is installed."
 echo "Backups:"
 echo "  ${CONFIG_FILE}.tcradios-backup"
 echo "  ${CMDLINE_FILE}.tcradios-backup"
-echo "Reboot to activate it: sudo reboot"
+
+if [[ "${TCRADIOS_SKIP_LCD:-0}" == "1" ]]; then
+    echo "LCD driver installation skipped (TCRADIOS_SKIP_LCD=1)."
+    echo "Reboot to activate TCRADIOS: sudo reboot"
+elif [[ -f "${LCD_DRIVER_DIR}/.have_installed" ]]; then
+    echo "GoodTFT LCD35 driver is already installed."
+    echo "Reboot to activate TCRADIOS: sudo reboot"
+else
+    echo
+    echo "Installing the reviewed GoodTFT LCD35 driver with 270-degree rotation."
+    echo "The display installer will reboot the Raspberry Pi automatically."
+    rm -rf "${LCD_DRIVER_DIR}"
+    install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${LCD_DRIVER_DIR}"
+    git -C "${LCD_DRIVER_DIR}" init
+    git -C "${LCD_DRIVER_DIR}" remote add origin https://github.com/goodtft/LCD-show.git
+    git -C "${LCD_DRIVER_DIR}" fetch --depth 1 origin "${LCD_SHOW_COMMIT}"
+    git -C "${LCD_DRIVER_DIR}" checkout --detach FETCH_HEAD
+    chown -R "${INSTALL_USER}:${INSTALL_USER}" "${LCD_DRIVER_DIR}"
+    chmod -R 0755 "${LCD_DRIVER_DIR}"
+    sync
+    cd "${LCD_DRIVER_DIR}"
+    exec ./LCD35-show 270
+fi

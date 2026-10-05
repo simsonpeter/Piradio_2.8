@@ -8,6 +8,7 @@ The installer configures:
 - quiet Linux boot options that hide the Raspberry Pi logo, text, and cursor;
 - removal of known legacy launchers that can start the radio twice;
 - removal of the long Plymouth and network-online boot waits;
+- the GoodTFT `LCD35-show` driver with 270-degree rotation;
 - desktop auto-login where `raspi-config` is available;
 - automatic fullscreen launch of `touch_radio.py`;
 - a five-second in-app splash that covers the remaining application startup time.
@@ -24,6 +25,15 @@ The installer supports both `/boot/firmware` and legacy `/boot` layouts. It
 backs up `config.txt` and `cmdline.txt` before changing them. On a fresh
 Raspberry Pi OS Desktop installation, no separate dependency-install command
 is required.
+
+On the first installation, the reviewed GoodTFT driver revision is downloaded
+from `goodtft/LCD-show`, configured as `LCD35` at 270 degrees, and reboots the
+Pi automatically. Later installer runs detect the existing display driver and
+do not reinstall it. To intentionally skip display setup, run:
+
+```bash
+sudo TCRADIOS_SKIP_LCD=1 ./install_raspberry_pi_kiosk.sh
+```
 
 The earliest firmware output can vary by Raspberry Pi model and attached
 display. Normal Raspberry Pi OS boot logos and console messages are hidden.
