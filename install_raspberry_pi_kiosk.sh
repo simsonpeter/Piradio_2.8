@@ -70,6 +70,9 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     espeak \
     fonts-noto-core \
     fonts-noto-extra \
+    ffmpeg \
+    nodejs \
+    curl \
     yt-dlp \
     util-linux \
     x11-xserver-utils \
@@ -89,6 +92,16 @@ from PIL import Image, ImageDraw
 
 print("All TCRADIOS Python dependencies are available.")
 PY
+
+echo "Installing a current yt-dlp for YouTube search and playback..."
+YTDLP_TMP="$(mktemp)"
+if curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" -o "${YTDLP_TMP}"; then
+    install -m 0755 "${YTDLP_TMP}" /usr/local/bin/yt-dlp
+    echo "yt-dlp $(/usr/local/bin/yt-dlp --version) installed."
+else
+    echo "Warning: current yt-dlp could not be downloaded. The apt package will be used." >&2
+fi
+rm -f "${YTDLP_TMP}"
 
 THEME_DIR="/usr/share/plymouth/themes/tcradios"
 install -d "${THEME_DIR}"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import pygame, vlc, requests, time, os, io, math, socket, sys, threading, qrcode, json, base64, random, re
+import pygame, vlc, requests, time, os, io, math, socket, sys, threading, qrcode, json, base64, random, re, shutil
 from urllib.request import urlopen
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
@@ -2769,15 +2769,21 @@ HTML_TEMPLATE = """
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({query: query})
-            }).then(r => r.json()).then(data => {
+            }).then(r => r.text()).then(text => {
+                let data;
+                try {
+                    data = JSON.parse(text);
+                } catch (e) {
+                    throw new Error('Search failed');
+                }
                 if (data.success) {
-                    youtubeResults = data.results;
-                    displayYouTubeResults(data.results);
+                    youtubeResults = data.results || [];
+                    displayYouTubeResults(youtubeResults);
                 } else {
-                    resultsDiv.innerHTML = '<div class="empty-state"><div class="empty-text">Error: ' + (data.error || 'Unknown error') + '</div></div>';
+                    resultsDiv.innerHTML = '<div class="empty-state"><div class="empty-text">' + escapeHtml(data.error || 'Search failed') + '</div></div>';
                 }
             }).catch(err => {
-                resultsDiv.innerHTML = '<div class="empty-state"><div class="empty-text">Search failed</div></div>';
+                resultsDiv.innerHTML = '<div class="empty-state"><div class="empty-text">' + escapeHtml(err.message || 'Search failed') + '</div></div>';
             });
         }
         
@@ -3772,61 +3778,164 @@ def bluetooth_connect():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 503
 
+_ytdlp_extract_args = None
+
+def ytdlp_error_text(result):
+    text = ''
+    if result is not None:
+        text = f"{result.stderr or ''}\n{result.stdout or ''}"
+    lines = [
+        line.strip() for line in text.splitlines()
+        if line.strip() and not line.strip().startswith('{')
+    ]
+    message = lines[-1] if lines else 'YouTube request failed'
+    return message[:240]
+
+def ytdlp_extract_args():
+    """Flags a current yt-dlp needs to solve YouTube playback challenges."""
+    global _ytdlp_extract_args
+    if _ytdlp_extract_args is not None:
+        return list(_ytdlp_extract_args)
+    args = []
+    try:
+        probe = subprocess.run(
+            ['yt-dlp', '--help'],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        help_text = f'{probe.stdout}\n{probe.stderr}'
+        if '--js-runtimes' in help_text and shutil.which('node'):
+            args.extend(['--js-runtimes', 'node'])
+        if '--remote-components' in help_text:
+            args.extend(['--remote-components', 'ejs:github'])
+        _ytdlp_extract_args = args
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return list(args)
+
+def run_ytdlp(args, timeout):
+    cmd = ['yt-dlp', '--no-warnings', '--no-progress', *args]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        return None, 'yt-dlp is not installed'
+    except subprocess.TimeoutExpired:
+        return None, 'YouTube request timed out'
+    stdout = (result.stdout or '').strip()
+    if result.returncode != 0 or not stdout:
+        return None, ytdlp_error_text(result)
+    return stdout, None
+
+def format_youtube_duration(value):
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    try:
+        total = int(float(value))
+    except (TypeError, ValueError):
+        return '0:00'
+    if total < 0:
+        return '0:00'
+    minutes, seconds = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f'{hours}:{minutes:02d}:{seconds:02d}'
+    return f'{minutes}:{seconds:02d}'
+
+def youtube_result_from_info(video, fallback_id=''):
+    video_id = str(video.get('id') or fallback_id or '').strip()
+    if not re.fullmatch(r'[A-Za-z0-9_-]{6,32}', video_id):
+        url = video.get('url') or video.get('webpage_url') or ''
+        match = re.search(r'(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{6,32})', str(url))
+        video_id = match.group(1) if match else ''
+    thumbnail = video.get('thumbnail') or ''
+    if not thumbnail:
+        for item in reversed(video.get('thumbnails') or []):
+            if isinstance(item, dict) and item.get('url'):
+                thumbnail = item['url']
+                break
+    if not thumbnail and video_id:
+        thumbnail = f'https://i.ytimg.com/vi/{video_id}/mqdefault.jpg'
+    duration = video.get('duration_string')
+    if not duration:
+        if video.get('is_live') or video.get('live_status') == 'is_live':
+            duration = 'LIVE'
+        else:
+            duration = format_youtube_duration(video.get('duration'))
+    return {
+        'id': video_id,
+        'title': video.get('title') or 'Unknown',
+        'uploader': video.get('uploader') or video.get('channel') or video.get('uploader_id') or 'Unknown',
+        'duration': duration,
+        'thumbnail': thumbnail,
+    }
+
+def parse_youtube_payload(stdout):
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        videos = []
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                videos.append(youtube_result_from_info(item))
+        return [video for video in videos if video['id']]
+    if isinstance(payload, dict) and isinstance(payload.get('entries'), list):
+        videos = [
+            youtube_result_from_info(item)
+            for item in payload['entries']
+            if isinstance(item, dict)
+        ]
+        return [video for video in videos if video['id']]
+    if isinstance(payload, dict):
+        video = youtube_result_from_info(payload)
+        return [video] if video['id'] else []
+    return []
+
 # YouTube API Routes
 @app.route('/api/youtube/search', methods=['POST'])
 def youtube_search():
     global youtube_results_cache
     try:
-        data = request.get_json()
-        query = data.get('query', '').strip()
+        data = request.get_json(silent=True) or {}
+        query = str(data.get('query', '')).strip()
         if not query:
             return jsonify({'success': False, 'error': 'Empty query'})
-        
-        # Check if it's a URL
+
+        video_id = ''
         if 'youtube.com' in query or 'youtu.be' in query:
-            # Extract video ID from URL
-            video_id = None
-            if 'v=' in query:
-                video_id = query.split('v=')[1].split('&')[0]
-            elif 'youtu.be/' in query:
-                video_id = query.split('youtu.be/')[1].split('?')[0]
-            
-            if video_id:
-                # Get video info
-                cmd = ['yt-dlp', '--dump-json', '--no-playlist', f'https://youtube.com/watch?v={video_id}']
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-                if result.stdout:
-                    video = json.loads(result.stdout.strip().split('\n')[0])
-                    return jsonify({
-                        'success': True,
-                        'results': [{
-                            'id': video.get('id', video_id),
-                            'title': video.get('title', 'Unknown'),
-                            'uploader': video.get('uploader', 'Unknown'),
-                            'duration': video.get('duration_string', '0:00'),
-                            'thumbnail': video.get('thumbnail', f'https://img.youtube.com/vi/{video_id}/mqdefault.jpg')
-                        }]
-                    })
-        
-        # Regular search
-        cmd = ['yt-dlp', '--dump-json', '--no-playlist', f'ytsearch8:{query}', '--extract-audio', '--audio-format', 'mp3']
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        
-        videos = []
-        for line in result.stdout.strip().split('\n'):
-            if line:
-                try:
-                    video = json.loads(line)
-                    videos.append({
-                        'id': video.get('id', ''),
-                        'title': video.get('title', 'Unknown'),
-                        'uploader': video.get('uploader', 'Unknown'),
-                        'duration': video.get('duration_string', '0:00'),
-                        'thumbnail': video.get('thumbnail', '')
-                    })
-                except:
-                    continue
-        
+            match = re.search(r'(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{6,32})', query)
+            video_id = match.group(1) if match else ''
+
+        if video_id:
+            stdout, err = run_ytdlp([
+                *ytdlp_extract_args(),
+                '--dump-single-json',
+                '--skip-download',
+                '--no-playlist',
+                f'https://www.youtube.com/watch?v={video_id}',
+            ], timeout=30)
+            if not stdout:
+                return jsonify({'success': False, 'error': err or 'Could not open that YouTube link'}), 502
+            videos = parse_youtube_payload(stdout)
+        else:
+            # Metadata only. --extract-audio downloads and converts every hit.
+            stdout, err = run_ytdlp([
+                '--dump-single-json',
+                '--flat-playlist',
+                '--skip-download',
+                f'ytsearch8:{query}',
+            ], timeout=25)
+            if not stdout:
+                return jsonify({'success': False, 'error': err or 'YouTube search failed'}), 502
+            videos = parse_youtube_payload(stdout)
+
         youtube_results_cache = videos
         return jsonify({'success': True, 'results': videos})
     except Exception as e:
@@ -3836,18 +3945,29 @@ def youtube_search():
 def youtube_play():
     global current_idx
     try:
-        data = request.get_json()
-        video_id = data.get('video_id', '')
-        title = data.get('title', 'YouTube Audio')
-        
-        if not video_id:
+        data = request.get_json(silent=True) or {}
+        video_id = str(data.get('video_id', '')).strip()
+        title = str(data.get('title') or 'YouTube Audio')
+
+        if not re.fullmatch(r'[A-Za-z0-9_-]{6,32}', video_id):
             return jsonify({'success': False, 'error': 'No video ID'})
-        
-        cmd = ['yt-dlp', '-f', 'bestaudio', '--get-url', f'https://youtube.com/watch?v={video_id}']
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        audio_url = result.stdout.strip()
-        
-        if audio_url and audio_url.startswith('http'):
+
+        stdout, err = run_ytdlp([
+            *ytdlp_extract_args(),
+            '-f', 'bestaudio/best',
+            '--get-url',
+            '--no-playlist',
+            f'https://www.youtube.com/watch?v={video_id}',
+        ], timeout=40)
+        audio_url = ''
+        if stdout:
+            for line in stdout.splitlines():
+                candidate = line.strip()
+                if candidate.startswith('http'):
+                    audio_url = candidate
+                    break
+
+        if audio_url:
             youtube_station = {
                 'name': f'YT: {title[:40]}',
                 'url': audio_url,
@@ -3859,8 +3979,7 @@ def youtube_play():
             current_idx = len(stations) - 1
             play()
             return jsonify({'success': True, 'message': f'Playing: {title}'})
-        else:
-            return jsonify({'success': False, 'error': 'Could not extract audio URL'})
+        return jsonify({'success': False, 'error': err or 'Could not extract audio URL'}), 502
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
