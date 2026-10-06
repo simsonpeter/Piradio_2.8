@@ -878,6 +878,154 @@ GRAY = (100, 100, 100)
 BLACK = (0, 0, 0)
 BACKGROUND = current_theme.pygame_background
 
+# --- WEATHER, DISPLAY & POWER SETTINGS ---
+class DeviceSettingsManager:
+    def __init__(self):
+        self.settings_file = os.path.expanduser("~/.radio_device_settings")
+        self.weather_name = "Hove"
+        self.weather_country = "United Kingdom"
+        self.weather_latitude = 50.83
+        self.weather_longitude = -0.17
+        self.brightness = 100
+        self.auto_dim_enabled = False
+        self.auto_dim_minutes = 5
+        self.dim_brightness = 25
+        self.applied_brightness = None
+        self.hardware_brightness_available = False
+        self.load()
+
+    def load(self):
+        try:
+            with open(self.settings_file, "r", encoding="utf-8") as settings:
+                data = json.load(settings)
+            self.weather_name = str(
+                data.get("weather_name", self.weather_name)
+            )[:60]
+            self.weather_country = str(
+                data.get("weather_country", self.weather_country)
+            )[:60]
+            self.weather_latitude = float(
+                data.get("weather_latitude", self.weather_latitude)
+            )
+            self.weather_longitude = float(
+                data.get("weather_longitude", self.weather_longitude)
+            )
+            self.brightness = max(
+                10, min(100, int(data.get("brightness", self.brightness)))
+            )
+            self.auto_dim_enabled = bool(
+                data.get("auto_dim_enabled", self.auto_dim_enabled)
+            )
+            self.auto_dim_minutes = max(
+                1, min(60, int(
+                    data.get("auto_dim_minutes", self.auto_dim_minutes)
+                ))
+            )
+            self.dim_brightness = max(
+                5, min(50, int(
+                    data.get("dim_brightness", self.dim_brightness)
+                ))
+            )
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def save(self):
+        data = {
+            "weather_name": self.weather_name,
+            "weather_country": self.weather_country,
+            "weather_latitude": self.weather_latitude,
+            "weather_longitude": self.weather_longitude,
+            "brightness": self.brightness,
+            "auto_dim_enabled": self.auto_dim_enabled,
+            "auto_dim_minutes": self.auto_dim_minutes,
+            "dim_brightness": self.dim_brightness
+        }
+        try:
+            with open(self.settings_file, "w", encoding="utf-8") as settings:
+                json.dump(data, settings, indent=2)
+        except OSError as error:
+            print(f"Device settings save error: {error}")
+
+    def weather_url(self):
+        return (
+            "https://api.open-meteo.com/v1/forecast"
+            f"?latitude={self.weather_latitude}"
+            f"&longitude={self.weather_longitude}"
+            "&current_weather=true"
+            "&daily=weather_code,temperature_2m_max,temperature_2m_min"
+            "&forecast_days=5&timezone=auto"
+        )
+
+    def set_hardware_brightness(self, level):
+        level = max(5, min(100, int(level)))
+        if self.applied_brightness == level:
+            return
+        self.applied_brightness = level
+        self.hardware_brightness_available = False
+
+        backlight_root = "/sys/class/backlight"
+        try:
+            for device in os.listdir(backlight_root):
+                device_path = os.path.join(backlight_root, device)
+                with open(
+                    os.path.join(device_path, "max_brightness"), "r"
+                ) as maximum_file:
+                    maximum = int(maximum_file.read().strip())
+                value = max(1, round(maximum * level / 100))
+                with open(
+                    os.path.join(device_path, "brightness"), "w"
+                ) as brightness_file:
+                    brightness_file.write(str(value))
+                self.hardware_brightness_available = True
+                return
+        except (OSError, ValueError):
+            pass
+
+        try:
+            query = subprocess.run(
+                ["xrandr", "--query"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                env={**os.environ, "DISPLAY": ":0"}
+            )
+            output = next(
+                (
+                    line.split()[0]
+                    for line in query.stdout.splitlines()
+                    if " connected" in line
+                ),
+                None
+            )
+            if output:
+                result = subprocess.run(
+                    [
+                        "xrandr", "--output", output,
+                        "--brightness", f"{level / 100:.2f}"
+                    ],
+                    capture_output=True,
+                    timeout=3,
+                    env={**os.environ, "DISPLAY": ":0"}
+                )
+                self.hardware_brightness_available = result.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    def as_dict(self):
+        return {
+            "weather_name": self.weather_name,
+            "weather_country": self.weather_country,
+            "weather_latitude": self.weather_latitude,
+            "weather_longitude": self.weather_longitude,
+            "brightness": self.brightness,
+            "auto_dim_enabled": self.auto_dim_enabled,
+            "auto_dim_minutes": self.auto_dim_minutes,
+            "dim_brightness": self.dim_brightness
+        }
+
+device_settings = DeviceSettingsManager()
+last_interaction_time = time.time()
+
 # --- WEB REMOTE APP ---
 app = Flask(__name__)
 
@@ -2315,6 +2463,61 @@ HTML_TEMPLATE = """
                     </div>
                     {% endfor %}
                 </div>
+
+                <div class="section-header">
+                    <span class="section-title">Weather Location</span>
+                </div>
+                <div class="card">
+                    <div class="input-group">
+                        <label class="input-label">Town, city, or postcode</label>
+                        <input type="text" id="weather-location" class="text-input" value="{{ device_settings.weather_name }}" placeholder="Hove">
+                    </div>
+                    <div id="weather-location-current" style="font-size: 13px; color: var(--primary); margin-bottom: 12px;">
+                        {{ device_settings.weather_name }}{% if device_settings.weather_country %}, {{ device_settings.weather_country }}{% endif %}
+                    </div>
+                    <button class="btn-primary" onclick="saveWeatherLocation()">📍 Update Weather</button>
+                </div>
+
+                <div class="section-header">
+                    <span class="section-title">Screen Brightness</span>
+                </div>
+                <div class="card">
+                    <div class="setting-row">
+                        <span class="setting-label">Brightness</span>
+                        <span class="setting-value" id="brightness-value">{{ device_settings.brightness }}%</span>
+                    </div>
+                    <input type="range" id="brightness-slider" min="10" max="100" value="{{ device_settings.brightness }}" class="text-input" oninput="previewBrightness(this.value)" onchange="saveDisplaySettings()">
+
+                    <div class="setting-row" style="margin-top: 18px;">
+                        <span class="setting-label">Automatic dimming</span>
+                        <div class="toggle-switch {% if device_settings.auto_dim_enabled %}active{% endif %}" id="auto-dim-toggle" onclick="toggleAutoDim()"></div>
+                    </div>
+
+                    <div class="input-group" style="margin-top: 15px;">
+                        <label class="input-label">Dim after</label>
+                        <select id="auto-dim-minutes" class="select-input" onchange="saveDisplaySettings()">
+                            {% for minutes in [1, 2, 5, 10, 15, 30, 60] %}
+                            <option value="{{ minutes }}" {% if minutes == device_settings.auto_dim_minutes %}selected{% endif %}>{{ minutes }} minute{% if minutes != 1 %}s{% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="setting-row">
+                        <span class="setting-label">Dimmed level</span>
+                        <span class="setting-value" id="dim-brightness-value">{{ device_settings.dim_brightness }}%</span>
+                    </div>
+                    <input type="range" id="dim-brightness-slider" min="5" max="50" value="{{ device_settings.dim_brightness }}" class="text-input" oninput="document.getElementById('dim-brightness-value').textContent = this.value + '%'" onchange="saveDisplaySettings()">
+                </div>
+
+                <div class="section-header">
+                    <span class="section-title">Power</span>
+                </div>
+                <div class="card">
+                    <div style="font-size: 13px; color: rgba(255,255,255,0.65); margin-bottom: 12px;">
+                        Safely stop playback and shut down before removing power.
+                    </div>
+                    <button class="btn-primary" onclick="requestSafeShutdown()" style="background: #c0392b; color: #fff;">⏻ Safe Shutdown</button>
+                </div>
             </div>
         </div>
         
@@ -2403,6 +2606,7 @@ HTML_TEMPLATE = """
         let currentVolume = {{ vol_level }};
         let alarmEnabled = {{ alarm_settings.enabled|tojson }};
         let alarmDays = {{ alarm_settings.days|tojson }};
+        let autoDimEnabled = {{ device_settings.auto_dim_enabled|tojson }};
         let html5QrCode = null;
         let youtubeResults = [];
         
@@ -2810,6 +3014,79 @@ HTML_TEMPLATE = """
                 showToast('Theme updated');
             });
         }
+
+        function saveWeatherLocation() {
+            const location = document.getElementById('weather-location').value.trim();
+            if (!location) {
+                showToast('Enter a town, city, or postcode');
+                return;
+            }
+            showToast('Finding weather location…');
+            fetch(apiBase + '/api/weather/location', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({location: location})
+            }).then(async response => {
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Location update failed');
+                }
+                document.getElementById('weather-location').value = data.weather_name;
+                document.getElementById('weather-location-current').textContent =
+                    data.weather_name + (data.weather_country ? ', ' + data.weather_country : '');
+                showToast('Weather location updated');
+            }).catch(error => showToast(error.message));
+        }
+
+        function previewBrightness(value) {
+            document.getElementById('brightness-value').textContent = value + '%';
+        }
+
+        function saveDisplaySettings() {
+            const brightness = parseInt(document.getElementById('brightness-slider').value);
+            const autoDimMinutes = parseInt(document.getElementById('auto-dim-minutes').value);
+            const dimBrightness = parseInt(document.getElementById('dim-brightness-slider').value);
+            fetch(apiBase + '/api/display/settings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    brightness: brightness,
+                    autoDimEnabled: autoDimEnabled,
+                    autoDimMinutes: autoDimMinutes,
+                    dimBrightness: dimBrightness
+                })
+            }).then(async response => {
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Display update failed');
+                }
+                showToast('Display settings saved');
+            }).catch(error => showToast(error.message));
+        }
+
+        function toggleAutoDim() {
+            autoDimEnabled = !autoDimEnabled;
+            document.getElementById('auto-dim-toggle').classList.toggle(
+                'active', autoDimEnabled
+            );
+            saveDisplaySettings();
+        }
+
+        function requestSafeShutdown() {
+            if (!confirm('Safely shut down TCRADIOS now?')) return;
+            if (!confirm('The radio will turn off. Continue?')) return;
+            fetch(apiBase + '/api/system/shutdown', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({confirm: 'SHUTDOWN'})
+            }).then(async response => {
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Shutdown failed');
+                }
+                showToast('Shutting down safely…');
+            }).catch(error => showToast(error.message));
+        }
         
         function showThemeModal() {
             switchView('audio');
@@ -3032,6 +3309,7 @@ def home():
         all_themes=THEMES,
         alarm_settings=alarm_settings,
         sleep_timer_settings=sleep_timer_settings,
+        device_settings=device_settings.as_dict(),
         outputs=outputs_data,
         current_output=audio_manager.current_output
     )
@@ -3158,6 +3436,112 @@ def get_status():
         "volume": vol_level,
         "station": current_idx
     })
+
+@app.route('/api/weather/location', methods=['GET', 'POST'])
+def weather_location():
+    global last_weather_update
+    if request.method == 'GET':
+        return jsonify({'success': True, **device_settings.as_dict()})
+
+    try:
+        data = request.get_json(silent=True) or {}
+        query = str(data.get('location', '')).strip()
+        if not query:
+            return jsonify({
+                'success': False,
+                'error': 'Enter a town, city, or postcode'
+            }), 400
+
+        response = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={
+                'name': query,
+                'count': 1,
+                'language': 'en',
+                'format': 'json'
+            },
+            timeout=8
+        )
+        response.raise_for_status()
+        results = response.json().get('results', [])
+        if not results:
+            return jsonify({
+                'success': False,
+                'error': 'Location not found'
+            }), 404
+
+        location = results[0]
+        device_settings.weather_name = str(location.get('name', query))[:60]
+        device_settings.weather_country = str(
+            location.get('country', '')
+        )[:60]
+        device_settings.weather_latitude = float(location['latitude'])
+        device_settings.weather_longitude = float(location['longitude'])
+        device_settings.save()
+        last_weather_update = 0
+        return jsonify({
+            'success': True,
+            **device_settings.as_dict()
+        })
+    except (KeyError, ValueError, requests.RequestException) as error:
+        return jsonify({'success': False, 'error': str(error)}), 502
+
+@app.route('/api/display/settings', methods=['GET', 'POST'])
+def display_settings():
+    global last_interaction_time
+    if request.method == 'GET':
+        return jsonify({'success': True, **device_settings.as_dict()})
+
+    try:
+        data = request.get_json(silent=True) or {}
+        if 'brightness' in data:
+            device_settings.brightness = max(
+                10, min(100, int(data['brightness']))
+            )
+        if 'autoDimEnabled' in data:
+            device_settings.auto_dim_enabled = bool(data['autoDimEnabled'])
+        if 'autoDimMinutes' in data:
+            device_settings.auto_dim_minutes = max(
+                1, min(60, int(data['autoDimMinutes']))
+            )
+        if 'dimBrightness' in data:
+            device_settings.dim_brightness = max(
+                5, min(50, int(data['dimBrightness']))
+            )
+        device_settings.save()
+        last_interaction_time = time.time()
+        device_settings.set_hardware_brightness(device_settings.brightness)
+        return jsonify({
+            'success': True,
+            **device_settings.as_dict()
+        })
+    except (ValueError, TypeError) as error:
+        return jsonify({'success': False, 'error': str(error)}), 400
+
+def perform_safe_shutdown():
+    time.sleep(1)
+    try:
+        player.stop()
+    except Exception:
+        pass
+    result = subprocess.run(
+        ['sudo', '-n', '/usr/bin/systemctl', 'poweroff'],
+        capture_output=True,
+        text=True
+    )
+    if result.returncode != 0:
+        print(f"Safe shutdown failed: {result.stderr.strip()}")
+
+@app.route('/api/system/shutdown', methods=['POST'])
+def safe_shutdown():
+    data = request.get_json(silent=True) or {}
+    if data.get('confirm') != 'SHUTDOWN':
+        return jsonify({
+            'success': False,
+            'error': 'Shutdown confirmation is required'
+        }), 400
+    threading.Thread(target=perform_safe_shutdown, daemon=True).start()
+    return jsonify({'success': True, 'message': 'Shutting down safely'})
 
 @app.route('/api/stations')
 def get_stations():
@@ -3700,19 +4084,13 @@ def draw_pulsing_border(surface, rect, color, now):
 ui_background = None
 ui_palette_theme = None
 ui_animation_layer = pygame.Surface((320, 480), pygame.SRCALPHA)
+brightness_overlay = pygame.Surface((320, 480), pygame.SRCALPHA)
 refresh_ui_palette()
 
 instance = vlc.Instance('--no-video')
 player = instance.media_player_new()
 
 URL = "https://raw.githubusercontent.com/simsonpeter/Tcradios/refs/heads/main/stations.json"
-WEATHER_URL = (
-    "https://api.open-meteo.com/v1/forecast"
-    "?latitude=50.83&longitude=-0.17"
-    "&current_weather=true"
-    "&daily=weather_code,temperature_2m_max,temperature_2m_min"
-    "&forecast_days=5&timezone=auto"
-)
 LANGUAGE_BASE_URL = (
     "https://raw.githubusercontent.com/simsonpeter/Tcradios/"
     "8d31b80bed64167d2887313baf5b3bb12879308d/languages"
@@ -3767,7 +4145,7 @@ last_weather_update = 0
 last_system_update = 0
 saver_mode = False
 show_qr = False
-weather_str = "HOVE: --C"
+weather_str = f"{device_settings.weather_name.upper()}: --C"
 current_temp = 0
 weather_type = "clear"
 weather_forecast = []
@@ -3777,6 +4155,8 @@ saver_scroll_x = 320
 alarm_fade_active = False
 alarm_fade_data = {}
 saver_active = False
+shutdown_confirm_until = 0
+shutdown_in_progress = False
 system_stats = {
     'cpu_temp': '--',
     'disk_free': '--',
@@ -4085,6 +4465,33 @@ def handle_sleep_timer():
         elif alarm_system.sleep_stop_method == "stop":
             player.stop()
 
+def target_display_brightness(now):
+    if (
+        device_settings.auto_dim_enabled
+        and now - last_interaction_time
+        >= device_settings.auto_dim_minutes * 60
+    ):
+        return min(
+            device_settings.brightness,
+            device_settings.dim_brightness
+        )
+    return device_settings.brightness
+
+def apply_display_brightness(now):
+    target = target_display_brightness(now)
+    device_settings.set_hardware_brightness(target)
+    if not device_settings.hardware_brightness_available and target < 100:
+        alpha = int(230 * (1 - target / 100))
+        brightness_overlay.fill((0, 0, 0, alpha))
+        screen.blit(brightness_overlay, (0, 0))
+
+def request_touch_shutdown():
+    global shutdown_in_progress
+    if shutdown_in_progress:
+        return
+    shutdown_in_progress = True
+    threading.Thread(target=perform_safe_shutdown, daemon=True).start()
+
 def draw_weather_icon(surface, x, y, type, size=30, dimmed=True):
     line_width = max(2, size // 8)
     if dimmed:
@@ -4162,7 +4569,10 @@ def draw_forecast_screen(now):
     draw_weather_icon(screen, 65, 111, weather_type, 25, dimmed=False)
     current_surface = f_weather.render(f"{current_temp}°C", True, UI_TEXT)
     screen.blit(current_surface, (103, 82))
-    now_surface = f_tiny.render("HOVE  •  NOW", True, UI_BLUE)
+    location_label = fit_label(device_settings.weather_name.upper(), 18)
+    now_surface = f_tiny.render(
+        f"{location_label}  •  NOW", True, UI_BLUE
+    )
     screen.blit(now_surface, (106, 127))
 
     if weather_forecast:
@@ -4298,7 +4708,9 @@ def draw_clock_screen(now):
     )
     temp = f_weather.render(f"{current_temp}°C", True, UI_TEXT)
     screen.blit(temp, (112, weather_card.y + 11))
-    city = f_tiny.render("HOVE", True, UI_MUTED)
+    city = f_tiny.render(
+        fit_label(device_settings.weather_name.upper(), 18), True, UI_MUTED
+    )
     screen.blit(city, (116, weather_card.y + 53))
 
     station_card = pygame.Rect(28, 344, 264, 58)
@@ -4379,21 +4791,40 @@ def draw_system_screen(now):
         value_surface = f_sm.render(fit_label(value, 18), True, UI_TEXT)
         screen.blit(value_surface, (rect.x + 14, rect.y + 43))
 
-    bluetooth_card = pygame.Rect(18, 328, 284, 78)
+    bluetooth_card = pygame.Rect(18, 320, 284, 54)
     draw_modern_button(screen, bluetooth_card, UI_SURFACE, UI_BLUE, 16)
     bt_label = f_tiny.render("BLUETOOTH AUDIO", True, UI_MUTED)
-    screen.blit(bt_label, (34, bluetooth_card.y + 15))
+    screen.blit(bt_label, (34, bluetooth_card.y + 8))
     bt_value = f_sm.render(
         fit_label(system_stats['bluetooth'], 28), True, UI_TEXT
     )
-    screen.blit(bt_value, (34, bluetooth_card.y + 43))
+    screen.blit(bt_value, (34, bluetooth_card.y + 28))
+
+    shutdown_armed = now <= shutdown_confirm_until
+    shutdown_label = (
+        "SHUTTING DOWN…"
+        if shutdown_in_progress
+        else ("TAP AGAIN TO SHUT DOWN" if shutdown_armed else "SAFE SHUTDOWN")
+    )
+    draw_modern_button(
+        screen,
+        btn_safe_shutdown,
+        (66, 28, 39) if shutdown_armed else UI_SURFACE,
+        UI_PINK if shutdown_armed else (94, 49, 61),
+        13
+    )
+    draw_centered_text(
+        screen, f_tiny, shutdown_label,
+        UI_PINK if shutdown_armed else UI_TEXT,
+        btn_safe_shutdown
+    )
     draw_pages_button()
 
 def draw_settings_screen(now):
     draw_page_base("SETTINGS", now)
 
     audio_title = f_sm.render("SOUND OUTPUT", True, UI_TEXT)
-    screen.blit(audio_title, (18, 73))
+    screen.blit(audio_title, (18, 67))
     audio_labels = ("AUTO", "JACK", "HDMI", "BLUETOOTH")
     audio_names = ("auto", "analog", "hdmi", "bluetooth")
     for rect, label, output_name in zip(
@@ -4413,22 +4844,34 @@ def draw_settings_screen(now):
             screen, f_tiny, label, UI_TEXT if available else UI_MUTED, rect
         )
 
-    wifi_title = f_sm.render("WI-FI CONNECTION", True, UI_TEXT)
-    screen.blit(wifi_title, (18, 174))
-    wifi_card = pygame.Rect(18, 196, 284, 91)
-    draw_modern_button(screen, wifi_card, UI_SURFACE_RAISED, UI_PURPLE, 16)
-    wifi_value = f_sm.render(
-        f"Signal {system_stats['wifi']}", True, UI_TEXT
+    display_title = f_sm.render(
+        f"DISPLAY  •  {device_settings.brightness}%", True, UI_TEXT
     )
-    screen.blit(wifi_value, (34, 213))
-    ip_value = f_tiny.render(current_ip, True, UI_MUTED)
-    screen.blit(ip_value, (34, 241))
-    draw_modern_button(screen, btn_wifi_qr, UI_SURFACE, UI_BLUE, 12)
-    draw_centered_text(screen, f_tiny, "WEB / QR", UI_TEXT, btn_wifi_qr)
+    screen.blit(display_title, (18, 158))
+    draw_modern_button(
+        screen, btn_brightness_minus, UI_SURFACE, UI_BLUE, 13
+    )
+    draw_centered_text(screen, f_lg, "−", UI_TEXT, btn_brightness_minus)
+    draw_modern_button(
+        screen, btn_auto_dim, UI_SURFACE_RAISED,
+        UI_GREEN if device_settings.auto_dim_enabled else (55, 61, 77), 13
+    )
+    draw_centered_text(
+        screen, f_tiny,
+        (
+            f"AUTO DIM {device_settings.auto_dim_minutes} MIN"
+            if device_settings.auto_dim_enabled else "AUTO DIM OFF"
+        ),
+        UI_TEXT, btn_auto_dim
+    )
+    draw_modern_button(
+        screen, btn_brightness_plus, UI_SURFACE, UI_BLUE, 13
+    )
+    draw_centered_text(screen, f_lg, "+", UI_TEXT, btn_brightness_plus)
 
     theme_title = f_sm.render("THEME", True, UI_TEXT)
-    screen.blit(theme_title, (18, 307))
-    current_theme_rect = pygame.Rect(78, 331, 164, 63)
+    screen.blit(theme_title, (18, 248))
+    current_theme_rect = pygame.Rect(78, 274, 164, 58)
     draw_modern_button(
         screen, current_theme_rect, UI_SURFACE_RAISED, UI_AMBER, 14
     )
@@ -4443,6 +4886,13 @@ def draw_settings_screen(now):
     )
     draw_modern_button(screen, btn_theme_next, UI_SURFACE, UI_BLUE, 14)
     draw_centered_text(screen, f_lg, "›", UI_TEXT, btn_theme_next)
+
+    draw_modern_button(screen, btn_wifi_qr, UI_SURFACE_RAISED, UI_PURPLE, 14)
+    draw_centered_text(
+        screen, f_tiny,
+        f"WEB / QR  •  {fit_label(current_ip, 18)}",
+        UI_TEXT, btn_wifi_qr
+    )
     draw_pages_button()
 
 def draw_bluetooth_screen(now):
@@ -4667,16 +5117,20 @@ btn_sleep_presets = [
     pygame.Rect(18 + index * 98, 282, 88, 48) for index in range(3)
 ]
 btn_sleep_cancel = pygame.Rect(18, 344, 284, 54)
+btn_safe_shutdown = pygame.Rect(55, 383, 210, 36)
 system_card_rects = [
     pygame.Rect(18 + (index % 2) * 146, 76 + (index // 2) * 126, 138, 110)
     for index in range(4)
 ]
 btn_audio_outputs = [
-    pygame.Rect(14 + index * 76, 95, 70, 60) for index in range(4)
+    pygame.Rect(14 + index * 76, 88, 70, 56) for index in range(4)
 ]
-btn_wifi_qr = pygame.Rect(190, 216, 95, 50)
-btn_theme_previous = pygame.Rect(18, 331, 50, 63)
-btn_theme_next = pygame.Rect(252, 331, 50, 63)
+btn_brightness_minus = pygame.Rect(18, 184, 50, 48)
+btn_auto_dim = pygame.Rect(78, 184, 164, 48)
+btn_brightness_plus = pygame.Rect(252, 184, 50, 48)
+btn_theme_previous = pygame.Rect(18, 274, 50, 58)
+btn_theme_next = pygame.Rect(252, 274, 50, 58)
+btn_wifi_qr = pygame.Rect(55, 353, 210, 50)
 btn_bluetooth_search = pygame.Rect(70, 75, 180, 42)
 bluetooth_device_rects = [
     pygame.Rect(18, 142 + index * 46, 284, 42) for index in range(6)
@@ -4706,7 +5160,7 @@ while True:
     
     if now - last_weather_update > 1200:
         try:
-            r = requests.get(WEATHER_URL, timeout=5)
+            r = requests.get(device_settings.weather_url(), timeout=5)
             if r.status_code == 200:
                 weather_data = r.json()
                 data = weather_data['current_weather']
@@ -4966,6 +5420,15 @@ while True:
     
     for event in pygame.event.get():
         if event.type == pygame.MOUSEBUTTONDOWN:
+            was_auto_dimmed = (
+                target_display_brightness(now) < device_settings.brightness
+            )
+            last_interaction_time = now
+            if was_auto_dimmed:
+                device_settings.set_hardware_brightness(
+                    device_settings.brightness
+                )
+                continue
             touch_start_pos = event.pos
             touch_start_time = time.time()
             if saver_active:
@@ -5118,6 +5581,12 @@ while True:
                                 break
                         if btn_sleep_cancel.collidepoint(event.pos):
                             alarm_system.stop_sleep_timer()
+                elif active_page == "system":
+                    if btn_safe_shutdown.collidepoint(event.pos):
+                        if now <= shutdown_confirm_until:
+                            request_touch_shutdown()
+                        else:
+                            shutdown_confirm_until = now + 5
                 elif active_page == "settings":
                     for rect, output_name in zip(
                         btn_audio_outputs,
@@ -5135,7 +5604,29 @@ while True:
                             else:
                                 audio_manager.set_output(output_name)
                             break
-                    if btn_wifi_qr.collidepoint(event.pos):
+                    if (
+                        btn_brightness_minus.collidepoint(event.pos)
+                        or btn_brightness_plus.collidepoint(event.pos)
+                    ):
+                        change = (
+                            -10
+                            if btn_brightness_minus.collidepoint(event.pos)
+                            else 10
+                        )
+                        device_settings.brightness = max(
+                            10,
+                            min(100, device_settings.brightness + change)
+                        )
+                        device_settings.save()
+                        device_settings.set_hardware_brightness(
+                            device_settings.brightness
+                        )
+                    elif btn_auto_dim.collidepoint(event.pos):
+                        device_settings.auto_dim_enabled = (
+                            not device_settings.auto_dim_enabled
+                        )
+                        device_settings.save()
+                    elif btn_wifi_qr.collidepoint(event.pos):
                         show_qr = True
                     elif (
                         btn_theme_previous.collidepoint(event.pos)
@@ -5261,5 +5752,6 @@ while True:
                 audio_manager.set_volume(vol_level)
                 volume_bar_timer = time.time()
     
+    apply_display_brightness(now)
     pygame.display.flip()
     time.sleep(0.05)

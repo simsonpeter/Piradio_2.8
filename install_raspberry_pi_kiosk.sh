@@ -71,6 +71,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     fonts-noto-extra \
     yt-dlp \
     util-linux \
+    x11-xserver-utils \
     plymouth \
     plymouth-themes \
     bluez \
@@ -193,6 +194,12 @@ fi
 systemctl set-default graphical.target
 systemctl mask plymouth-quit-wait.service
 systemctl disable NetworkManager-wait-online.service || true
+
+cat > /etc/sudoers.d/tcradios-power <<EOF
+${INSTALL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff
+EOF
+chmod 0440 /etc/sudoers.d/tcradios-power
+visudo -cf /etc/sudoers.d/tcradios-power
 
 echo
 echo "TCRADIOS branded boot is installed."
