@@ -5147,6 +5147,53 @@ btn_language_previous = pygame.Rect(18, 360, 88, 44)
 btn_language_next = pygame.Rect(214, 360, 88, 44)
 btn_language_back = pygame.Rect(70, 430, 180, 38)
 
+def adjust_volume(delta):
+    global vol_level, show_volume_bar, volume_bar_timer, last_interaction_time
+    vol_level = max(0, min(100, vol_level + delta))
+    try:
+        player.audio_set_volume(vol_level)
+        audio_manager.set_volume(vol_level)
+    except Exception as error:
+        print(f"Volume adjustment error: {error}")
+    show_volume_bar = True
+    volume_bar_timer = time.time()
+    last_interaction_time = time.time()
+
+def toggle_output_mute():
+    global vol_level, show_volume_bar, volume_bar_timer, last_interaction_time
+    vol_level = 0 if vol_level > 0 else 80
+    try:
+        player.audio_set_volume(vol_level)
+        audio_manager.set_volume(vol_level)
+    except Exception as error:
+        print(f"Mute error: {error}")
+    show_volume_bar = True
+    volume_bar_timer = time.time()
+    last_interaction_time = time.time()
+
+def start_rotary_encoder():
+    # CLK=GPIO5 (pin 29), DT=GPIO6 (pin 31), SW=GPIO13 (pin 33), GND=pin 30.
+    global rotary_controls
+    try:
+        from gpiozero import DigitalInputDevice
+        clock = DigitalInputDevice(5, pull_up=True, bounce_time=0.004)
+        direction = DigitalInputDevice(6, pull_up=True)
+        switch = DigitalInputDevice(13, pull_up=True, bounce_time=0.08)
+
+        def rotated():
+            adjust_volume(2 if direction.is_active else -2)
+
+        clock.when_activated = rotated
+        switch.when_activated = toggle_output_mute
+        rotary_controls = [clock, direction, switch]
+        print("Rotary encoder ready: GPIO 5, GPIO 6, switch GPIO 13")
+    except Exception as error:
+        rotary_controls = []
+        print(f"Rotary encoder disabled: {error}")
+
+rotary_controls = []
+start_rotary_encoder()
+
 while True:
     now = time.time()
     update_qr_code()

@@ -60,6 +60,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     vlc \
     python3-vlc \
     python3-pygame \
+    python3-gpiozero \
     python3-flask \
     python3-requests \
     python3-pil \
