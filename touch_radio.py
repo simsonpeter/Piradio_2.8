@@ -740,17 +740,17 @@ def dark_theme(name, primary, secondary, accent):
     })
 
 THEMES = {
-    'true_black': dark_theme('True Black', '#2ee6ff', '#c86bff', '#ffd166'),
-    'midnight_black': dark_theme('Midnight Black', '#4cc9f0', '#f72585', '#b5179e'),
-    'pure_white': dark_theme('Ice Night', '#f8fbff', '#7dd3fc', '#38bdf8'),
-    'ocean_blue': dark_theme('Ocean Blue', '#00e5ff', '#3b82f6', '#ff6b6b'),
-    'sunset_orange': dark_theme('Sunset Orange', '#ff8a3d', '#ff4d6d', '#ffd166'),
-    'forest_green': dark_theme('Forest Green', '#22e38a', '#12b886', '#ffc857'),
-    'purple_haze': dark_theme('Purple Haze', '#b388ff', '#7c4dff', '#ff4d88'),
-    'cyberpunk': dark_theme('Cyberpunk', '#ff2bd6', '#2bfff2', '#ff7a18'),
-    'golden_hour': dark_theme('Golden Hour', '#ffb703', '#fb8500', '#ff4d6d'),
-    'mint_fresh': dark_theme('Mint Fresh', '#2ee6c7', '#64ffda', '#ff7ab6'),
-    'crimson_red': dark_theme('Crimson Red', '#ff4d6d', '#ff8fa3', '#ffd166'),
+    'true_black': dark_theme('True Black', '#2ee6c7', '#5ba8ff', '#f0c45a'),
+    'midnight_black': dark_theme('Midnight Black', '#8ea2ff', '#d4a4ff', '#f0c45a'),
+    'pure_white': dark_theme('Ice Night', '#7ed4ff', '#9bb0ff', '#f4d27a'),
+    'ocean_blue': dark_theme('Ocean Blue', '#33d6ff', '#4f8cff', '#5ee0b8'),
+    'sunset_orange': dark_theme('Sunset Orange', '#ff8a3d', '#ff6b9d', '#ffd166'),
+    'forest_green': dark_theme('Forest Green', '#3ee6a0', '#7ae08a', '#f0c45a'),
+    'purple_haze': dark_theme('Purple Haze', '#c9a0ff', '#8b85ff', '#ff9ec8'),
+    'cyberpunk': dark_theme('Cyberpunk', '#ff4ec8', '#2ee6e0', '#ffb347'),
+    'golden_hour': dark_theme('Golden Hour', '#f0c03a', '#ff9a3d', '#3ee6c7'),
+    'mint_fresh': dark_theme('Mint Fresh', '#3ee6c7', '#7ae0e8', '#8bb4ff'),
+    'crimson_red': dark_theme('Crimson Red', '#ff5a73', '#f0c45a', '#3ee6c7'),
 }
 
 current_theme = THEMES['true_black']
@@ -975,6 +975,7 @@ HTML_TEMPLATE = """
             --button-hover: {{ theme.button_hover }};
             --gradient-start: {{ theme.gradient_start }};
             --gradient-end: {{ theme.gradient_end }};
+            --muted: #e6ebf6;
             --safe-top: env(safe-area-inset-top);
             --safe-bottom: env(safe-area-inset-bottom);
         }
@@ -1101,7 +1102,7 @@ HTML_TEMPLATE = """
         
         .np-subtitle {
             font-size: 12px;
-            color: rgba(255,255,255,0.6);
+            color: var(--muted);
             margin-top: 2px;
         }
         
@@ -1218,7 +1219,7 @@ HTML_TEMPLATE = """
         
         .big-subtitle {
             font-size: 16px;
-            color: rgba(255,255,255,0.6);
+            color: var(--muted);
         }
         
         .controls-grid {
@@ -1382,7 +1383,7 @@ HTML_TEMPLATE = """
         
         .station-genre {
             font-size: 12px;
-            color: rgba(255,255,255,0.6);
+            color: var(--muted);
         }
         
         .input-group {
@@ -1558,7 +1559,7 @@ HTML_TEMPLATE = """
         
         .link-url {
             font-size: 12px;
-            color: rgba(255,255,255,0.5);
+            color: var(--muted);
             margin-top: 2px;
             white-space: nowrap;
             overflow: hidden;
@@ -1595,7 +1596,7 @@ HTML_TEMPLATE = """
             align-items: center;
             gap: 4px;
             padding: 8px;
-            color: rgba(255,255,255,0.5);
+            color: var(--muted);
             cursor: pointer;
             transition: all 0.2s;
             border: none;
@@ -1658,7 +1659,7 @@ HTML_TEMPLATE = """
         }
         
         .connection-subtitle {
-            color: rgba(255,255,255,0.6);
+            color: var(--muted);
             margin-bottom: 40px;
             font-size: 16px;
         }
@@ -1753,7 +1754,7 @@ HTML_TEMPLATE = """
         .empty-state {
             text-align: center;
             padding: 60px 20px;
-            color: rgba(255,255,255,0.5);
+            color: var(--muted);
         }
         
         .empty-icon {
@@ -1856,7 +1857,7 @@ HTML_TEMPLATE = """
         
         .output-sub {
             font-size: 11px;
-            color: rgba(255,255,255,0.5);
+            color: var(--muted);
             margin-top: 2px;
         }
 
@@ -1869,7 +1870,7 @@ HTML_TEMPLATE = """
         }
 
         .bluetooth-status {
-            color: rgba(255,255,255,0.65);
+            color: var(--muted);
             font-size: 12px;
             line-height: 1.4;
         }
@@ -1911,7 +1912,7 @@ HTML_TEMPLATE = """
         }
 
         .bluetooth-device-meta {
-            color: rgba(255,255,255,0.55);
+            color: var(--muted);
             font-size: 11px;
             margin-top: 3px;
         }
@@ -2010,7 +2011,7 @@ HTML_TEMPLATE = """
         
         .youtube-meta {
             font-size: 12px;
-            color: rgba(255,255,255,0.5);
+            color: var(--muted);
         }
         
         .search-container {
@@ -2425,7 +2426,7 @@ HTML_TEMPLATE = """
                     <span class="section-title">Power</span>
                 </div>
                 <div class="card">
-                    <div style="font-size: 13px; color: rgba(255,255,255,0.65); margin-bottom: 12px;">
+                    <div style="font-size: 13px; color: var(--muted); margin-bottom: 12px;">
                         Safely stop playback and shut down before removing power.
                     </div>
                     <button class="btn-primary" onclick="requestSafeShutdown()" style="background: #c0392b; color: #fff;">⏻ Safe Shutdown</button>
@@ -2473,17 +2474,17 @@ HTML_TEMPLATE = """
     <script>
         // Theme definitions for instant switching without reload
         const themes = {
-            'true_black': { bg: '#000000', primary: '#2ee6ff', secondary: '#c86bff', accent: '#ffd166', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#2ee6ff', buttonHover: '#c86bff', gradientStart: '#000000', gradientEnd: '#2ee6ff' },
-            'midnight_black': { bg: '#000000', primary: '#4cc9f0', secondary: '#f72585', accent: '#b5179e', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#4cc9f0', buttonHover: '#f72585', gradientStart: '#000000', gradientEnd: '#4cc9f0' },
-            'pure_white': { bg: '#000000', primary: '#f8fbff', secondary: '#7dd3fc', accent: '#38bdf8', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#f8fbff', buttonHover: '#7dd3fc', gradientStart: '#000000', gradientEnd: '#f8fbff' },
-            'ocean_blue': { bg: '#000000', primary: '#00e5ff', secondary: '#3b82f6', accent: '#ff6b6b', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#00e5ff', buttonHover: '#3b82f6', gradientStart: '#000000', gradientEnd: '#00e5ff' },
-            'sunset_orange': { bg: '#000000', primary: '#ff8a3d', secondary: '#ff4d6d', accent: '#ffd166', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#ff8a3d', buttonHover: '#ff4d6d', gradientStart: '#000000', gradientEnd: '#ff8a3d' },
-            'forest_green': { bg: '#000000', primary: '#22e38a', secondary: '#12b886', accent: '#ffc857', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#22e38a', buttonHover: '#12b886', gradientStart: '#000000', gradientEnd: '#22e38a' },
-            'purple_haze': { bg: '#000000', primary: '#b388ff', secondary: '#7c4dff', accent: '#ff4d88', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#b388ff', buttonHover: '#7c4dff', gradientStart: '#000000', gradientEnd: '#b388ff' },
-            'cyberpunk': { bg: '#000000', primary: '#ff2bd6', secondary: '#2bfff2', accent: '#ff7a18', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#ff2bd6', buttonHover: '#2bfff2', gradientStart: '#000000', gradientEnd: '#ff2bd6' },
-            'golden_hour': { bg: '#000000', primary: '#ffb703', secondary: '#fb8500', accent: '#ff4d6d', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#ffb703', buttonHover: '#fb8500', gradientStart: '#000000', gradientEnd: '#ffb703' },
-            'mint_fresh': { bg: '#000000', primary: '#2ee6c7', secondary: '#64ffda', accent: '#ff7ab6', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#2ee6c7', buttonHover: '#64ffda', gradientStart: '#000000', gradientEnd: '#2ee6c7' },
-            'crimson_red': { bg: '#000000', primary: '#ff4d6d', secondary: '#ff8fa3', accent: '#ffd166', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#ff4d6d', buttonHover: '#ff8fa3', gradientStart: '#000000', gradientEnd: '#ff4d6d' }
+            'true_black': { bg: '#000000', primary: '#2ee6c7', secondary: '#5ba8ff', accent: '#f0c45a', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#2ee6c7', buttonHover: '#5ba8ff', gradientStart: '#000000', gradientEnd: '#2ee6c7' },
+            'midnight_black': { bg: '#000000', primary: '#8ea2ff', secondary: '#d4a4ff', accent: '#f0c45a', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#8ea2ff', buttonHover: '#d4a4ff', gradientStart: '#000000', gradientEnd: '#8ea2ff' },
+            'pure_white': { bg: '#000000', primary: '#7ed4ff', secondary: '#9bb0ff', accent: '#f4d27a', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#7ed4ff', buttonHover: '#9bb0ff', gradientStart: '#000000', gradientEnd: '#7ed4ff' },
+            'ocean_blue': { bg: '#000000', primary: '#33d6ff', secondary: '#4f8cff', accent: '#5ee0b8', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#33d6ff', buttonHover: '#4f8cff', gradientStart: '#000000', gradientEnd: '#33d6ff' },
+            'sunset_orange': { bg: '#000000', primary: '#ff8a3d', secondary: '#ff6b9d', accent: '#ffd166', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ff8a3d', buttonHover: '#ff6b9d', gradientStart: '#000000', gradientEnd: '#ff8a3d' },
+            'forest_green': { bg: '#000000', primary: '#3ee6a0', secondary: '#7ae08a', accent: '#f0c45a', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#3ee6a0', buttonHover: '#7ae08a', gradientStart: '#000000', gradientEnd: '#3ee6a0' },
+            'purple_haze': { bg: '#000000', primary: '#c9a0ff', secondary: '#8b85ff', accent: '#ff9ec8', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#c9a0ff', buttonHover: '#8b85ff', gradientStart: '#000000', gradientEnd: '#c9a0ff' },
+            'cyberpunk': { bg: '#000000', primary: '#ff4ec8', secondary: '#2ee6e0', accent: '#ffb347', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ff4ec8', buttonHover: '#2ee6e0', gradientStart: '#000000', gradientEnd: '#ff4ec8' },
+            'golden_hour': { bg: '#000000', primary: '#f0c03a', secondary: '#ff9a3d', accent: '#3ee6c7', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#f0c03a', buttonHover: '#ff9a3d', gradientStart: '#000000', gradientEnd: '#f0c03a' },
+            'mint_fresh': { bg: '#000000', primary: '#3ee6c7', secondary: '#7ae0e8', accent: '#8bb4ff', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#3ee6c7', buttonHover: '#7ae0e8', gradientStart: '#000000', gradientEnd: '#3ee6c7' },
+            'crimson_red': { bg: '#000000', primary: '#ff5a73', secondary: '#f0c45a', accent: '#3ee6c7', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ff5a73', buttonHover: '#f0c45a', gradientStart: '#000000', gradientEnd: '#ff5a73' }
         };
         
         function applyTheme(themeKey) {
@@ -2494,6 +2495,7 @@ HTML_TEMPLATE = """
             root.style.setProperty('--secondary', t.secondary);
             root.style.setProperty('--accent', t.accent);
             root.style.setProperty('--text', t.text);
+            root.style.setProperty('--muted', t.muted || '#e6ebf6');
             root.style.setProperty('--card', t.card);
             root.style.setProperty('--button', t.button);
             root.style.setProperty('--button-hover', t.buttonHover);
@@ -4183,7 +4185,7 @@ screen.fill((0, 0, 0))
 splash_title_font = get_unicode_font(38, bold=True)
 splash_subtitle_font = get_unicode_font(16)
 splash_title = splash_title_font.render("TCRADIOS", True, (235, 242, 255))
-splash_subtitle = splash_subtitle_font.render("by JayathaSoft", True, (92, 112, 145))
+splash_subtitle = splash_subtitle_font.render("by JayathaSoft", True, (214, 224, 240))
 screen.blit(splash_title, splash_title.get_rect(center=(160, 218)))
 screen.blit(splash_subtitle, splash_subtitle.get_rect(center=(160, 257)))
 pygame.draw.line(screen, (38, 150, 210), (100, 282), (220, 282), 2)
@@ -4206,8 +4208,8 @@ UI_BG_TOP = (0, 0, 0)
 UI_BG_BOTTOM = (7, 7, 10)
 UI_SURFACE = (15, 18, 25)
 UI_SURFACE_RAISED = (24, 28, 38)
-UI_TEXT = (241, 245, 255)
-UI_MUTED = (120, 126, 140)
+UI_TEXT = (255, 255, 255)
+UI_MUTED = (230, 234, 244)
 UI_BLUE = (50, 205, 255)
 UI_PURPLE = (145, 92, 255)
 UI_PINK = (255, 83, 148)
@@ -4252,16 +4254,27 @@ def refresh_ui_palette():
     UI_BLUE = ensure_bright(current_theme.pygame_primary, 155)
     UI_PURPLE = ensure_bright(current_theme.pygame_secondary, 145)
     UI_AMBER = ensure_bright(current_theme.pygame_accent, 155)
-    UI_PINK = ensure_bright(mix_colors(UI_PURPLE, (255, 72, 148), 0.5), 145)
-    UI_GREEN = ensure_bright(mix_colors(UI_BLUE, (46, 230, 150), 0.42), 145)
-    UI_TEXT = (246, 247, 255)
+    UI_PINK = ensure_bright(mix_colors((255, 78, 160), UI_PURPLE, 0.22), 155)
+    UI_GREEN = ensure_bright(mix_colors((52, 220, 150), UI_BLUE, 0.22), 155)
+    UI_TEXT = (255, 255, 255)
     UI_BG_TOP = (0, 0, 0)
     UI_BG_BOTTOM = mix_colors((0, 0, 0), UI_BLUE, 0.08)
-    UI_SURFACE = mix_colors((8, 8, 12), UI_BLUE, 0.16)
-    UI_SURFACE_RAISED = mix_colors((10, 10, 16), UI_BLUE, 0.32)
-    UI_MUTED = mix_colors((118, 122, 136), UI_BLUE, 0.22)
+    UI_SURFACE = mix_colors((10, 12, 16), UI_BLUE, 0.12)
+    UI_SURFACE_RAISED = mix_colors((16, 18, 24), UI_BLUE, 0.2)
+    UI_MUTED = (230, 234, 244)
     ui_background = create_ui_background()
     ui_palette_theme = current_theme.name
+
+def color_luminance(color):
+    return color[0] * 0.2126 + color[1] * 0.7152 + color[2] * 0.0722
+
+def contrasting_text(background):
+    return (16, 18, 24) if color_luminance(background) > 128 else (255, 255, 255)
+
+def contrasting_muted(background):
+    if color_luminance(background) > 128:
+        return (36, 40, 52)
+    return (230, 234, 244)
 
 def draw_centered_text(surface, font, text, color, rect):
     rendered = font.render(text, True, color)
@@ -4270,11 +4283,13 @@ def draw_centered_text(surface, font, text, color, rect):
 
 def draw_modern_button(surface, rect, fill, border, radius=14, border_width=0):
     body = border if (border[0] + border[1] + border[2]) > 90 else fill
-    luminance = body[0] * 0.2126 + body[1] * 0.7152 + body[2] * 0.0722
-    if luminance > 185:
-        body = mix_colors(body, (18, 20, 28), 0.35)
     pygame.draw.rect(surface, body, rect, border_radius=radius)
-    return rect
+    return body
+
+def labeled_button(surface, rect, fill, font, text, radius=14, border=None):
+    body = draw_modern_button(surface, rect, fill, border or fill, radius)
+    draw_centered_text(surface, font, text, contrasting_text(body), rect)
+    return body
 
 def draw_animated_ui_glow(surface, now):
     ui_animation_layer.fill((0, 0, 0, 0))
@@ -5219,12 +5234,7 @@ def draw_forecast_screen(now):
             screen, f_sm, "Forecast unavailable", UI_MUTED, loading_rect
         )
 
-    draw_modern_button(
-        screen, btn_pages, UI_SURFACE_RAISED, UI_BLUE, 16
-    )
-    draw_centered_text(
-        screen, f_sm, "PAGES", UI_TEXT, btn_pages
-    )
+    labeled_button(screen, btn_pages, UI_BLUE, f_sm, "PAGES", 16)
 
 def draw_page_base(title, now):
     screen.blit(ui_background, (0, 0))
@@ -5235,8 +5245,8 @@ def draw_page_base(title, now):
     draw_centered_text(screen, f_lg, title, UI_TEXT, header)
 
 def draw_pages_button():
-    draw_modern_button(screen, btn_pages, UI_SURFACE_RAISED, UI_BLUE, 16)
-    draw_centered_text(screen, f_sm, "PAGES", UI_TEXT, btn_pages)
+    body = draw_modern_button(screen, btn_pages, UI_BLUE, UI_BLUE, 16)
+    draw_centered_text(screen, f_sm, "PAGES", contrasting_text(body), btn_pages)
 
 def fit_label(text, length=16):
     return truncate_display(text, length)
@@ -5263,13 +5273,13 @@ def draw_menu_screen(now):
             UI_PINK if index == 8
             else (UI_BLUE, UI_PURPLE, UI_AMBER)[index % 3]
         )
-        draw_modern_button(screen, rect, UI_SURFACE_RAISED, border, 16)
-        title_surface = f_sm.render(title, True, UI_TEXT)
+        body = draw_modern_button(screen, rect, border, border, 16)
+        title_surface = f_sm.render(title, True, contrasting_text(body))
         screen.blit(
             title_surface,
             (rect.centerx - title_surface.get_width() // 2, rect.y + 12)
         )
-        subtitle_surface = f_tiny.render(subtitle, True, UI_MUTED)
+        subtitle_surface = f_tiny.render(subtitle, True, contrasting_muted(body))
         screen.blit(
             subtitle_surface,
             (rect.centerx - subtitle_surface.get_width() // 2, rect.y + 34)
@@ -5281,11 +5291,8 @@ def draw_favorites_screen(now):
         "REMOVE CURRENT" if current_idx in favorite_indices
         else "ADD CURRENT"
     )
-    draw_modern_button(
-        screen, btn_favorite_toggle, UI_SURFACE_RAISED, add_border, 13
-    )
-    draw_centered_text(
-        screen, f_tiny, add_label, UI_TEXT, btn_favorite_toggle
+    labeled_button(
+        screen, btn_favorite_toggle, add_border, f_tiny, add_label, 13
     )
 
     for index, rect in enumerate(favorite_card_rects):
@@ -5368,8 +5375,7 @@ def draw_alarm_screen(now):
         (btn_alarm_toggle_page, "ON / OFF"),
         (btn_alarm_plus, "+ 5 MIN")
     ):
-        draw_modern_button(screen, rect, UI_SURFACE, UI_BLUE, 13)
-        draw_centered_text(screen, f_tiny, label, UI_TEXT, rect)
+        labeled_button(screen, rect, UI_BLUE, f_tiny, label, 13)
 
     sleep_title = f_sm.render("SLEEP TIMER", True, UI_TEXT)
     screen.blit(sleep_title, (20, 261))
@@ -5378,22 +5384,20 @@ def draw_alarm_screen(now):
             alarm_system.sleep_timer_enabled
             and alarm_system.sleep_duration == minutes * 60
         )
-        draw_modern_button(
-            screen, rect, UI_SURFACE_RAISED,
-            UI_GREEN if active else (55, 61, 77), 13
+        labeled_button(
+            screen, rect,
+            UI_GREEN if active else (55, 61, 77),
+            f_sm, f"{minutes} MIN", 13
         )
-        draw_centered_text(screen, f_sm, f"{minutes} MIN", UI_TEXT, rect)
 
     sleep_status = (
         f"{alarm_system.get_sleep_remaining()} min remaining"
         if alarm_system.sleep_timer_enabled else "Timer off"
     )
-    draw_modern_button(
-        screen, btn_sleep_cancel, UI_SURFACE,
-        UI_PINK if alarm_system.sleep_timer_enabled else (55, 61, 77), 13
-    )
-    draw_centered_text(
-        screen, f_tiny, sleep_status.upper(), UI_TEXT, btn_sleep_cancel
+    labeled_button(
+        screen, btn_sleep_cancel,
+        UI_PINK if alarm_system.sleep_timer_enabled else (55, 61, 77),
+        f_tiny, sleep_status.upper(), 13
     )
     draw_pages_button()
 
@@ -5427,17 +5431,10 @@ def draw_system_screen(now):
         if shutdown_in_progress
         else ("TAP AGAIN TO SHUT DOWN" if shutdown_armed else "SAFE SHUTDOWN")
     )
-    draw_modern_button(
-        screen,
-        btn_safe_shutdown,
-        (66, 28, 39) if shutdown_armed else UI_SURFACE,
+    labeled_button(
+        screen, btn_safe_shutdown,
         UI_PINK if shutdown_armed else (94, 49, 61),
-        13
-    )
-    draw_centered_text(
-        screen, f_tiny, shutdown_label,
-        UI_PINK if shutdown_armed else UI_TEXT,
-        btn_safe_shutdown
+        f_tiny, shutdown_label, 13
     )
     draw_pages_button()
 
@@ -5460,70 +5457,50 @@ def draw_settings_screen(now):
         )
         border = UI_GREEN if active else (UI_BLUE if available else (55, 61, 77))
         fill = UI_SURFACE_RAISED if available else UI_SURFACE
-        draw_modern_button(screen, rect, fill, border, 12)
+        body = draw_modern_button(screen, rect, fill, border, 12)
         draw_centered_text(
-            screen, f_tiny, label, UI_TEXT if available else UI_MUTED, rect
+            screen, f_tiny, label,
+            contrasting_text(body) if available else contrasting_muted(body),
+            rect
         )
 
     display_title = f_sm.render(
         f"DISPLAY  •  {device_settings.brightness}%", True, UI_TEXT
     )
     screen.blit(display_title, (18, 158))
-    draw_modern_button(
-        screen, btn_brightness_minus, UI_SURFACE, UI_BLUE, 13
-    )
-    draw_centered_text(screen, f_lg, "−", UI_TEXT, btn_brightness_minus)
-    draw_modern_button(
-        screen, btn_auto_dim, UI_SURFACE_RAISED,
-        UI_GREEN if device_settings.auto_dim_enabled else (55, 61, 77), 13
-    )
-    draw_centered_text(
-        screen, f_tiny,
+    labeled_button(screen, btn_brightness_minus, UI_BLUE, f_lg, "−", 13)
+    labeled_button(
+        screen, btn_auto_dim,
+        UI_GREEN if device_settings.auto_dim_enabled else (55, 61, 77),
+        f_tiny,
         (
             f"AUTO DIM {device_settings.auto_dim_minutes} MIN"
             if device_settings.auto_dim_enabled else "AUTO DIM OFF"
         ),
-        UI_TEXT, btn_auto_dim
+        13
     )
-    draw_modern_button(
-        screen, btn_brightness_plus, UI_SURFACE, UI_BLUE, 13
-    )
-    draw_centered_text(screen, f_lg, "+", UI_TEXT, btn_brightness_plus)
+    labeled_button(screen, btn_brightness_plus, UI_BLUE, f_lg, "+", 13)
 
     theme_title = f_sm.render("THEME", True, UI_TEXT)
     screen.blit(theme_title, (18, 248))
     current_theme_rect = pygame.Rect(78, 274, 164, 58)
-    draw_modern_button(
-        screen, current_theme_rect, UI_SURFACE_RAISED, UI_AMBER, 14
+    labeled_button(
+        screen, current_theme_rect, UI_AMBER, f_sm,
+        current_theme.name.upper(), 14
     )
-    draw_centered_text(
-        screen, f_sm, current_theme.name.upper(), UI_TEXT, current_theme_rect
-    )
-    draw_modern_button(
-        screen, btn_theme_previous, UI_SURFACE, UI_BLUE, 14
-    )
-    draw_centered_text(
-        screen, f_lg, "‹", UI_TEXT, btn_theme_previous
-    )
-    draw_modern_button(screen, btn_theme_next, UI_SURFACE, UI_BLUE, 14)
-    draw_centered_text(screen, f_lg, "›", UI_TEXT, btn_theme_next)
-
-    draw_modern_button(screen, btn_wifi_setup, UI_GREEN, UI_GREEN, 14)
-    draw_centered_text(screen, f_tiny, "WI-FI", UI_TEXT, btn_wifi_setup)
-    draw_modern_button(screen, btn_wifi_qr, UI_PURPLE, UI_PURPLE, 14)
-    draw_centered_text(screen, f_tiny, "WEB QR", UI_TEXT, btn_wifi_qr)
+    labeled_button(screen, btn_theme_previous, UI_BLUE, f_lg, "‹", 14)
+    labeled_button(screen, btn_theme_next, UI_BLUE, f_lg, "›", 14)
+    labeled_button(screen, btn_wifi_setup, UI_GREEN, f_tiny, "WI-FI", 14)
+    labeled_button(screen, btn_wifi_qr, UI_PURPLE, f_tiny, "WEB QR", 14)
     draw_pages_button()
 
 def draw_bluetooth_screen(now):
     draw_page_base("BLUETOOTH", now)
-    draw_modern_button(
-        screen, btn_bluetooth_search, UI_SURFACE_RAISED,
-        UI_PURPLE if touch_bluetooth_busy else UI_BLUE, 15
-    )
-    draw_centered_text(
-        screen, f_sm,
+    labeled_button(
+        screen, btn_bluetooth_search,
+        UI_PURPLE if touch_bluetooth_busy else UI_BLUE, f_sm,
         "SEARCHING…" if touch_bluetooth_busy else "SEARCH DEVICES",
-        UI_TEXT, btn_bluetooth_search
+        15
     )
 
     status_surface = f_tiny.render(
@@ -5563,11 +5540,8 @@ def draw_bluetooth_screen(now):
             screen, f_sm, "No devices loaded", UI_MUTED, empty_rect
         )
 
-    draw_modern_button(
-        screen, btn_bluetooth_back, UI_SURFACE_RAISED, UI_BLUE, 16
-    )
-    draw_centered_text(
-        screen, f_sm, "‹  SETTINGS", UI_TEXT, btn_bluetooth_back
+    labeled_button(
+        screen, btn_bluetooth_back, UI_BLUE, f_sm, "‹  SETTINGS", 16
     )
 
 def wifi_key_label(value):
@@ -5595,11 +5569,11 @@ def draw_wifi_screen(now):
         name = fit_label(wifi_target.get('ssid', 'Wi-Fi'), 28)
         status = f_tiny.render(name, True, UI_MUTED)
         screen.blit(status, (160 - status.get_width() // 2, 64))
-        draw_modern_button(
+        body = draw_modern_button(
             screen, btn_wifi_password_field, UI_PURPLE, UI_PURPLE, 14
         )
         secret = '•' * len(wifi_password_text) if wifi_password_text else "Password"
-        color = UI_TEXT if wifi_password_text else (40, 42, 50)
+        color = contrasting_text(body) if wifi_password_text else contrasting_muted(body)
         draw_centered_text(
             screen, f_sm, fit_tail(secret, 22), color, btn_wifi_password_field
         )
@@ -5612,36 +5586,33 @@ def draw_wifi_screen(now):
                 border = UI_PINK
             else:
                 border = UI_BLUE
-            draw_modern_button(screen, rect, border, border, 10)
-            draw_centered_text(
-                screen, f_tiny, wifi_key_label(value), UI_TEXT, rect
+            labeled_button(
+                screen, rect, border, f_tiny, wifi_key_label(value), 10
             )
         draw_pages_button()
         return
 
     status = f_tiny.render(fit_label(wifi_status_label(), 42), True, UI_MUTED)
     screen.blit(status, (160 - status.get_width() // 2, 64))
-    draw_modern_button(
-        screen, btn_wifi_scan, UI_PURPLE if wifi_busy else UI_BLUE,
-        UI_PURPLE if wifi_busy else UI_BLUE, 15
-    )
-    draw_centered_text(
-        screen, f_sm,
+    labeled_button(
+        screen, btn_wifi_scan,
+        UI_PURPLE if wifi_busy else UI_BLUE, f_sm,
         "SCANNING…" if wifi_busy else "SCAN NETWORKS",
-        UI_TEXT, btn_wifi_scan
+        15
     )
     visible = wifi_networks[:4]
     if visible:
         for network, rect in zip(visible, wifi_network_rects):
             border = UI_GREEN if network.get('connected') else UI_BLUE
-            draw_modern_button(screen, rect, border, border, 13)
+            body = draw_modern_button(screen, rect, border, border, 13)
             lock = "LOCK " if network.get('secure') else ""
             name = f_sm.render(
-                fit_label(f"{lock}{network['ssid']}", 22), True, UI_TEXT
+                fit_label(f"{lock}{network['ssid']}", 22),
+                True, contrasting_text(body)
             )
             screen.blit(name, (rect.x + 12, rect.y + 6))
             meta = f_tiny.render(
-                f"{network['signal']}%", True, (30, 32, 40)
+                f"{network['signal']}%", True, contrasting_muted(body)
             )
             screen.blit(meta, (rect.x + 12, rect.y + 26))
     else:
@@ -5651,11 +5622,9 @@ def draw_wifi_screen(now):
             screen, f_sm, "Tap SCAN to find Wi-Fi", UI_MUTED, empty
         )
     if wifi_setup_required:
-        draw_modern_button(screen, btn_wifi_skip, UI_AMBER, UI_AMBER, 14)
-        draw_centered_text(screen, f_sm, "SKIP", UI_TEXT, btn_wifi_skip)
+        labeled_button(screen, btn_wifi_skip, UI_AMBER, f_sm, "SKIP", 14)
     else:
-        draw_modern_button(screen, btn_wifi_skip, UI_PURPLE, UI_PURPLE, 14)
-        draw_centered_text(screen, f_sm, "‹ SETTINGS", UI_TEXT, btn_wifi_skip)
+        labeled_button(screen, btn_wifi_skip, UI_PURPLE, f_sm, "‹ SETTINGS", 14)
     draw_pages_button()
 
 def draw_languages_screen(now):
@@ -5664,8 +5633,7 @@ def draw_languages_screen(now):
         zip(LANGUAGE_STREAMS, language_card_rects)
     ):
         border = (UI_BLUE, UI_PURPLE, UI_AMBER)[index % 3]
-        draw_modern_button(screen, rect, UI_SURFACE_RAISED, border, 15)
-        draw_centered_text(screen, f_sm, language.upper(), UI_TEXT, rect)
+        labeled_button(screen, rect, border, f_sm, language.upper(), 15)
     draw_pages_button()
 
 def draw_language_stations_screen(now):
@@ -5715,38 +5683,32 @@ def draw_language_stations_screen(now):
 
     page_number = language_stream_offset // 5 + 1
     page_count = max(1, math.ceil(len(streams) / 5))
-    draw_modern_button(
-        screen, btn_language_previous, UI_SURFACE_RAISED,
-        UI_BLUE if language_stream_offset > 0 else (55, 61, 77), 13
-    )
-    draw_centered_text(
-        screen, f_tiny, "PREV", UI_TEXT, btn_language_previous
+    labeled_button(
+        screen, btn_language_previous,
+        UI_BLUE if language_stream_offset > 0 else (55, 61, 77),
+        f_tiny, "PREV", 13
     )
     page_rect = pygame.Rect(118, 360, 84, 44)
     draw_centered_text(
         screen, f_sm, f"{page_number} / {page_count}", UI_MUTED, page_rect
     )
     has_next = language_stream_offset + 5 < len(streams)
-    draw_modern_button(
-        screen, btn_language_next, UI_SURFACE_RAISED,
-        UI_BLUE if has_next else (55, 61, 77), 13
+    labeled_button(
+        screen, btn_language_next,
+        UI_BLUE if has_next else (55, 61, 77),
+        f_tiny, "NEXT", 13
     )
-    draw_centered_text(screen, f_tiny, "NEXT", UI_TEXT, btn_language_next)
-
-    draw_modern_button(
-        screen, btn_language_back, UI_SURFACE_RAISED, UI_BLUE, 16
-    )
-    draw_centered_text(
-        screen, f_sm, "<  LANGUAGES", UI_TEXT, btn_language_back
+    labeled_button(
+        screen, btn_language_back, UI_BLUE, f_sm, "<  LANGUAGES", 16
     )
 
 def draw_youtube_search_bar():
     typed = youtube_keyboard_text.strip() or youtube_touch_query
-    draw_modern_button(
+    body = draw_modern_button(
         screen, btn_youtube_search_field, UI_SURFACE_RAISED, UI_PURPLE, 14
     )
     label = fit_tail(typed, 20) if typed else "Search YouTube..."
-    color = UI_TEXT if typed else UI_MUTED
+    color = contrasting_text(body) if typed else contrasting_muted(body)
     text = f_sm.render(label, True, color)
     screen.blit(
         text,
@@ -5755,10 +5717,7 @@ def draw_youtube_search_bar():
             btn_youtube_search_field.centery - text.get_height() // 2,
         ),
     )
-    draw_modern_button(
-        screen, btn_youtube_search_go, UI_SURFACE_RAISED, UI_GREEN, 14
-    )
-    draw_centered_text(screen, f_sm, "GO", UI_TEXT, btn_youtube_search_go)
+    labeled_button(screen, btn_youtube_search_go, UI_GREEN, f_sm, "GO", 14)
 
 def draw_youtube_screen(now):
     draw_page_base("YOUTUBE", now)
@@ -5771,13 +5730,9 @@ def draw_youtube_screen(now):
                 border = UI_AMBER
             else:
                 border = UI_BLUE
-            draw_modern_button(screen, rect, UI_SURFACE, border, 10)
-            draw_centered_text(screen, f_tiny, label, UI_TEXT, rect)
-        draw_modern_button(
-            screen, btn_youtube_keyboard_close, UI_SURFACE_RAISED, UI_BLUE, 14
-        )
-        draw_centered_text(
-            screen, f_sm, "RESULTS", UI_TEXT, btn_youtube_keyboard_close
+            labeled_button(screen, rect, border, f_tiny, label, 10)
+        labeled_button(
+            screen, btn_youtube_keyboard_close, UI_BLUE, f_sm, "RESULTS", 14
         )
         draw_pages_button()
         return
@@ -5790,20 +5745,17 @@ def draw_youtube_screen(now):
     )
     for (label, query), rect in zip(YOUTUBE_PRESETS, youtube_preset_rects):
         selected = youtube_touch_query == query and not youtube_touch_busy
-        draw_modern_button(
-            screen, rect, UI_SURFACE_RAISED,
-            UI_PINK if selected else UI_BLUE, 12
+        labeled_button(
+            screen, rect, UI_PINK if selected else UI_BLUE, f_tiny, label, 12
         )
-        draw_centered_text(screen, f_tiny, label, UI_TEXT, rect)
 
     total = len(youtube_results_cache)
     has_prev = youtube_touch_offset > 0
     has_next = youtube_touch_offset + 4 < total
-    draw_modern_button(
-        screen, btn_youtube_prev, UI_SURFACE,
-        UI_BLUE if has_prev else (55, 61, 77), 10
+    labeled_button(
+        screen, btn_youtube_prev,
+        UI_BLUE if has_prev else (55, 61, 77), f_sm, "‹", 10
     )
-    draw_centered_text(screen, f_sm, "‹", UI_TEXT, btn_youtube_prev)
     if total:
         page_label = (
             f"{youtube_touch_offset + 1}"
@@ -5812,11 +5764,10 @@ def draw_youtube_screen(now):
     else:
         page_label = "NO RESULTS"
     draw_centered_text(screen, f_tiny, page_label, UI_MUTED, youtube_page_rect)
-    draw_modern_button(
-        screen, btn_youtube_next, UI_SURFACE,
-        UI_BLUE if has_next else (55, 61, 77), 10
+    labeled_button(
+        screen, btn_youtube_next,
+        UI_BLUE if has_next else (55, 61, 77), f_sm, "›", 10
     )
-    draw_centered_text(screen, f_sm, "›", UI_TEXT, btn_youtube_next)
 
     visible = youtube_results_cache[youtube_touch_offset:youtube_touch_offset + 4]
     if youtube_touch_busy and not visible:
@@ -6276,8 +6227,8 @@ while True:
         pygame.draw.line(screen, UI_PURPLE, (175, 58), (292, 58), 2)
 
         btn_qr = pygame.Rect(15, 13, 42, 40)
-        draw_modern_button(screen, btn_qr, (25, 48, 73), UI_BLUE, 12)
-        draw_centered_text(screen, f_sm, "QR", UI_BLUE, btn_qr)
+        qr_body = draw_modern_button(screen, btn_qr, UI_BLUE, UI_BLUE, 12)
+        draw_centered_text(screen, f_sm, "QR", contrasting_text(qr_body), btn_qr)
 
         title_rect = pygame.Rect(65, 10, 190, 38)
         draw_centered_text(screen, f_lg, "TC RADIOS", UI_TEXT, title_rect)
@@ -6379,21 +6330,19 @@ while True:
             UI_AMBER if is_playing else UI_GREEN,
             now
         )
-        draw_modern_button(screen, btn_prev, UI_SURFACE_RAISED, UI_BLUE, 16)
-        draw_modern_button(
-            screen, btn_toggle,
-            (66, 52, 42) if is_playing else (33, 73, 65),
-            UI_AMBER if is_playing else UI_GREEN,
-            18, 2
+        prev_body = draw_modern_button(screen, btn_prev, UI_BLUE, UI_BLUE, 16)
+        toggle_color = UI_AMBER if is_playing else UI_GREEN
+        toggle_body = draw_modern_button(
+            screen, btn_toggle, toggle_color, toggle_color, 18
         )
-        draw_modern_button(screen, btn_next, UI_SURFACE_RAISED, UI_PURPLE, 16)
-        draw_centered_text(screen, f_sm, "PREV", UI_TEXT, btn_prev)
+        next_body = draw_modern_button(screen, btn_next, UI_PURPLE, UI_PURPLE, 16)
+        draw_centered_text(screen, f_sm, "PREV", contrasting_text(prev_body), btn_prev)
         draw_centered_text(
             screen, f_sm, "PAUSE" if is_playing else "PLAY",
-            UI_AMBER if is_playing else UI_GREEN,
+            contrasting_text(toggle_body),
             btn_toggle
         )
-        draw_centered_text(screen, f_sm, "NEXT", UI_TEXT, btn_next)
+        draw_centered_text(screen, f_sm, "NEXT", contrasting_text(next_body), btn_next)
 
         # Airy bottom dock: inactive actions are intentionally borderless
         dock_rect = pygame.Rect(8, 420, 304, 54)
@@ -6422,15 +6371,15 @@ while True:
         draw_centered_text(screen, f_tiny, f"{vol_level}%", UI_TEXT, vol_rect)
         draw_centered_text(
             screen, f_tiny, "MUTE",
-            UI_PINK if vol_level == 0 else UI_MUTED,
+            UI_PINK if vol_level == 0 else UI_TEXT,
             btn_mute
         )
 
-        draw_modern_button(
-            screen, btn_open_pages, UI_SURFACE, UI_BLUE, 11
+        pages_body = draw_modern_button(
+            screen, btn_open_pages, UI_BLUE, UI_BLUE, 11
         )
         draw_centered_text(
-            screen, f_sm, "PAGES", UI_TEXT, btn_open_pages
+            screen, f_sm, "PAGES", contrasting_text(pages_body), btn_open_pages
         )
 
         if show_qr:
