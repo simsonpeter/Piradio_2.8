@@ -3898,44 +3898,63 @@ def parse_youtube_payload(stdout):
         return [video] if video['id'] else []
     return []
 
+def search_youtube(query):
+    query = str(query or '').strip()
+    if not query:
+        return [], 'Empty query'
+    video_id = ''
+    if 'youtube.com' in query or 'youtu.be' in query:
+        match = re.search(r'(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{6,32})', query)
+        video_id = match.group(1) if match else ''
+    if video_id:
+        stdout, err = run_ytdlp([
+            *ytdlp_extract_args(),
+            '--dump-single-json',
+            '--skip-download',
+            '--no-playlist',
+            f'https://www.youtube.com/watch?v={video_id}',
+        ], timeout=30)
+        if not stdout:
+            return [], err or 'Could not open that YouTube link'
+        return parse_youtube_payload(stdout), None
+    # Metadata only. --extract-audio downloads and converts every hit.
+    stdout, err = run_ytdlp([
+        '--dump-single-json',
+        '--flat-playlist',
+        '--skip-download',
+        f'ytsearch8:{query}',
+    ], timeout=25)
+    if not stdout:
+        return [], err or 'YouTube search failed'
+    return parse_youtube_payload(stdout), None
+
+def youtube_audio_url(video_id):
+    if not re.fullmatch(r'[A-Za-z0-9_-]{6,32}', str(video_id or '')):
+        return '', 'No video ID'
+    stdout, err = run_ytdlp([
+        *ytdlp_extract_args(),
+        '-f', 'bestaudio/best',
+        '--get-url',
+        '--no-playlist',
+        f'https://www.youtube.com/watch?v={video_id}',
+    ], timeout=40)
+    if stdout:
+        for line in stdout.splitlines():
+            candidate = line.strip()
+            if candidate.startswith('http'):
+                return candidate, None
+    return '', err or 'Could not extract audio URL'
+
 # YouTube API Routes
 @app.route('/api/youtube/search', methods=['POST'])
 def youtube_search():
     global youtube_results_cache
     try:
         data = request.get_json(silent=True) or {}
-        query = str(data.get('query', '')).strip()
-        if not query:
-            return jsonify({'success': False, 'error': 'Empty query'})
-
-        video_id = ''
-        if 'youtube.com' in query or 'youtu.be' in query:
-            match = re.search(r'(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{6,32})', query)
-            video_id = match.group(1) if match else ''
-
-        if video_id:
-            stdout, err = run_ytdlp([
-                *ytdlp_extract_args(),
-                '--dump-single-json',
-                '--skip-download',
-                '--no-playlist',
-                f'https://www.youtube.com/watch?v={video_id}',
-            ], timeout=30)
-            if not stdout:
-                return jsonify({'success': False, 'error': err or 'Could not open that YouTube link'}), 502
-            videos = parse_youtube_payload(stdout)
-        else:
-            # Metadata only. --extract-audio downloads and converts every hit.
-            stdout, err = run_ytdlp([
-                '--dump-single-json',
-                '--flat-playlist',
-                '--skip-download',
-                f'ytsearch8:{query}',
-            ], timeout=25)
-            if not stdout:
-                return jsonify({'success': False, 'error': err or 'YouTube search failed'}), 502
-            videos = parse_youtube_payload(stdout)
-
+        videos, err = search_youtube(data.get('query', ''))
+        if err and not videos:
+            status = 400 if err == 'Empty query' else 502
+            return jsonify({'success': False, 'error': err}), status
         youtube_results_cache = videos
         return jsonify({'success': True, 'results': videos})
     except Exception as e:
@@ -3943,43 +3962,15 @@ def youtube_search():
 
 @app.route('/api/youtube/play', methods=['POST'])
 def youtube_play():
-    global current_idx
     try:
         data = request.get_json(silent=True) or {}
         video_id = str(data.get('video_id', '')).strip()
         title = str(data.get('title') or 'YouTube Audio')
-
-        if not re.fullmatch(r'[A-Za-z0-9_-]{6,32}', video_id):
-            return jsonify({'success': False, 'error': 'No video ID'})
-
-        stdout, err = run_ytdlp([
-            *ytdlp_extract_args(),
-            '-f', 'bestaudio/best',
-            '--get-url',
-            '--no-playlist',
-            f'https://www.youtube.com/watch?v={video_id}',
-        ], timeout=40)
-        audio_url = ''
-        if stdout:
-            for line in stdout.splitlines():
-                candidate = line.strip()
-                if candidate.startswith('http'):
-                    audio_url = candidate
-                    break
-
-        if audio_url:
-            youtube_station = {
-                'name': f'YT: {title[:40]}',
-                'url': audio_url,
-                'genre': 'YouTube',
-                'logo': f'https://img.youtube.com/vi/{video_id}/mqdefault.jpg',
-                'youtube_id': video_id
-            }
-            stations.append(youtube_station)
-            current_idx = len(stations) - 1
-            play()
-            return jsonify({'success': True, 'message': f'Playing: {title}'})
-        return jsonify({'success': False, 'error': err or 'Could not extract audio URL'}), 502
+        audio_url, err = youtube_audio_url(video_id)
+        if not audio_url:
+            return jsonify({'success': False, 'error': err}), 502
+        play_youtube_station(video_id, title, audio_url)
+        return jsonify({'success': True, 'message': f'Playing: {title}'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -4404,6 +4395,30 @@ def play():
     except:
         pass
 
+def play_youtube_station(video_id, title, audio_url):
+    global current_idx
+    station = {
+        'name': f"YT: {str(title)[:40]}",
+        'url': audio_url,
+        'genre': 'YouTube',
+        'logo': f'https://img.youtube.com/vi/{video_id}/mqdefault.jpg',
+        'youtube_id': video_id,
+    }
+    existing = next(
+        (
+            index for index, item in enumerate(stations)
+            if item.get('youtube_id') == video_id
+        ),
+        None
+    )
+    if existing is None:
+        stations.append(station)
+        current_idx = len(stations) - 1
+    else:
+        stations[existing] = station
+        current_idx = existing
+    play()
+
 def save_favorites():
     try:
         with open(FAVORITES_FILE, "w") as favorites_file:
@@ -4746,6 +4761,12 @@ def fit_label(text, length=16):
     text = sanitize_text(text)
     return text if len(text) <= length else text[:length - 1] + "…"
 
+def fit_tail(text, length=28):
+    text = sanitize_text(text)
+    if len(text) <= length:
+        return text
+    return "…" + text[-(length - 1):]
+
 def draw_menu_screen(now):
     draw_page_base("TC RADIOS", now)
     labels = [
@@ -4756,21 +4777,25 @@ def draw_menu_screen(now):
         ("ALARM / SLEEP", "Timers"),
         ("SYSTEM", "Pi status"),
         ("LANGUAGES", "More streams"),
-        ("SETTINGS", "Sound • Wi-Fi • Themes")
+        ("SETTINGS", "Audio • Wi-Fi"),
+        ("YOUTUBE", "Search and play"),
     ]
     for index, (title, subtitle) in enumerate(labels):
         rect = menu_card_rects[index]
-        border = (UI_BLUE, UI_PURPLE, UI_AMBER)[index % 3]
+        border = (
+            UI_PINK if index == 8
+            else (UI_BLUE, UI_PURPLE, UI_AMBER)[index % 3]
+        )
         draw_modern_button(screen, rect, UI_SURFACE_RAISED, border, 16)
         title_surface = f_sm.render(title, True, UI_TEXT)
         screen.blit(
             title_surface,
-            (rect.centerx - title_surface.get_width() // 2, rect.y + 18)
+            (rect.centerx - title_surface.get_width() // 2, rect.y + 12)
         )
         subtitle_surface = f_tiny.render(subtitle, True, UI_MUTED)
         screen.blit(
             subtitle_surface,
-            (rect.centerx - subtitle_surface.get_width() // 2, rect.y + 43)
+            (rect.centerx - subtitle_surface.get_width() // 2, rect.y + 34)
         )
 def draw_favorites_screen(now):
     draw_page_base("FAVORITES", now)
@@ -5152,6 +5177,104 @@ def draw_language_stations_screen(now):
         screen, f_sm, "<  LANGUAGES", UI_TEXT, btn_language_back
     )
 
+def draw_youtube_screen(now):
+    draw_page_base("YOUTUBE", now)
+    if youtube_keyboard_open:
+        query_bar = pygame.Rect(16, 68, 288, 40)
+        draw_modern_button(screen, query_bar, UI_SURFACE_RAISED, UI_PURPLE, 14)
+        typed = youtube_keyboard_text.strip()
+        query_label = fit_tail(typed, 26) if typed else "Type to search"
+        query_color = UI_TEXT if typed else UI_MUTED
+        draw_centered_text(screen, f_sm, query_label, query_color, query_bar)
+        for label, value, rect in youtube_key_rects:
+            if value == "search":
+                border = UI_GREEN
+            elif value == "backspace":
+                border = UI_AMBER
+            else:
+                border = UI_BLUE
+            draw_modern_button(screen, rect, UI_SURFACE, border, 10)
+            draw_centered_text(screen, f_tiny, label, UI_TEXT, rect)
+        draw_modern_button(
+            screen, btn_youtube_keyboard_close, UI_SURFACE_RAISED, UI_BLUE, 14
+        )
+        draw_centered_text(
+            screen, f_sm, "RESULTS", UI_TEXT, btn_youtube_keyboard_close
+        )
+        draw_pages_button()
+        return
+
+    status = "Searching…" if youtube_touch_busy else youtube_touch_status
+    status_surface = f_tiny.render(fit_label(status, 42), True, UI_MUTED)
+    screen.blit(
+        status_surface,
+        (160 - status_surface.get_width() // 2, 64)
+    )
+    for (label, query), rect in zip(YOUTUBE_PRESETS, youtube_preset_rects):
+        selected = youtube_touch_query == query and not youtube_touch_busy
+        draw_modern_button(
+            screen, rect, UI_SURFACE_RAISED,
+            UI_PINK if selected else UI_BLUE, 12
+        )
+        draw_centered_text(screen, f_tiny, label, UI_TEXT, rect)
+
+    search_text = youtube_keyboard_text.strip() or youtube_touch_query or "TAP TO SEARCH"
+    draw_modern_button(
+        screen, btn_youtube_search, UI_SURFACE_RAISED, UI_PURPLE, 13
+    )
+    draw_centered_text(
+        screen, f_tiny, fit_label(search_text.upper(), 32), UI_TEXT, btn_youtube_search
+    )
+
+    total = len(youtube_results_cache)
+    has_prev = youtube_touch_offset > 0
+    has_next = youtube_touch_offset + 4 < total
+    draw_modern_button(
+        screen, btn_youtube_prev, UI_SURFACE,
+        UI_BLUE if has_prev else (55, 61, 77), 10
+    )
+    draw_centered_text(screen, f_sm, "‹", UI_TEXT, btn_youtube_prev)
+    if total:
+        page_label = (
+            f"{youtube_touch_offset + 1}"
+            f"-{min(youtube_touch_offset + 4, total)} / {total}"
+        )
+    else:
+        page_label = "NO RESULTS"
+    page_rect = pygame.Rect(74, 208, 172, 28)
+    draw_centered_text(screen, f_tiny, page_label, UI_MUTED, page_rect)
+    draw_modern_button(
+        screen, btn_youtube_next, UI_SURFACE,
+        UI_BLUE if has_next else (55, 61, 77), 10
+    )
+    draw_centered_text(screen, f_sm, "›", UI_TEXT, btn_youtube_next)
+
+    visible = youtube_results_cache[youtube_touch_offset:youtube_touch_offset + 4]
+    if youtube_touch_busy and not visible:
+        waiting = pygame.Rect(16, 244, 288, 168)
+        draw_modern_button(screen, waiting, UI_SURFACE, (45, 50, 65), 16)
+        draw_centered_text(screen, f_sm, "Searching YouTube…", UI_MUTED, waiting)
+    elif visible:
+        for video, rect in zip(visible, youtube_result_rects):
+            draw_modern_button(screen, rect, UI_SURFACE, (48, 54, 72), 12)
+            title = f_sm.render(fit_label(video.get('title', 'YouTube'), 28), True, UI_TEXT)
+            screen.blit(title, (rect.x + 12, rect.y + 4))
+            meta = f_tiny.render(
+                fit_label(
+                    f"{video.get('uploader', '')} • {video.get('duration', '')}",
+                    40
+                ),
+                True, UI_MUTED
+            )
+            screen.blit(meta, (rect.x + 12, rect.y + 22))
+    else:
+        empty = pygame.Rect(16, 244, 288, 168)
+        draw_modern_button(screen, empty, UI_SURFACE, (45, 50, 65), 16)
+        draw_centered_text(
+            screen, f_sm, "Choose a station or search", UI_MUTED, empty
+        )
+    draw_pages_button()
+
 def draw_screensaver():
     global saver_scroll_x
     # COMPLETELY BLACK BACKGROUND - no brightness
@@ -5216,14 +5339,161 @@ touch_start_time = 0
 active_page = "radio"
 PAGE_ORDER = [
     "radio", "favorites", "forecast", "clock",
-    "alarm", "system", "languages", "settings"
+    "alarm", "system", "languages", "settings", "youtube"
 ]
 btn_open_pages = pygame.Rect(90, 388, 140, 30)
 btn_pages = pygame.Rect(70, 430, 180, 38)
 menu_card_rects = [
-    pygame.Rect(16 + (index % 2) * 152, 72 + (index // 2) * 84, 136, 75)
+    pygame.Rect(16 + (index % 2) * 152, 68 + (index // 2) * 70, 136, 62)
     for index in range(8)
 ]
+menu_card_rects.append(pygame.Rect(16, 348, 288, 62))
+YOUTUBE_PRESETS = (
+    ("LOFI", "lofi hip hop radio"),
+    ("JAZZ", "smooth jazz radio"),
+    ("NEWS", "live news"),
+    ("CHILL", "chillout music"),
+    ("POP", "pop hits radio"),
+    ("CLASSICAL", "classical music radio"),
+)
+youtube_preset_rects = [
+    pygame.Rect(16 + (index % 3) * 102, 82 + (index // 3) * 42, 92, 36)
+    for index in range(6)
+]
+btn_youtube_search = pygame.Rect(16, 168, 288, 34)
+btn_youtube_prev = pygame.Rect(16, 208, 52, 28)
+btn_youtube_next = pygame.Rect(252, 208, 52, 28)
+youtube_result_rects = [
+    pygame.Rect(16, 244 + index * 44, 288, 40)
+    for index in range(4)
+]
+btn_youtube_keyboard_close = pygame.Rect(70, 372, 180, 40)
+youtube_keyboard_open = False
+youtube_keyboard_text = ""
+youtube_touch_query = ""
+youtube_touch_status = "Choose a station or search"
+youtube_touch_busy = False
+youtube_touch_offset = 0
+youtube_touch_pending = None
+
+def build_youtube_keys():
+    keys = []
+    rows = ("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm")
+    y = 116
+    key_w, key_h, gap = 28, 36, 3
+    for row in rows:
+        row_w = len(row) * key_w + (len(row) - 1) * gap
+        extra = 0
+        if row == "zxcvbnm":
+            extra = 6 + 46
+            row_w += extra
+        x = (320 - row_w) // 2
+        for character in row:
+            keys.append((
+                character.upper(),
+                character,
+                pygame.Rect(x, y, key_w, key_h)
+            ))
+            x += key_w + gap
+        if row == "zxcvbnm":
+            keys.append(("⌫", "backspace", pygame.Rect(x + 3, y, 46, key_h)))
+        y += 42
+    keys.append(("SPACE", "space", pygame.Rect(16, y, 140, 40)))
+    keys.append(("SEARCH", "search", pygame.Rect(164, y, 140, 40)))
+    return keys
+
+youtube_key_rects = build_youtube_keys()
+
+def fetch_youtube_search(query):
+    global youtube_touch_pending
+    try:
+        videos, err = search_youtube(query)
+        youtube_touch_pending = ('results', videos, err)
+    except Exception as error:
+        youtube_touch_pending = ('results', [], str(error))
+
+def fetch_youtube_audio(video):
+    global youtube_touch_pending
+    try:
+        video_id = str(video.get('id', '')).strip()
+        title = video.get('title') or 'YouTube Audio'
+        audio_url, err = youtube_audio_url(video_id)
+        if audio_url:
+            youtube_touch_pending = ('play', video_id, title, audio_url)
+        else:
+            youtube_touch_pending = ('error', err or 'Could not extract audio URL')
+    except Exception as error:
+        youtube_touch_pending = ('error', str(error))
+
+def begin_youtube_search(query):
+    global youtube_touch_busy, youtube_touch_status, youtube_touch_query
+    global youtube_keyboard_open, youtube_keyboard_text
+    query = str(query or '').strip()
+    if youtube_touch_busy:
+        return
+    if not query:
+        youtube_touch_status = "Type a search"
+        return
+    youtube_touch_query = query
+    youtube_keyboard_text = query
+    youtube_keyboard_open = False
+    youtube_touch_busy = True
+    youtube_touch_status = "Searching…"
+    threading.Thread(
+        target=fetch_youtube_search, args=(query,), daemon=True
+    ).start()
+
+def begin_youtube_play(video):
+    global youtube_touch_busy, youtube_touch_status
+    if youtube_touch_busy or not video.get('id'):
+        return
+    youtube_touch_busy = True
+    youtube_touch_status = "Opening audio…"
+    threading.Thread(
+        target=fetch_youtube_audio, args=(video,), daemon=True
+    ).start()
+
+def apply_youtube_touch_result():
+    global youtube_touch_pending, youtube_touch_busy, youtube_touch_status
+    global youtube_touch_offset, youtube_results_cache, active_page
+    pending = youtube_touch_pending
+    if not pending:
+        return
+    youtube_touch_pending = None
+    youtube_touch_busy = False
+    kind = pending[0]
+    if kind == 'results':
+        videos, err = pending[1], pending[2]
+        if err and not videos:
+            youtube_touch_status = err
+            youtube_results_cache = []
+        else:
+            youtube_results_cache = videos
+            youtube_touch_offset = 0
+            count = len(videos)
+            youtube_touch_status = (
+                f"{count} result" + ("s" if count != 1 else "")
+                if count else "No results"
+            )
+    elif kind == 'play':
+        _kind, video_id, title, audio_url = pending
+        play_youtube_station(video_id, title, audio_url)
+        youtube_touch_status = "Playing"
+        active_page = "radio"
+    elif kind == 'error':
+        youtube_touch_status = str(pending[1])[:80]
+
+def handle_youtube_key(value):
+    global youtube_keyboard_text
+    if value == "backspace":
+        youtube_keyboard_text = youtube_keyboard_text[:-1]
+    elif value == "space":
+        if len(youtube_keyboard_text) < 60:
+            youtube_keyboard_text += " "
+    elif value == "search":
+        begin_youtube_search(youtube_keyboard_text)
+    elif len(youtube_keyboard_text) < 60:
+        youtube_keyboard_text += value
 btn_favorite_toggle = pygame.Rect(90, 67, 140, 34)
 favorite_card_rects = [
     pygame.Rect(16 + (index % 2) * 152, 112 + (index // 2) * 96, 136, 86)
@@ -5323,6 +5593,7 @@ while True:
     
     handle_alarm_fade()
     handle_sleep_timer()
+    apply_youtube_touch_result()
     
     if now - last_weather_update > 1200:
         try:
@@ -5583,6 +5854,8 @@ while True:
                 draw_languages_screen(now)
             elif active_page == "language_stations":
                 draw_language_stations_screen(now)
+            elif active_page == "youtube":
+                draw_youtube_screen(now)
     
     for event in pygame.event.get():
         if event.type == pygame.MOUSEBUTTONDOWN:
@@ -5703,7 +5976,51 @@ while True:
 
             if active_page != "radio":
                 if btn_pages.collidepoint(event.pos):
+                    youtube_keyboard_open = False
                     active_page = "menu"
+                elif active_page == "youtube":
+                    if youtube_keyboard_open:
+                        if btn_youtube_keyboard_close.collidepoint(event.pos):
+                            youtube_keyboard_open = False
+                        else:
+                            for _label, value, rect in youtube_key_rects:
+                                if rect.collidepoint(event.pos):
+                                    handle_youtube_key(value)
+                                    break
+                    elif not youtube_touch_busy:
+                        if btn_youtube_search.collidepoint(event.pos):
+                            youtube_keyboard_open = True
+                        else:
+                            for (_label, query), rect in zip(
+                                YOUTUBE_PRESETS, youtube_preset_rects
+                            ):
+                                if rect.collidepoint(event.pos):
+                                    youtube_keyboard_text = query
+                                    begin_youtube_search(query)
+                                    break
+                            total = len(youtube_results_cache)
+                            if (
+                                btn_youtube_prev.collidepoint(event.pos)
+                                and youtube_touch_offset > 0
+                            ):
+                                youtube_touch_offset = max(
+                                    0, youtube_touch_offset - 4
+                                )
+                            elif (
+                                btn_youtube_next.collidepoint(event.pos)
+                                and youtube_touch_offset + 4 < total
+                            ):
+                                youtube_touch_offset += 4
+                            else:
+                                visible = youtube_results_cache[
+                                    youtube_touch_offset:youtube_touch_offset + 4
+                                ]
+                                for video, rect in zip(
+                                    visible, youtube_result_rects
+                                ):
+                                    if rect.collidepoint(event.pos):
+                                        begin_youtube_play(video)
+                                        break
                 elif active_page == "favorites":
                     if btn_favorite_toggle.collidepoint(event.pos):
                         toggle_current_favorite()
@@ -5884,6 +6201,7 @@ while True:
                 and abs(dx) > abs(dy)
                 and dt < 2.5
             ):
+                youtube_keyboard_open = False
                 page_index = PAGE_ORDER.index(active_page)
                 direction = 1 if dx < 0 else -1
                 active_page = PAGE_ORDER[
