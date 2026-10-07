@@ -5327,15 +5327,30 @@ def draw_language_stations_screen(now):
         screen, f_sm, "<  LANGUAGES", UI_TEXT, btn_language_back
     )
 
+def draw_youtube_search_bar():
+    typed = youtube_keyboard_text.strip() or youtube_touch_query
+    draw_modern_button(
+        screen, btn_youtube_search_field, UI_SURFACE_RAISED, UI_PURPLE, 14
+    )
+    label = fit_tail(typed, 20) if typed else "Search YouTube..."
+    color = UI_TEXT if typed else UI_MUTED
+    text = f_sm.render(label, True, color)
+    screen.blit(
+        text,
+        (
+            btn_youtube_search_field.x + 12,
+            btn_youtube_search_field.centery - text.get_height() // 2,
+        ),
+    )
+    draw_modern_button(
+        screen, btn_youtube_search_go, UI_SURFACE_RAISED, UI_GREEN, 14
+    )
+    draw_centered_text(screen, f_sm, "GO", UI_TEXT, btn_youtube_search_go)
+
 def draw_youtube_screen(now):
     draw_page_base("YOUTUBE", now)
+    draw_youtube_search_bar()
     if youtube_keyboard_open:
-        query_bar = pygame.Rect(16, 68, 288, 40)
-        draw_modern_button(screen, query_bar, UI_SURFACE_RAISED, UI_PURPLE, 14)
-        typed = youtube_keyboard_text.strip()
-        query_label = fit_tail(typed, 26) if typed else "Type to search"
-        query_color = UI_TEXT if typed else UI_MUTED
-        draw_centered_text(screen, f_sm, query_label, query_color, query_bar)
         for label, value, rect in youtube_key_rects:
             if value == "search":
                 border = UI_GREEN
@@ -5358,7 +5373,7 @@ def draw_youtube_screen(now):
     status_surface = f_tiny.render(fit_label(status, 42), True, UI_MUTED)
     screen.blit(
         status_surface,
-        (160 - status_surface.get_width() // 2, 64)
+        (160 - status_surface.get_width() // 2, 116)
     )
     for (label, query), rect in zip(YOUTUBE_PRESETS, youtube_preset_rects):
         selected = youtube_touch_query == query and not youtube_touch_busy
@@ -5367,14 +5382,6 @@ def draw_youtube_screen(now):
             UI_PINK if selected else UI_BLUE, 12
         )
         draw_centered_text(screen, f_tiny, label, UI_TEXT, rect)
-
-    search_text = youtube_keyboard_text.strip() or youtube_touch_query or "TAP TO SEARCH"
-    draw_modern_button(
-        screen, btn_youtube_search, UI_SURFACE_RAISED, UI_PURPLE, 13
-    )
-    draw_centered_text(
-        screen, f_tiny, fit_label(search_text.upper(), 32), UI_TEXT, btn_youtube_search
-    )
 
     total = len(youtube_results_cache)
     has_prev = youtube_touch_offset > 0
@@ -5391,8 +5398,7 @@ def draw_youtube_screen(now):
         )
     else:
         page_label = "NO RESULTS"
-    page_rect = pygame.Rect(74, 208, 172, 28)
-    draw_centered_text(screen, f_tiny, page_label, UI_MUTED, page_rect)
+    draw_centered_text(screen, f_tiny, page_label, UI_MUTED, youtube_page_rect)
     draw_modern_button(
         screen, btn_youtube_next, UI_SURFACE,
         UI_BLUE if has_next else (55, 61, 77), 10
@@ -5401,7 +5407,7 @@ def draw_youtube_screen(now):
 
     visible = youtube_results_cache[youtube_touch_offset:youtube_touch_offset + 4]
     if youtube_touch_busy and not visible:
-        waiting = pygame.Rect(16, 244, 288, 168)
+        waiting = pygame.Rect(16, 232, 288, 184)
         draw_modern_button(screen, waiting, UI_SURFACE, (45, 50, 65), 16)
         draw_centered_text(screen, f_sm, "Searching YouTube…", UI_MUTED, waiting)
     elif visible:
@@ -5418,10 +5424,10 @@ def draw_youtube_screen(now):
             )
             screen.blit(meta, (rect.x + 12, rect.y + 22))
     else:
-        empty = pygame.Rect(16, 244, 288, 168)
+        empty = pygame.Rect(16, 232, 288, 184)
         draw_modern_button(screen, empty, UI_SURFACE, (45, 50, 65), 16)
         draw_centered_text(
-            screen, f_sm, "Choose a station or search", UI_MUTED, empty
+            screen, f_sm, "Type in the search bar", UI_MUTED, empty
         )
     draw_pages_button()
 
@@ -5506,15 +5512,17 @@ YOUTUBE_PRESETS = (
     ("POP", "pop hits radio"),
     ("CLASSICAL", "classical music radio"),
 )
+btn_youtube_search_field = pygame.Rect(16, 68, 220, 42)
+btn_youtube_search_go = pygame.Rect(244, 68, 60, 42)
 youtube_preset_rects = [
-    pygame.Rect(16 + (index % 3) * 102, 82 + (index // 3) * 42, 92, 36)
+    pygame.Rect(16 + (index % 3) * 102, 134 + (index // 3) * 36, 92, 32)
     for index in range(6)
 ]
-btn_youtube_search = pygame.Rect(16, 168, 288, 34)
-btn_youtube_prev = pygame.Rect(16, 208, 52, 28)
-btn_youtube_next = pygame.Rect(252, 208, 52, 28)
+btn_youtube_prev = pygame.Rect(16, 210, 52, 28)
+btn_youtube_next = pygame.Rect(252, 210, 52, 28)
+youtube_page_rect = pygame.Rect(74, 210, 172, 28)
 youtube_result_rects = [
-    pygame.Rect(16, 244 + index * 44, 288, 40)
+    pygame.Rect(16, 246 + index * 44, 288, 40)
     for index in range(4)
 ]
 btn_youtube_keyboard_close = pygame.Rect(70, 372, 180, 40)
@@ -6129,7 +6137,15 @@ while True:
                     youtube_keyboard_open = False
                     active_page = "menu"
                 elif active_page == "youtube":
-                    if youtube_keyboard_open:
+                    if btn_youtube_search_go.collidepoint(event.pos):
+                        query = youtube_keyboard_text.strip() or youtube_touch_query
+                        if query:
+                            begin_youtube_search(query)
+                        else:
+                            youtube_keyboard_open = True
+                    elif btn_youtube_search_field.collidepoint(event.pos):
+                        youtube_keyboard_open = True
+                    elif youtube_keyboard_open:
                         if btn_youtube_keyboard_close.collidepoint(event.pos):
                             youtube_keyboard_open = False
                         else:
@@ -6138,9 +6154,6 @@ while True:
                                     handle_youtube_key(value)
                                     break
                     elif not youtube_touch_busy:
-                        if btn_youtube_search.collidepoint(event.pos):
-                            youtube_keyboard_open = True
-                        else:
                             for (_label, query), rect in zip(
                                 YOUTUBE_PRESETS, youtube_preset_rects
                             ):
