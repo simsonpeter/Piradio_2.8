@@ -71,6 +71,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     fonts-noto-core \
     fonts-noto-extra \
     fonts-lohit-taml \
+    libraqm0 \
     ffmpeg \
     nodejs \
     curl \

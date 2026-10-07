@@ -8,7 +8,7 @@ from flask import Flask, render_template_string, Response, jsonify, request
 import subprocess
 
 try:
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageFont
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
@@ -705,11 +705,11 @@ class Theme:
         self.secondary = colors.get('secondary', '#9d50bb')
         self.accent = colors.get('accent', '#ffcc00')
         self.text = colors.get('text', '#ffffff')
-        self.card = colors.get('card', 'rgba(20,20,20,0.95)')
-        self.button = colors.get('button', 'rgba(30,30,30,0.95)')
-        self.button_hover = colors.get('button_hover', 'rgba(50,50,50,0.95)')
+        self.card = colors.get('card', 'rgba(8,10,14,0.96)')
+        self.button = colors.get('button', colors.get('primary', '#2ee6ff'))
+        self.button_hover = colors.get('button_hover', colors.get('secondary', '#c86bff'))
         self.gradient_start = colors.get('gradient_start', '#000000')
-        self.gradient_end = colors.get('gradient_end', '#000000')
+        self.gradient_end = colors.get('gradient_end', colors.get('primary', '#2ee6ff'))
         self.pygame_primary = self.hex_to_rgb(self.primary)
         self.pygame_secondary = self.hex_to_rgb(self.secondary)
         self.pygame_accent = self.hex_to_rgb(self.accent)
@@ -725,120 +725,32 @@ class Theme:
         except ValueError:
             return (255, 255, 255)
 
-THEMES = {
-    'true_black': Theme('True Black', {
-        'name': 'True Black',
+def dark_theme(name, primary, secondary, accent):
+    return Theme(name, {
         'background': '#000000',
-        'primary': '#00d2ff',
-        'secondary': '#9d50bb',
-        'accent': '#ffcc00',
-        'text': '#ffffff',
-        'card': 'rgba(20,20,20,0.95)',
-        'button': 'rgba(30,30,30,0.95)',
-        'button_hover': 'rgba(50,50,50,0.95)',
+        'primary': primary,
+        'secondary': secondary,
+        'accent': accent,
+        'text': '#f6f7ff',
+        'card': 'rgba(8,10,14,0.96)',
+        'button': primary,
+        'button_hover': secondary,
         'gradient_start': '#000000',
-        'gradient_end': '#000000'
-    }),
-    'midnight_black': Theme('Midnight Black', {
-        'name': 'Midnight Black',
-        'background': '#0a0a0a',
-        'primary': '#00d2ff',
-        'secondary': '#9d50bb',
-        'accent': '#ffcc00',
-        'text': '#ffffff',
-        'gradient_start': '#0a0a0a',
-        'gradient_end': '#1a1a1a'
-    }),
-    'pure_white': Theme('Pure White', {
-        'name': 'Pure White',
-        'background': '#ffffff',
-        'primary': '#2c3e50',
-        'secondary': '#3498db',
-        'accent': '#e74c3c',
-        'text': '#2c3e50',
-        'gradient_start': '#f8f9fa',
-        'gradient_end': '#e9ecef'
-    }),
-    'ocean_blue': Theme('Ocean Blue', {
-        'name': 'Ocean Blue',
-        'background': '#0f3460',
-        'primary': '#00d2ff',
-        'secondary': '#1e90ff',
-        'accent': '#ff6b6b',
-        'text': '#ffffff',
-        'gradient_start': '#0f3460',
-        'gradient_end': '#16213e'
-    }),
-    'sunset_orange': Theme('Sunset Orange', {
-        'name': 'Sunset Orange',
-        'background': '#ff7e5f',
-        'primary': '#feb47b',
-        'secondary': '#ff6b6b',
-        'accent': '#2c3e50',
-        'text': '#ffffff',
-        'gradient_start': '#ff7e5f',
-        'gradient_end': '#feb47b'
-    }),
-    'forest_green': Theme('Forest Green', {
-        'name': 'Forest Green',
-        'background': '#1a472a',
-        'primary': '#2ecc71',
-        'secondary': '#27ae60',
-        'accent': '#f39c12',
-        'text': '#ffffff',
-        'gradient_start': '#1a472a',
-        'gradient_end': '#2d5a27'
-    }),
-    'purple_haze': Theme('Purple Haze', {
-        'name': 'Purple Haze',
-        'background': '#6a11cb',
-        'primary': '#2575fc',
-        'secondary': '#8a2be2',
-        'accent': '#ff416c',
-        'text': '#ffffff',
-        'gradient_start': '#6a11cb',
-        'gradient_end': '#2575fc'
-    }),
-    'cyberpunk': Theme('Cyberpunk', {
-        'name': 'Cyberpunk',
-        'background': '#0d0221',
-        'primary': '#ff00ff',
-        'secondary': '#00ffff',
-        'accent': '#ff6b00',
-        'text': '#ffffff',
-        'gradient_start': '#0d0221',
-        'gradient_end': '#2d00aa'
-    }),
-    'golden_hour': Theme('Golden Hour', {
-        'name': 'Golden Hour',
-        'background': '#f39c12',
-        'primary': '#e74c3c',
-        'secondary': '#d35400',
-        'accent': '#2c3e50',
-        'text': '#ffffff',
-        'gradient_start': '#f39c12',
-        'gradient_end': '#e74c3c'
-    }),
-    'mint_fresh': Theme('Mint Fresh', {
-        'name': 'Mint Fresh',
-        'background': '#00b894',
-        'primary': '#00cec9',
-        'secondary': '#81ecec',
-        'accent': '#fd79a8',
-        'text': '#2d3436',
-        'gradient_start': '#00b894',
-        'gradient_end': '#00cec9'
-    }),
-    'crimson_red': Theme('Crimson Red', {
-        'name': 'Crimson Red',
-        'background': '#c0392b',
-        'primary': '#e74c3c',
-        'secondary': '#ff7675',
-        'accent': '#fdcb6e',
-        'text': '#ffffff',
-        'gradient_start': '#c0392b',
-        'gradient_end': '#e74c3c'
+        'gradient_end': primary,
     })
+
+THEMES = {
+    'true_black': dark_theme('True Black', '#2ee6ff', '#c86bff', '#ffd166'),
+    'midnight_black': dark_theme('Midnight Black', '#4cc9f0', '#f72585', '#b5179e'),
+    'pure_white': dark_theme('Ice Night', '#f8fbff', '#7dd3fc', '#38bdf8'),
+    'ocean_blue': dark_theme('Ocean Blue', '#00e5ff', '#3b82f6', '#ff6b6b'),
+    'sunset_orange': dark_theme('Sunset Orange', '#ff8a3d', '#ff4d6d', '#ffd166'),
+    'forest_green': dark_theme('Forest Green', '#22e38a', '#12b886', '#ffc857'),
+    'purple_haze': dark_theme('Purple Haze', '#b388ff', '#7c4dff', '#ff4d88'),
+    'cyberpunk': dark_theme('Cyberpunk', '#ff2bd6', '#2bfff2', '#ff7a18'),
+    'golden_hour': dark_theme('Golden Hour', '#ffb703', '#fb8500', '#ff4d6d'),
+    'mint_fresh': dark_theme('Mint Fresh', '#2ee6c7', '#64ffda', '#ff7ab6'),
+    'crimson_red': dark_theme('Crimson Red', '#ff4d6d', '#ff8fa3', '#ffd166'),
 }
 
 current_theme = THEMES['true_black']
@@ -1077,7 +989,7 @@ HTML_TEMPLATE = """
         
         html, body {
             height: 100%;
-            background: var(--bg);
+            background: #000;
             color: var(--text);
             overflow: hidden;
             position: fixed;
@@ -1089,7 +1001,7 @@ HTML_TEMPLATE = """
             height: 100dvh;
             display: flex;
             flex-direction: column;
-            background: var(--bg);
+            background: #000;
             padding-top: var(--safe-top);
             padding-bottom: var(--safe-bottom);
         }
@@ -1126,8 +1038,8 @@ HTML_TEMPLATE = """
             width: 40px;
             height: 40px;
             border-radius: 12px;
-            background: var(--card);
-            border: 1px solid rgba(255,255,255,0.1);
+            background: color-mix(in srgb, var(--primary) 22%, #08080c);
+            border: 2px solid var(--primary);
             color: var(--text);
             display: flex;
             align-items: center;
@@ -1248,11 +1160,11 @@ HTML_TEMPLATE = """
         }
         
         .card {
-            background: var(--card);
+            background: #0a0c10;
             border-radius: 16px;
             padding: 16px;
             margin-bottom: 12px;
-            border: 1px solid rgba(255,255,255,0.05);
+            border: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
         }
         
         .player-card {
@@ -1317,8 +1229,8 @@ HTML_TEMPLATE = """
         }
         
         .control-btn {
-            background: var(--button);
-            border: 1px solid rgba(255,255,255,0.1);
+            background: color-mix(in srgb, var(--button) 28%, #08080c);
+            border: 2px solid var(--primary);
             border-radius: 16px;
             padding: 20px;
             color: var(--text);
@@ -2561,17 +2473,17 @@ HTML_TEMPLATE = """
     <script>
         // Theme definitions for instant switching without reload
         const themes = {
-            'true_black': { bg: '#000000', primary: '#00d2ff', secondary: '#9d50bb', accent: '#ffcc00', text: '#ffffff', card: 'rgba(20,20,20,0.95)', button: 'rgba(30,30,30,0.95)', buttonHover: 'rgba(50,50,50,0.95)', gradientStart: '#000000', gradientEnd: '#000000' },
-            'midnight_black': { bg: '#0a0a0a', primary: '#00d2ff', secondary: '#9d50bb', accent: '#ffcc00', text: '#ffffff', card: 'rgba(20,20,20,0.95)', button: 'rgba(30,30,30,0.95)', buttonHover: 'rgba(50,50,50,0.95)', gradientStart: '#0a0a0a', gradientEnd: '#1a1a1a' },
-            'pure_white': { bg: '#ffffff', primary: '#2c3e50', secondary: '#3498db', accent: '#e74c3c', text: '#2c3e50', card: 'rgba(240,240,240,0.95)', button: 'rgba(220,220,220,0.95)', buttonHover: 'rgba(200,200,200,0.95)', gradientStart: '#f8f9fa', gradientEnd: '#e9ecef' },
-            'ocean_blue': { bg: '#0f3460', primary: '#00d2ff', secondary: '#1e90ff', accent: '#ff6b6b', text: '#ffffff', card: 'rgba(15,52,96,0.95)', button: 'rgba(20,60,100,0.95)', buttonHover: 'rgba(25,70,120,0.95)', gradientStart: '#0f3460', gradientEnd: '#16213e' },
-            'sunset_orange': { bg: '#ff7e5f', primary: '#feb47b', secondary: '#ff6b6b', accent: '#2c3e50', text: '#ffffff', card: 'rgba(255,126,95,0.95)', button: 'rgba(255,140,100,0.95)', buttonHover: 'rgba(255,160,120,0.95)', gradientStart: '#ff7e5f', gradientEnd: '#feb47b' },
-            'forest_green': { bg: '#1a472a', primary: '#2ecc71', secondary: '#27ae60', accent: '#f39c12', text: '#ffffff', card: 'rgba(26,71,42,0.95)', button: 'rgba(30,80,50,0.95)', buttonHover: 'rgba(40,100,60,0.95)', gradientStart: '#1a472a', gradientEnd: '#2d5a27' },
-            'purple_haze': { bg: '#6a11cb', primary: '#2575fc', secondary: '#8a2be2', accent: '#ff416c', text: '#ffffff', card: 'rgba(106,17,203,0.95)', button: 'rgba(120,30,220,0.95)', buttonHover: 'rgba(140,50,240,0.95)', gradientStart: '#6a11cb', gradientEnd: '#2575fc' },
-            'cyberpunk': { bg: '#0d0221', primary: '#ff00ff', secondary: '#00ffff', accent: '#ff6b00', text: '#ffffff', card: 'rgba(13,2,33,0.95)', button: 'rgba(30,5,60,0.95)', buttonHover: 'rgba(50,10,100,0.95)', gradientStart: '#0d0221', gradientEnd: '#2d00aa' },
-            'golden_hour': { bg: '#f39c12', primary: '#e74c3c', secondary: '#d35400', accent: '#2c3e50', text: '#ffffff', card: 'rgba(243,156,18,0.95)', button: 'rgba(255,170,30,0.95)', buttonHover: 'rgba(255,190,50,0.95)', gradientStart: '#f39c12', gradientEnd: '#e74c3c' },
-            'mint_fresh': { bg: '#00b894', primary: '#00cec9', secondary: '#81ecec', accent: '#fd79a8', text: '#2d3436', card: 'rgba(0,184,148,0.95)', button: 'rgba(0,200,160,0.95)', buttonHover: 'rgba(0,220,180,0.95)', gradientStart: '#00b894', gradientEnd: '#00cec9' },
-            'crimson_red': { bg: '#c0392b', primary: '#e74c3c', secondary: '#ff7675', accent: '#fdcb6e', text: '#ffffff', card: 'rgba(192,57,43,0.95)', button: 'rgba(220,70,50,0.95)', buttonHover: 'rgba(240,90,70,0.95)', gradientStart: '#c0392b', gradientEnd: '#e74c3c' }
+            'true_black': { bg: '#000000', primary: '#2ee6ff', secondary: '#c86bff', accent: '#ffd166', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#2ee6ff', buttonHover: '#c86bff', gradientStart: '#000000', gradientEnd: '#2ee6ff' },
+            'midnight_black': { bg: '#000000', primary: '#4cc9f0', secondary: '#f72585', accent: '#b5179e', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#4cc9f0', buttonHover: '#f72585', gradientStart: '#000000', gradientEnd: '#4cc9f0' },
+            'pure_white': { bg: '#000000', primary: '#f8fbff', secondary: '#7dd3fc', accent: '#38bdf8', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#f8fbff', buttonHover: '#7dd3fc', gradientStart: '#000000', gradientEnd: '#f8fbff' },
+            'ocean_blue': { bg: '#000000', primary: '#00e5ff', secondary: '#3b82f6', accent: '#ff6b6b', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#00e5ff', buttonHover: '#3b82f6', gradientStart: '#000000', gradientEnd: '#00e5ff' },
+            'sunset_orange': { bg: '#000000', primary: '#ff8a3d', secondary: '#ff4d6d', accent: '#ffd166', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#ff8a3d', buttonHover: '#ff4d6d', gradientStart: '#000000', gradientEnd: '#ff8a3d' },
+            'forest_green': { bg: '#000000', primary: '#22e38a', secondary: '#12b886', accent: '#ffc857', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#22e38a', buttonHover: '#12b886', gradientStart: '#000000', gradientEnd: '#22e38a' },
+            'purple_haze': { bg: '#000000', primary: '#b388ff', secondary: '#7c4dff', accent: '#ff4d88', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#b388ff', buttonHover: '#7c4dff', gradientStart: '#000000', gradientEnd: '#b388ff' },
+            'cyberpunk': { bg: '#000000', primary: '#ff2bd6', secondary: '#2bfff2', accent: '#ff7a18', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#ff2bd6', buttonHover: '#2bfff2', gradientStart: '#000000', gradientEnd: '#ff2bd6' },
+            'golden_hour': { bg: '#000000', primary: '#ffb703', secondary: '#fb8500', accent: '#ff4d6d', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#ffb703', buttonHover: '#fb8500', gradientStart: '#000000', gradientEnd: '#ffb703' },
+            'mint_fresh': { bg: '#000000', primary: '#2ee6c7', secondary: '#64ffda', accent: '#ff7ab6', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#2ee6c7', buttonHover: '#64ffda', gradientStart: '#000000', gradientEnd: '#2ee6c7' },
+            'crimson_red': { bg: '#000000', primary: '#ff4d6d', secondary: '#ff8fa3', accent: '#ffd166', text: '#f6f7ff', card: 'rgba(8,10,14,0.96)', button: '#ff4d6d', buttonHover: '#ff8fa3', gradientStart: '#000000', gradientEnd: '#ff4d6d' }
         };
         
         function applyTheme(themeKey) {
@@ -4054,6 +3966,60 @@ def load_pygame_font(path, size):
 def contains_tamil(text):
     return any(ord(char) in TAMIL_RANGE for char in str(text or ''))
 
+def is_tamil_combiner(char):
+    code = ord(char)
+    return (
+        char in '\u200c\u200d'
+        or code in (0x0B82, 0x0B83, 0x0BD7)
+        or 0x0BBE <= code <= 0x0BCD
+    )
+
+def is_tamil_consonant(char):
+    return '\u0b95' <= char <= '\u0bb9'
+
+def tamil_visual_order(text):
+    """Put left-side Tamil vowels in front when the font cannot shape them."""
+    text = str(text or '')
+    if not contains_tamil(text):
+        return text
+    left_vowels = {'\u0bc6', '\u0bc7', '\u0bc8'}
+    split_vowels = {
+        '\u0bca': ('\u0bc6', '\u0bbe'),
+        '\u0bcb': ('\u0bc7', '\u0bbe'),
+        '\u0bcc': ('\u0bc6', '\u0bb3'),
+    }
+    result = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if not (ord(char) in TAMIL_RANGE or char in '\u200c\u200d'):
+            result.append(char)
+            index += 1
+            continue
+        cluster = [char]
+        index += 1
+        while index < len(text):
+            nxt = text[index]
+            if is_tamil_combiner(nxt):
+                cluster.append(nxt)
+                index += 1
+                continue
+            if cluster[-1] == '\u0bcd' and is_tamil_consonant(nxt):
+                cluster.append(nxt)
+                index += 1
+                continue
+            break
+        vowel = cluster[-1]
+        base = ''.join(cluster[:-1])
+        if vowel in left_vowels and base:
+            result.append(vowel + base)
+        elif vowel in split_vowels and base:
+            left, right = split_vowels[vowel]
+            result.append(left + base + right)
+        else:
+            result.append(''.join(cluster))
+    return ''.join(result)
+
 def sanitize_text(text):
     """Clean text for display - keeps Unicode characters including Tamil"""
     if not text:
@@ -4068,46 +4034,117 @@ def style_now_playing(text):
         return text
     return text.upper()
 
+def station_initials(name):
+    name = sanitize_text(name)
+    if not contains_tamil(name):
+        return name[:2].upper()
+    index = 0
+    while index < len(name) and name[index].isspace():
+        index += 1
+    if index >= len(name):
+        return name[:1]
+    cluster = name[index]
+    index += 1
+    while index < len(name):
+        nxt = name[index]
+        if is_tamil_combiner(nxt):
+            cluster += nxt
+            index += 1
+            continue
+        if cluster.endswith('\u0bcd') and is_tamil_consonant(nxt):
+            cluster += nxt
+            index += 1
+            continue
+        break
+    return tamil_visual_order(cluster)
+
+def truncate_display(text, length, tail=False):
+    text = sanitize_text(text)
+    if len(text) <= length:
+        return text
+    if not contains_tamil(text):
+        return ("…" + text[-(length - 1):]) if tail else (text[:length - 1] + "…")
+    if tail:
+        start = max(0, len(text) - (length - 1))
+        while start < len(text) and is_tamil_combiner(text[start]):
+            start += 1
+        return "…" + text[start:]
+    end = length - 1
+    while end > 0 and is_tamil_combiner(text[end]):
+        end -= 1
+    return text[:end] + "…"
+
+def render_pil_text(font_path, size, text, color, use_raqm=False):
+    if not PIL_AVAILABLE or not font_path:
+        return None
+    try:
+        layout = getattr(getattr(ImageFont, 'Layout', None), 'RAQM', None)
+        if use_raqm and layout is None:
+            return None
+        font = (
+            ImageFont.truetype(font_path, size, layout_engine=layout)
+            if use_raqm and layout is not None
+            else ImageFont.truetype(font_path, size)
+        )
+        probe = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
+        box = probe.textbbox((0, 0), text, font=font)
+        width = max(1, box[2] - box[0])
+        height = max(1, box[3] - box[1])
+        image = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+        fill = (*color, 255) if len(color) == 3 else color
+        ImageDraw.Draw(image).text((-box[0], -box[1]), text, font=font, fill=fill)
+        return pygame.image.fromstring(image.tobytes(), image.size, 'RGBA')
+    except Exception:
+        return None
+
+def render_shaped_text(font_path, size, text, color):
+    """Shape Tamil with RAQM when possible; otherwise use a visual fallback."""
+    if not font_path or not text:
+        return None
+    shaped = render_pil_text(font_path, size, text, color, use_raqm=True)
+    if shaped is not None:
+        return shaped
+    display = tamil_visual_order(text)
+    try:
+        import pygame.freetype
+        font = pygame.freetype.Font(font_path, size)
+        font.kerning = True
+        font.pad = True
+        surface, _rect = font.render(display, color)
+        if surface is not None:
+            return surface.convert_alpha()
+    except Exception:
+        pass
+    return render_pil_text(font_path, size, display, color, use_raqm=False)
+
 class UiFont:
-    """Latin font with a Tamil fallback so song names are not boxes."""
+    """Latin font with a Tamil font for whole words, so syllables stay intact."""
 
     def __init__(self, size, bold=False):
-        self.latin = load_pygame_font(latin_font_path(bold), size)
-        self.tamil = load_pygame_font(tamil_font_path(), size)
-
-    def _font_for(self, char):
-        if char and ord(char) in TAMIL_RANGE:
-            return self.tamil
-        return self.latin
+        self.size = size
+        self.latin_path = latin_font_path(bold)
+        self.tamil_path = tamil_font_path() or self.latin_path
+        self.latin = load_pygame_font(self.latin_path, size)
+        self.tamil = load_pygame_font(self.tamil_path, size)
+        self._shaped_cache = {}
 
     def render(self, text, antialias, color, background=None):
         text = str(text or '')
-        if not text or not contains_tamil(text):
+        if not text:
+            return self.latin.render('', antialias, color, background)
+        if not contains_tamil(text):
             return self.latin.render(text, antialias, color, background)
-        parts = []
-        current = text[0]
-        current_font = self._font_for(current)
-        for char in text[1:]:
-            next_font = current_font if char.isspace() else self._font_for(char)
-            if next_font is current_font:
-                current += char
-                continue
-            parts.append((current_font, current))
-            current = char
-            current_font = next_font
-        parts.append((current_font, current))
-        rendered = [
-            font.render(part, antialias, color, background)
-            for font, part in parts
-        ]
-        width = sum(surface.get_width() for surface in rendered)
-        height = max(surface.get_height() for surface in rendered)
-        combined = pygame.Surface((width, height), pygame.SRCALPHA)
-        x = 0
-        for surface in rendered:
-            combined.blit(surface, (x, (height - surface.get_height()) // 2))
-            x += surface.get_width()
-        return combined
+        cache_key = (text, tuple(color), background)
+        cached = self._shaped_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        shaped = render_shaped_text(self.tamil_path, self.size, text, color)
+        if shaped is None:
+            shaped = self.tamil.render(tamil_visual_order(text), antialias, color, background)
+        if len(self._shaped_cache) > 80:
+            self._shaped_cache.clear()
+        self._shaped_cache[cache_key] = shaped
+        return shaped
 
     def size(self, text):
         return self.render(text, True, (255, 255, 255)).get_size()
@@ -4201,29 +4238,28 @@ def create_ui_background():
         pygame.draw.line(background, color, (0, y), (319, y))
 
     glow = pygame.Surface((320, 480), pygame.SRCALPHA)
-    pygame.draw.circle(glow, (*UI_BLUE, 10), (292, 108), 115)
-    pygame.draw.circle(glow, (*UI_PURPLE, 12), (12, 360), 135)
+    pygame.draw.circle(glow, (*UI_BLUE, 28), (292, 108), 120)
+    pygame.draw.circle(glow, (*UI_PURPLE, 26), (12, 360), 140)
+    pygame.draw.circle(glow, (*UI_AMBER, 16), (160, 24), 90)
     background.blit(glow, (0, 0))
     return background
 
 def refresh_ui_palette():
     global UI_BG_TOP, UI_BG_BOTTOM, UI_SURFACE, UI_SURFACE_RAISED
-    global UI_TEXT, UI_MUTED, UI_BLUE, UI_PURPLE, UI_AMBER
+    global UI_TEXT, UI_MUTED, UI_BLUE, UI_PURPLE, UI_AMBER, UI_PINK, UI_GREEN
     global ui_background, ui_palette_theme
 
-    background = current_theme.pygame_background
-    theme_text = ensure_bright(current_theme.pygame_text, 195)
-    UI_BLUE = ensure_bright(current_theme.pygame_primary)
-    UI_PURPLE = ensure_bright(current_theme.pygame_secondary)
-    UI_AMBER = ensure_bright(current_theme.pygame_accent, 140)
-
-    # Keep every theme dark and calm; themes alter the accent pattern.
-    UI_BG_TOP = mix_colors((0, 0, 0), background, 0.08)
-    UI_BG_BOTTOM = mix_colors(UI_BG_TOP, UI_PURPLE, 0.07)
-    UI_SURFACE = mix_colors(UI_BG_TOP, theme_text, 0.07)
-    UI_SURFACE_RAISED = mix_colors(UI_BG_TOP, theme_text, 0.12)
-    UI_TEXT = theme_text
-    UI_MUTED = mix_colors(UI_BG_TOP, theme_text, 0.48)
+    UI_BLUE = ensure_bright(current_theme.pygame_primary, 155)
+    UI_PURPLE = ensure_bright(current_theme.pygame_secondary, 145)
+    UI_AMBER = ensure_bright(current_theme.pygame_accent, 155)
+    UI_PINK = ensure_bright(mix_colors(UI_PURPLE, (255, 72, 148), 0.5), 145)
+    UI_GREEN = ensure_bright(mix_colors(UI_BLUE, (46, 230, 150), 0.42), 145)
+    UI_TEXT = (246, 247, 255)
+    UI_BG_TOP = (0, 0, 0)
+    UI_BG_BOTTOM = mix_colors((0, 0, 0), UI_BLUE, 0.08)
+    UI_SURFACE = mix_colors((8, 8, 12), UI_BLUE, 0.16)
+    UI_SURFACE_RAISED = mix_colors((10, 10, 16), UI_BLUE, 0.32)
+    UI_MUTED = mix_colors((118, 122, 136), UI_BLUE, 0.22)
     ui_background = create_ui_background()
     ui_palette_theme = current_theme.name
 
@@ -4232,9 +4268,10 @@ def draw_centered_text(surface, font, text, color, rect):
     surface.blit(rendered, rendered.get_rect(center=rect.center))
     return rendered
 
-def draw_modern_button(surface, rect, fill, border, radius=14, border_width=1):
-    pygame.draw.rect(surface, fill, rect, border_radius=radius)
-    pygame.draw.rect(surface, border, rect, border_width, border_radius=radius)
+def draw_modern_button(surface, rect, fill, border, radius=14, border_width=2):
+    tinted = mix_colors(fill, border, 0.4)
+    pygame.draw.rect(surface, tinted, rect, border_radius=radius)
+    pygame.draw.rect(surface, border, rect, max(2, border_width), border_radius=radius)
     return rect
 
 def draw_animated_ui_glow(surface, now):
@@ -4469,7 +4506,7 @@ logo = pygame.Surface((LOGO_SIZE, LOGO_SIZE), pygame.SRCALPHA)
 logo.fill((0, 0, 0, 0))
 pygame.draw.circle(logo, (40, 40, 40), (LOGO_CENTER, LOGO_CENTER), LOGO_CENTER)
 pygame.draw.circle(logo, CYAN, (LOGO_CENTER, LOGO_CENTER), LOGO_CENTER, 2)
-initials = style_now_playing(stations[current_idx]['name'])[:2]
+initials = station_initials(stations[current_idx]['name'])
 text = f_lg.render(initials, True, CYAN)
 text_rect = text.get_rect(center=(LOGO_CENTER, LOGO_CENTER))
 logo.blit(text, text_rect)
@@ -4545,7 +4582,7 @@ def update_logo(url):
             2
         )
         if stations[current_idx]['name']:
-            initials = style_now_playing(stations[current_idx]['name'])[:2]
+            initials = station_initials(stations[current_idx]['name'])
             text = f_lg.render(initials, True, CYAN)
             text_rect = text.get_rect(center=(LOGO_CENTER, LOGO_CENTER))
             logo.blit(text, text_rect)
@@ -4982,14 +5019,10 @@ def draw_pages_button():
     draw_centered_text(screen, f_sm, "PAGES", UI_TEXT, btn_pages)
 
 def fit_label(text, length=16):
-    text = sanitize_text(text)
-    return text if len(text) <= length else text[:length - 1] + "…"
+    return truncate_display(text, length)
 
 def fit_tail(text, length=28):
-    text = sanitize_text(text)
-    if len(text) <= length:
-        return text
-    return "…" + text[-(length - 1):]
+    return truncate_display(text, length, tail=True)
 
 def draw_menu_screen(now):
     draw_page_base("TC RADIOS", now)
