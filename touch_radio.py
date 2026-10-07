@@ -4227,40 +4227,114 @@ LANGUAGE_STREAMS = {
     "Sinhala": f"{LANGUAGE_BASE_URL}/sinhala.json",
     "Telugu": f"{LANGUAGE_BASE_URL}/telugu.json"
 }
-LAST_STATION_FILE = "/home/raspberry/.last_station"
+LAST_STATION_FILE = os.path.expanduser("~/.last_station")
+STATIONS_CACHE_FILE = os.path.expanduser("~/.tcradios_stations.json")
+saved_station_url = ""
+saved_station_index = 0
+stations_waiting_for_github = False
 
-try:
-    stations = requests.get(URL, timeout=5).json()
-    print(f"Loaded {len(stations)} stations")
-except:
-    stations = [
-        {"name": "BBC Radio 1", "url": "http://stream.live.vc.bbcmedia.co.uk/bbc_radio_one", "genre": "Pop"},
-        {"name": "BBC Radio 2", "url": "http://stream.live.vc.bbcmedia.co.uk/bbc_radio_two", "genre": "Adult Contemporary"},
-        {"name": "Classic FM", "url": "http://media-ice.musicradio.com/ClassicFMMP3", "genre": "Classical"},
-    ]
+def normalize_stations(raw_stations):
+    loaded = []
+    if not isinstance(raw_stations, list):
+        return loaded
+    for item in raw_stations:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        url = str(item.get("url", "")).strip()
+        if not name or not url:
+            continue
+        station = dict(item)
+        station["name"] = name
+        station["url"] = url
+        loaded.append(station)
+    return loaded
 
-base_stations = [station.copy() for station in stations]
-
-current_idx = 0
-if os.path.exists(LAST_STATION_FILE):
+def read_saved_station():
+    global saved_station_url, saved_station_index
     try:
-        with open(LAST_STATION_FILE, "r") as f:
-            saved = int(f.read())
-            if 0 <= saved < len(stations):
-                current_idx = saved
-    except:
-        pass
+        text = open(LAST_STATION_FILE, "r").read().strip()
+        if text.startswith("{"):
+            saved = json.loads(text)
+            saved_station_url = str(saved.get("url", "")).strip()
+            saved_station_index = int(saved.get("index", 0))
+        else:
+            saved_station_index = int(text)
+    except (OSError, ValueError, TypeError):
+        saved_station_url = ""
+        saved_station_index = 0
+
+def read_stations_cache():
+    try:
+        with open(STATIONS_CACHE_FILE, "r") as cache_file:
+            return normalize_stations(json.load(cache_file))
+    except (OSError, ValueError, TypeError):
+        return []
+
+def write_stations_cache(loaded):
+    try:
+        with open(STATIONS_CACHE_FILE, "w") as cache_file:
+            json.dump(loaded, cache_file)
+    except OSError as error:
+        print(f"Could not save station list: {error}")
+
+def fetch_github_stations():
+    response = requests.get(URL, timeout=8)
+    response.raise_for_status()
+    return normalize_stations(response.json())
+
+def choose_station_index(loaded):
+    if saved_station_url:
+        for index, station in enumerate(loaded):
+            if station.get("url") == saved_station_url:
+                return index
+    if 0 <= saved_station_index < len(loaded):
+        return saved_station_index
+    return 0
+
+read_saved_station()
+try:
+    stations = fetch_github_stations()
+    if not stations:
+        raise ValueError("GitHub station list was empty")
+    write_stations_cache(stations)
+    print(f"Loaded {len(stations)} stations from GitHub")
+except Exception as error:
+    print(f"GitHub station list unavailable: {error}")
+    stations = read_stations_cache()
+    if stations:
+        print(f"Loaded {len(stations)} cached TCRADIOS stations")
+        stations_waiting_for_github = True
+    else:
+        stations = [{
+            "name": "Loading stations",
+            "url": "",
+            "genre": "TCRADIOS",
+        }]
+        stations_waiting_for_github = True
+        print("Waiting for the TCRADIOS station list")
+
+base_stations = [station.copy() for station in stations if station.get("url")]
+current_idx = choose_station_index(stations) if stations and stations[0].get("url") else 0
 
 FAVORITES_FILE = os.path.expanduser("~/.radio_favorites")
 favorite_indices = []
-try:
-    with open(FAVORITES_FILE, "r") as favorites_file:
-        favorite_indices = [
-            index for index in json.load(favorites_file)
-            if isinstance(index, int) and 0 <= index < len(stations)
-        ][:6]
-except (OSError, ValueError, TypeError):
-    favorite_indices = list(range(min(4, len(stations))))
+
+def load_favorite_indices():
+    global favorite_indices
+    try:
+        with open(FAVORITES_FILE, "r") as favorites_file:
+            favorite_indices = [
+                index for index in json.load(favorites_file)
+                if isinstance(index, int)
+                and 0 <= index < len(stations)
+                and stations[index].get("url")
+            ][:6]
+    except (OSError, ValueError, TypeError):
+        playable = len([station for station in stations if station.get("url")])
+        favorite_indices = list(range(min(4, playable)))
+
+load_favorite_indices()
 
 vol_level = 80
 last_weather_update = 0
@@ -4393,19 +4467,71 @@ def sanitize_text(text):
     return text.strip()
 
 def play():
-    global meta_text, scroll_x, saver_scroll_x
+    global meta_text, scroll_x, saver_scroll_x, saved_station_url, saved_station_index
     scroll_x = 320
     saver_scroll_x = 320
+    if not stations:
+        return
     station = stations[current_idx]
+    if not station.get("url"):
+        meta_text = "LOADING STATIONS"
+        return
     try:
         player.set_media(instance.media_new(station['url']))
         player.play()
         player.audio_set_volume(vol_level)
         update_logo(station.get('logo', ''))
-        with open(LAST_STATION_FILE, "w") as f:
-            f.write(str(current_idx))
+        saved_station_url = station.get("url", "")
+        saved_station_index = current_idx
+        with open(LAST_STATION_FILE, "w") as last_station_file:
+            json.dump(
+                {"index": current_idx, "url": saved_station_url},
+                last_station_file,
+            )
     except:
         pass
+
+def apply_github_station_list(loaded):
+    global current_idx, base_stations, stations_waiting_for_github
+    previous_url = ""
+    if stations and 0 <= current_idx < len(stations):
+        previous_url = stations[current_idx].get("url") or ""
+    extras = [
+        station for station in stations
+        if station.get("youtube_id") or station.get("language")
+        or station.get("direct_link_id")
+    ]
+    stations[:] = list(loaded) + extras
+    base_stations = [station.copy() for station in loaded]
+    if previous_url:
+        matched = next(
+            (index for index, station in enumerate(stations)
+             if station.get("url") == previous_url),
+            None,
+        )
+        if matched is not None:
+            current_idx = matched
+            stations_waiting_for_github = False
+            return
+    current_idx = choose_station_index(loaded)
+    stations_waiting_for_github = False
+    load_favorite_indices()
+    play()
+
+def retry_github_stations():
+    for _attempt in range(24):
+        time.sleep(5)
+        try:
+            loaded = fetch_github_stations()
+        except Exception:
+            continue
+        if not loaded:
+            continue
+        write_stations_cache(loaded)
+        print(f"Loaded {len(loaded)} stations from GitHub")
+        apply_github_station_list(loaded)
+        return
+    print("TCRADIOS station list could not be loaded")
 
 def play_youtube_station(video_id, title, audio_url):
     global current_idx
@@ -4577,6 +4703,8 @@ if splash_remaining > 0:
     time.sleep(splash_remaining)
 
 play()
+if stations_waiting_for_github:
+    threading.Thread(target=retry_github_stations, daemon=True).start()
 ip_display_time = time.time() + 10
 show_startup_ip = True
 
