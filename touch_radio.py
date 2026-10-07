@@ -4008,32 +4008,115 @@ os.environ['DISPLAY'] = ':0'
 pygame.init()
 
 # --- UNICODE FONT SETUP (Tamil Support) ---
-def get_unicode_font(size, bold=False):
-    """Load font with Unicode/Tamil support"""
-    font_paths = [
-        '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
-        '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
-        '/usr/share/fonts/truetype/noto/NotoSansTamil-Regular.ttf',
-        '/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc',
-        '/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf',
-        '/usr/share/fonts/truetype/noto/NotoSansTamil-Bold.ttf',
-        '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
-        '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf',
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-        '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-    ]
-    
+TAMIL_RANGE = range(0x0B80, 0x0BFF + 1)
+APP_FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+
+def first_existing_font(paths):
+    for path in paths:
+        if path and os.path.isfile(path):
+            return path
+    return None
+
+def latin_font_path(bold=False):
     if bold:
-        font_paths = [p for p in font_paths if 'Bold' in p] + font_paths
-    
-    for font_path in font_paths:
-        if os.path.exists(font_path):
-            try:
-                return pygame.font.Font(font_path, size)
-            except:
-                continue
-    
+        return first_existing_font([
+            '/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+            '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf',
+            '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        ])
+    return first_existing_font([
+        '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
+        '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+    ])
+
+def tamil_font_path():
+    return first_existing_font([
+        os.path.join(APP_FONT_DIR, "NotoSansTamil-Regular.ttf"),
+        '/usr/share/fonts/truetype/noto/NotoSansTamil-Regular.ttf',
+        '/usr/share/fonts/truetype/noto/NotoSansTamil-Bold.ttf',
+        '/usr/share/fonts/truetype/lohit-tamil/Lohit-Tamil.ttf',
+        '/usr/share/fonts/truetype/lohit-taml/Lohit-Tamil.ttf',
+        '/usr/share/fonts/truetype/samyak/Samyak-Tamil.ttf',
+    ])
+
+def load_pygame_font(path, size):
+    if path:
+        try:
+            return pygame.font.Font(path, size)
+        except Exception:
+            pass
     return pygame.font.Font(None, size)
+
+def contains_tamil(text):
+    return any(ord(char) in TAMIL_RANGE for char in str(text or ''))
+
+def sanitize_text(text):
+    """Clean text for display - keeps Unicode characters including Tamil"""
+    if not text:
+        return "Unknown"
+    text = str(text)
+    text = ''.join(char for char in text if ord(char) >= 32 or char == '\n')
+    return text.strip()
+
+def style_now_playing(text):
+    text = sanitize_text(text)
+    if contains_tamil(text):
+        return text
+    return text.upper()
+
+class UiFont:
+    """Latin font with a Tamil fallback so song names are not boxes."""
+
+    def __init__(self, size, bold=False):
+        self.latin = load_pygame_font(latin_font_path(bold), size)
+        self.tamil = load_pygame_font(tamil_font_path(), size)
+
+    def _font_for(self, char):
+        if char and ord(char) in TAMIL_RANGE:
+            return self.tamil
+        return self.latin
+
+    def render(self, text, antialias, color, background=None):
+        text = str(text or '')
+        if not text or not contains_tamil(text):
+            return self.latin.render(text, antialias, color, background)
+        parts = []
+        current = text[0]
+        current_font = self._font_for(current)
+        for char in text[1:]:
+            next_font = current_font if char.isspace() else self._font_for(char)
+            if next_font is current_font:
+                current += char
+                continue
+            parts.append((current_font, current))
+            current = char
+            current_font = next_font
+        parts.append((current_font, current))
+        rendered = [
+            font.render(part, antialias, color, background)
+            for font, part in parts
+        ]
+        width = sum(surface.get_width() for surface in rendered)
+        height = max(surface.get_height() for surface in rendered)
+        combined = pygame.Surface((width, height), pygame.SRCALPHA)
+        x = 0
+        for surface in rendered:
+            combined.blit(surface, (x, (height - surface.get_height()) // 2))
+            x += surface.get_width()
+        return combined
+
+    def size(self, text):
+        return self.render(text, True, (255, 255, 255)).get_size()
+
+    def get_height(self):
+        return self.latin.get_height()
+
+def get_unicode_font(size, bold=False):
+    return UiFont(size, bold=bold)
 
 # Load Unicode fonts
 try:
@@ -4043,7 +4126,7 @@ try:
     f_med = get_unicode_font(24, bold=True)
     f_tiny = get_unicode_font(12, bold=True)
     f_weather = get_unicode_font(42, bold=True)
-    print("Unicode fonts loaded successfully")
+    print(f"Unicode fonts loaded. Tamil font: {tamil_font_path() or 'missing'}")
 except Exception as e:
     print(f"Font error: {e}, using defaults")
     f_lg = pygame.font.Font(None, 24)
@@ -4386,7 +4469,7 @@ logo = pygame.Surface((LOGO_SIZE, LOGO_SIZE), pygame.SRCALPHA)
 logo.fill((0, 0, 0, 0))
 pygame.draw.circle(logo, (40, 40, 40), (LOGO_CENTER, LOGO_CENTER), LOGO_CENTER)
 pygame.draw.circle(logo, CYAN, (LOGO_CENTER, LOGO_CENTER), LOGO_CENTER, 2)
-initials = stations[current_idx]['name'][:2].upper()
+initials = style_now_playing(stations[current_idx]['name'])[:2]
 text = f_lg.render(initials, True, CYAN)
 text_rect = text.get_rect(center=(LOGO_CENTER, LOGO_CENTER))
 logo.blit(text, text_rect)
@@ -4462,19 +4545,10 @@ def update_logo(url):
             2
         )
         if stations[current_idx]['name']:
-            initials = stations[current_idx]['name'][:2].upper()
+            initials = style_now_playing(stations[current_idx]['name'])[:2]
             text = f_lg.render(initials, True, CYAN)
             text_rect = text.get_rect(center=(LOGO_CENTER, LOGO_CENTER))
             logo.blit(text, text_rect)
-
-def sanitize_text(text):
-    """Clean text for display - keeps Unicode characters including Tamil"""
-    if not text:
-        return "Unknown"
-    text = str(text)
-    # Remove control characters except newline
-    text = ''.join(char for char in text if ord(char) >= 32 or char == '\n')
-    return text.strip()
 
 def play():
     global meta_text, scroll_x, saver_scroll_x, saved_station_url, saved_station_index
@@ -5461,7 +5535,7 @@ def draw_screensaver():
     screen.blit(temp_surf, (weather_left + weather_icon_size * 2 + weather_gap, temp_y))
     
     # Third line: scrolling station name
-    station_name = f"RADIO: {sanitize_text(stations[current_idx]['name']).upper()}"
+    station_name = f"RADIO: {style_now_playing(stations[current_idx]['name'])}"
     station_surf = f_med.render(station_name, True, (0, 62, 62))
     saver_scroll_x -= 1
     if saver_scroll_x < -station_surf.get_width():
@@ -5798,13 +5872,13 @@ while True:
             try:
                 m = media.get_meta(vlc.Meta.NowPlaying)
                 if m:
-                    meta_text = sanitize_text(m).upper()
+                    meta_text = style_now_playing(m)
                 else:
-                    meta_text = sanitize_text(stations[current_idx]['name']).upper()
+                    meta_text = style_now_playing(stations[current_idx]['name'])
             except: 
-                meta_text = sanitize_text(stations[current_idx]['name']).upper()
+                meta_text = style_now_playing(stations[current_idx]['name'])
     except: 
-        meta_text = sanitize_text(stations[current_idx]['name']).upper()
+        meta_text = style_now_playing(stations[current_idx]['name'])
     
     if show_volume_bar and now - volume_bar_timer > 3:
         show_volume_bar = False

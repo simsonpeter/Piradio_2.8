@@ -70,6 +70,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     espeak \
     fonts-noto-core \
     fonts-noto-extra \
+    fonts-lohit-taml \
     ffmpeg \
     nodejs \
     curl \
