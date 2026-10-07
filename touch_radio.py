@@ -4229,6 +4229,10 @@ LANGUAGE_STREAMS = {
 }
 LAST_STATION_FILE = os.path.expanduser("~/.last_station")
 STATIONS_CACHE_FILE = os.path.expanduser("~/.tcradios_stations.json")
+BUNDLED_STATIONS_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "stations.json",
+)
 saved_station_url = ""
 saved_station_index = 0
 stations_waiting_for_github = False
@@ -4264,12 +4268,18 @@ def read_saved_station():
         saved_station_url = ""
         saved_station_index = 0
 
-def read_stations_cache():
+def read_stations_file(path):
     try:
-        with open(STATIONS_CACHE_FILE, "r") as cache_file:
-            return normalize_stations(json.load(cache_file))
+        with open(path, "r") as station_file:
+            return normalize_stations(json.load(station_file))
     except (OSError, ValueError, TypeError):
         return []
+
+def read_stations_cache():
+    return read_stations_file(STATIONS_CACHE_FILE)
+
+def read_bundled_stations():
+    return read_stations_file(BUNDLED_STATIONS_FILE)
 
 def write_stations_cache(loaded):
     try:
@@ -4301,9 +4311,9 @@ try:
     print(f"Loaded {len(stations)} stations from GitHub")
 except Exception as error:
     print(f"GitHub station list unavailable: {error}")
-    stations = read_stations_cache()
+    stations = read_stations_cache() or read_bundled_stations()
     if stations:
-        print(f"Loaded {len(stations)} cached TCRADIOS stations")
+        print(f"Loaded {len(stations)} TCRADIOS stations from the local copy")
         stations_waiting_for_github = True
     else:
         stations = [{
