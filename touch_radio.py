@@ -4268,10 +4268,12 @@ def draw_centered_text(surface, font, text, color, rect):
     surface.blit(rendered, rendered.get_rect(center=rect.center))
     return rendered
 
-def draw_modern_button(surface, rect, fill, border, radius=14, border_width=2):
-    tinted = mix_colors(fill, border, 0.4)
-    pygame.draw.rect(surface, tinted, rect, border_radius=radius)
-    pygame.draw.rect(surface, border, rect, max(2, border_width), border_radius=radius)
+def draw_modern_button(surface, rect, fill, border, radius=14, border_width=0):
+    body = border if (border[0] + border[1] + border[2]) > 90 else fill
+    luminance = body[0] * 0.2126 + body[1] * 0.7152 + body[2] * 0.0722
+    if luminance > 185:
+        body = mix_colors(body, (18, 20, 28), 0.35)
+    pygame.draw.rect(surface, body, rect, border_radius=radius)
     return rect
 
 def draw_animated_ui_glow(surface, now):
@@ -4493,6 +4495,16 @@ system_stats_updating = False
 touch_bluetooth_devices = []
 touch_bluetooth_status = "Tap Search to find nearby devices"
 touch_bluetooth_busy = False
+wifi_networks = []
+wifi_status_text = "Choose a network"
+wifi_busy = False
+wifi_pending = None
+wifi_password_open = False
+wifi_password_text = ""
+wifi_shift = False
+wifi_target = None
+wifi_setup_required = False
+wifi_from_settings = False
 language_stream_cache = {}
 selected_language = None
 language_stream_status = "Choose a language"
@@ -4752,6 +4764,214 @@ def scan_touch_bluetooth():
         touch_bluetooth_status = str(error)
     finally:
         touch_bluetooth_busy = False
+
+def has_network_connection():
+    try:
+        with open('/proc/net/route', 'r') as route_file:
+            next(route_file)
+            for line in route_file:
+                fields = line.split()
+                if (
+                    len(fields) > 1
+                    and fields[1] == '00000000'
+                    and fields[0] != 'lo'
+                ):
+                    return True
+    except (OSError, StopIteration):
+        pass
+    return False
+
+def run_nmcli(args, timeout=25):
+    last_error = 'Wi-Fi command failed'
+    for prefix in ([], ['sudo', '-n']):
+        try:
+            result = subprocess.run(
+                prefix + ['nmcli', *args],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except FileNotFoundError:
+            return '', 'nmcli is not installed'
+        except subprocess.TimeoutExpired:
+            last_error = 'Wi-Fi request timed out'
+            continue
+        if result.returncode == 0:
+            return (result.stdout or '').strip(), None
+        last_error = (
+            (result.stderr or result.stdout or last_error).strip().split('\n')[-1]
+        )
+    return '', last_error[:160]
+
+def current_wifi_ssid():
+    stdout, _err = run_nmcli(
+        ['-t', '-f', 'active,ssid', 'device', 'wifi'], timeout=8
+    )
+    for line in stdout.splitlines():
+        if line.startswith('yes:'):
+            return line.split(':', 1)[1]
+    return ''
+
+def parse_wifi_networks(stdout):
+    networks = []
+    seen = set()
+    for line in stdout.splitlines():
+        raw = line.replace('\\:', '\x00')
+        parts = raw.split(':')
+        if len(parts) < 4:
+            continue
+        in_use = parts[0] == '*'
+        security = parts[-1].replace('\x00', ':')
+        try:
+            strength = int(parts[-2])
+        except ValueError:
+            strength = 0
+        ssid = ':'.join(parts[1:-2]).replace('\x00', ':').strip()
+        if not ssid or ssid in seen:
+            continue
+        seen.add(ssid)
+        networks.append({
+            'ssid': ssid,
+            'signal': max(0, min(100, strength)),
+            'secure': bool(security and security not in ('--', '')),
+            'connected': in_use,
+        })
+    networks.sort(key=lambda item: (not item['connected'], -item['signal']))
+    return networks[:12]
+
+def wifi_status_label():
+    if wifi_busy:
+        return wifi_status_text
+    ssid = current_wifi_ssid()
+    if ssid:
+        return f"Connected: {ssid}"
+    if has_network_connection():
+        return f"Online • {current_ip}"
+    return "No network. Choose a Wi-Fi."
+
+def scan_touch_wifi():
+    global wifi_busy, wifi_pending
+    try:
+        run_nmcli(['device', 'wifi', 'rescan'], timeout=12)
+        stdout, err = run_nmcli(
+            ['-t', '-f', 'IN-USE,SSID,SIGNAL,SECURITY', 'device', 'wifi', 'list'],
+            timeout=20,
+        )
+        if err and not stdout:
+            wifi_pending = ('error', err)
+            return
+        wifi_pending = ('list', parse_wifi_networks(stdout))
+    except Exception as error:
+        wifi_pending = ('error', str(error))
+
+def connect_touch_wifi(ssid, password=''):
+    global wifi_pending
+    try:
+        args = ['device', 'wifi', 'connect', ssid]
+        if password:
+            args.extend(['password', password])
+        _stdout, err = run_nmcli(args, timeout=35)
+        if err:
+            wifi_pending = ('error', err)
+            return
+        wifi_pending = ('connected', ssid)
+    except Exception as error:
+        wifi_pending = ('error', str(error))
+
+def begin_wifi_scan():
+    global wifi_busy, wifi_status_text
+    if wifi_busy:
+        return
+    wifi_busy = True
+    wifi_status_text = "Scanning…"
+    threading.Thread(target=scan_touch_wifi, daemon=True).start()
+
+def begin_wifi_connect(network):
+    global wifi_busy, wifi_status_text, wifi_password_open, wifi_target
+    global wifi_password_text, wifi_shift
+    if wifi_busy or not network.get('ssid'):
+        return
+    if network.get('secure') and not wifi_password_open:
+        wifi_target = network
+        wifi_password_open = True
+        wifi_password_text = ""
+        wifi_shift = False
+        return
+    wifi_busy = True
+    wifi_password_open = False
+    wifi_status_text = f"Joining {network['ssid']}…"
+    password = wifi_password_text if network.get('secure') else ''
+    threading.Thread(
+        target=connect_touch_wifi,
+        args=(network['ssid'], password),
+        daemon=True,
+    ).start()
+
+def apply_wifi_result():
+    global wifi_pending, wifi_busy, wifi_status_text, wifi_networks
+    global wifi_password_open, wifi_setup_required, active_page, current_ip
+    pending = wifi_pending
+    if not pending:
+        return
+    wifi_pending = None
+    wifi_busy = False
+    kind = pending[0]
+    if kind == 'list':
+        wifi_networks = pending[1]
+        wifi_status_text = (
+            f"{len(wifi_networks)} network"
+            f"{'s' if len(wifi_networks) != 1 else ''}"
+            if wifi_networks else "No networks found"
+        )
+    elif kind == 'connected':
+        wifi_password_open = False
+        current_ip = get_local_ip()
+        wifi_status_text = f"Connected: {pending[1]}"
+        begin_wifi_scan()
+        if stations_waiting_for_github:
+            threading.Thread(target=retry_github_stations, daemon=True).start()
+        if wifi_setup_required:
+            wifi_setup_required = False
+            active_page = "radio"
+    elif kind == 'error':
+        wifi_status_text = str(pending[1])[:80]
+
+def submit_wifi_password():
+    global wifi_busy, wifi_status_text
+    if wifi_busy or not wifi_target:
+        return
+    wifi_busy = True
+    wifi_status_text = f"Joining {wifi_target['ssid']}…"
+    threading.Thread(
+        target=connect_touch_wifi,
+        args=(wifi_target['ssid'], wifi_password_text),
+        daemon=True,
+    ).start()
+
+def handle_wifi_key(value):
+    global wifi_password_text, wifi_shift, wifi_password_open
+    symbols = {
+        '1': '!', '2': '@', '3': '#', '4': '$', '5': '%',
+        '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
+        '-': '_', '.': ',', '/': '?',
+    }
+    if value == 'shift':
+        wifi_shift = not wifi_shift
+    elif value == 'backspace':
+        wifi_password_text = wifi_password_text[:-1]
+    elif value == 'space':
+        if len(wifi_password_text) < 63:
+            wifi_password_text += ' '
+    elif value == 'cancel':
+        wifi_password_open = False
+        wifi_password_text = ''
+        wifi_shift = False
+    elif value == 'connect':
+        submit_wifi_password()
+    elif len(wifi_password_text) < 63:
+        typed = symbols.get(value, value.upper()) if wifi_shift else value
+        wifi_password_text += typed
+        wifi_shift = False
 
 def connect_touch_bluetooth(address, name):
     global touch_bluetooth_devices, touch_bluetooth_status
@@ -5288,12 +5508,10 @@ def draw_settings_screen(now):
     draw_modern_button(screen, btn_theme_next, UI_SURFACE, UI_BLUE, 14)
     draw_centered_text(screen, f_lg, "›", UI_TEXT, btn_theme_next)
 
-    draw_modern_button(screen, btn_wifi_qr, UI_SURFACE_RAISED, UI_PURPLE, 14)
-    draw_centered_text(
-        screen, f_tiny,
-        f"WEB / QR  •  {fit_label(current_ip, 18)}",
-        UI_TEXT, btn_wifi_qr
-    )
+    draw_modern_button(screen, btn_wifi_setup, UI_GREEN, UI_GREEN, 14)
+    draw_centered_text(screen, f_tiny, "WI-FI", UI_TEXT, btn_wifi_setup)
+    draw_modern_button(screen, btn_wifi_qr, UI_PURPLE, UI_PURPLE, 14)
+    draw_centered_text(screen, f_tiny, "WEB QR", UI_TEXT, btn_wifi_qr)
     draw_pages_button()
 
 def draw_bluetooth_screen(now):
@@ -5351,6 +5569,94 @@ def draw_bluetooth_screen(now):
     draw_centered_text(
         screen, f_sm, "‹  SETTINGS", UI_TEXT, btn_bluetooth_back
     )
+
+def wifi_key_label(value):
+    names = {
+        'shift': 'SHIFT',
+        'space': 'SPACE',
+        'backspace': '⌫',
+        'connect': 'JOIN',
+        'cancel': 'BACK',
+    }
+    if value in names:
+        return names[value]
+    if wifi_shift:
+        symbols = {
+            '1': '!', '2': '@', '3': '#', '4': '$', '5': '%',
+            '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
+            '-': '_', '.': ',', '/': '?',
+        }
+        return symbols.get(value, value.upper())
+    return value
+
+def draw_wifi_screen(now):
+    draw_page_base("WI-FI", now)
+    if wifi_password_open and wifi_target:
+        name = fit_label(wifi_target.get('ssid', 'Wi-Fi'), 28)
+        status = f_tiny.render(name, True, UI_MUTED)
+        screen.blit(status, (160 - status.get_width() // 2, 64))
+        draw_modern_button(
+            screen, btn_wifi_password_field, UI_PURPLE, UI_PURPLE, 14
+        )
+        secret = '•' * len(wifi_password_text) if wifi_password_text else "Password"
+        color = UI_TEXT if wifi_password_text else (40, 42, 50)
+        draw_centered_text(
+            screen, f_sm, fit_tail(secret, 22), color, btn_wifi_password_field
+        )
+        for value, rect in wifi_key_rects:
+            if value == 'connect':
+                border = UI_GREEN
+            elif value == 'shift' and wifi_shift:
+                border = UI_AMBER
+            elif value in ('backspace', 'cancel'):
+                border = UI_PINK
+            else:
+                border = UI_BLUE
+            draw_modern_button(screen, rect, border, border, 10)
+            draw_centered_text(
+                screen, f_tiny, wifi_key_label(value), UI_TEXT, rect
+            )
+        draw_pages_button()
+        return
+
+    status = f_tiny.render(fit_label(wifi_status_label(), 42), True, UI_MUTED)
+    screen.blit(status, (160 - status.get_width() // 2, 64))
+    draw_modern_button(
+        screen, btn_wifi_scan, UI_PURPLE if wifi_busy else UI_BLUE,
+        UI_PURPLE if wifi_busy else UI_BLUE, 15
+    )
+    draw_centered_text(
+        screen, f_sm,
+        "SCANNING…" if wifi_busy else "SCAN NETWORKS",
+        UI_TEXT, btn_wifi_scan
+    )
+    visible = wifi_networks[:4]
+    if visible:
+        for network, rect in zip(visible, wifi_network_rects):
+            border = UI_GREEN if network.get('connected') else UI_BLUE
+            draw_modern_button(screen, rect, border, border, 13)
+            lock = "LOCK " if network.get('secure') else ""
+            name = f_sm.render(
+                fit_label(f"{lock}{network['ssid']}", 22), True, UI_TEXT
+            )
+            screen.blit(name, (rect.x + 12, rect.y + 6))
+            meta = f_tiny.render(
+                f"{network['signal']}%", True, (30, 32, 40)
+            )
+            screen.blit(meta, (rect.x + 12, rect.y + 26))
+    else:
+        empty = pygame.Rect(16, 142, 288, 200)
+        draw_modern_button(screen, empty, UI_SURFACE, (55, 61, 77), 16)
+        draw_centered_text(
+            screen, f_sm, "Tap SCAN to find Wi-Fi", UI_MUTED, empty
+        )
+    if wifi_setup_required:
+        draw_modern_button(screen, btn_wifi_skip, UI_AMBER, UI_AMBER, 14)
+        draw_centered_text(screen, f_sm, "SKIP", UI_TEXT, btn_wifi_skip)
+    else:
+        draw_modern_button(screen, btn_wifi_skip, UI_PURPLE, UI_PURPLE, 14)
+        draw_centered_text(screen, f_sm, "‹ SETTINGS", UI_TEXT, btn_wifi_skip)
+    draw_pages_button()
 
 def draw_languages_screen(now):
     draw_page_base("LANGUAGES", now)
@@ -5784,7 +6090,41 @@ btn_auto_dim = pygame.Rect(78, 184, 164, 48)
 btn_brightness_plus = pygame.Rect(252, 184, 50, 48)
 btn_theme_previous = pygame.Rect(18, 274, 50, 58)
 btn_theme_next = pygame.Rect(252, 274, 50, 58)
-btn_wifi_qr = pygame.Rect(55, 353, 210, 50)
+btn_wifi_setup = pygame.Rect(16, 353, 140, 50)
+btn_wifi_qr = pygame.Rect(164, 353, 140, 50)
+btn_wifi_scan = pygame.Rect(16, 86, 288, 40)
+wifi_network_rects = [
+    pygame.Rect(16, 142 + index * 50, 288, 46) for index in range(4)
+]
+btn_wifi_skip = pygame.Rect(70, 352, 180, 42)
+btn_wifi_password_field = pygame.Rect(16, 86, 288, 40)
+
+def build_wifi_keys():
+    keys = []
+    rows = ("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm-./")
+    y = 136
+    key_w, key_h, gap = 28, 34, 3
+    for row in rows:
+        row_w = len(row) * key_w + (len(row) - 1) * gap
+        x = (320 - row_w) // 2
+        for character in row:
+            keys.append((character, pygame.Rect(x, y, key_w, key_h)))
+            x += key_w + gap
+        y += 38
+    keys.extend((
+        ('shift', pygame.Rect(16, y, 70, 38)),
+        ('space', pygame.Rect(92, y, 70, 38)),
+        ('backspace', pygame.Rect(168, y, 52, 38)),
+        ('connect', pygame.Rect(226, y, 78, 38)),
+        ('cancel', pygame.Rect(70, 372, 180, 40)),
+    ))
+    return keys
+
+wifi_key_rects = build_wifi_keys()
+if not has_network_connection():
+    wifi_setup_required = True
+    active_page = "wifi"
+    begin_wifi_scan()
 btn_bluetooth_search = pygame.Rect(70, 75, 180, 42)
 bluetooth_device_rects = [
     pygame.Rect(18, 142 + index * 46, 284, 42) for index in range(6)
@@ -5859,6 +6199,7 @@ while True:
     handle_alarm_fade()
     handle_sleep_timer()
     apply_youtube_touch_result()
+    apply_wifi_result()
     
     if now - last_weather_update > 1200:
         try:
@@ -6121,6 +6462,8 @@ while True:
                 draw_language_stations_screen(now)
             elif active_page == "youtube":
                 draw_youtube_screen(now)
+            elif active_page == "wifi":
+                draw_wifi_screen(now)
     
     for event in pygame.event.get():
         if event.type == pygame.MOUSEBUTTONDOWN:
@@ -6146,6 +6489,32 @@ while True:
                     if card.collidepoint(event.pos):
                         active_page = PAGE_ORDER[page_index]
                         break
+                continue
+
+            if active_page == "wifi":
+                if btn_pages.collidepoint(event.pos):
+                    wifi_password_open = False
+                    wifi_setup_required = False
+                    active_page = "menu"
+                elif wifi_password_open:
+                    for value, rect in wifi_key_rects:
+                        if rect.collidepoint(event.pos):
+                            handle_wifi_key(value)
+                            break
+                elif btn_wifi_scan.collidepoint(event.pos):
+                    begin_wifi_scan()
+                elif btn_wifi_skip.collidepoint(event.pos):
+                    wifi_password_open = False
+                    if wifi_setup_required:
+                        wifi_setup_required = False
+                        active_page = "radio"
+                    else:
+                        active_page = "settings"
+                elif not wifi_busy:
+                    for network, rect in zip(wifi_networks[:4], wifi_network_rects):
+                        if rect.collidepoint(event.pos):
+                            begin_wifi_connect(network)
+                            break
                 continue
 
             if active_page == "bluetooth":
@@ -6379,6 +6748,13 @@ while True:
                             not device_settings.auto_dim_enabled
                         )
                         device_settings.save()
+                    elif btn_wifi_setup.collidepoint(event.pos):
+                        wifi_from_settings = True
+                        wifi_setup_required = False
+                        wifi_password_open = False
+                        active_page = "wifi"
+                        if not wifi_networks and not wifi_busy:
+                            begin_wifi_scan()
                     elif btn_wifi_qr.collidepoint(event.pos):
                         show_qr = True
                     elif (

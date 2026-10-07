@@ -81,6 +81,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     plymouth \
     plymouth-themes \
     bluez \
+    network-manager \
     "${AUDIO_PACKAGES[@]}"
 
 echo "Verifying Python dependencies..."
@@ -250,8 +251,10 @@ WantedBy=graphical.target
 EOF
 systemctl enable tcradios-release-display.service
 
+usermod -aG netdev,plugdev "${INSTALL_USER}" || true
+
 cat > /etc/sudoers.d/tcradios-power <<EOF
-${INSTALL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl reboot
+${INSTALL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl reboot, /usr/bin/nmcli
 EOF
 chmod 0440 /etc/sudoers.d/tcradios-power
 visudo -cf /etc/sudoers.d/tcradios-power
