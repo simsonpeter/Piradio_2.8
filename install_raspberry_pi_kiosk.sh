@@ -156,6 +156,8 @@ if [[ ! -t 1 ]]; then
 fi
 
 export DISPLAY="\${DISPLAY:-:0}"
+# Drop the boot splash as soon as the desktop is ready to draw.
+plymouth quit >/dev/null 2>&1 || true
 DISPLAY_NUMBER="\${DISPLAY#:}"
 for _ in {1..30}; do
     [[ -S "/tmp/.X11-unix/X\${DISPLAY_NUMBER}" ]] && break
@@ -206,11 +208,48 @@ if command -v raspi-config >/dev/null 2>&1; then
 fi
 
 systemctl set-default graphical.target
+# The long Plymouth wait keeps the splash on screen. Shutdown Plymouth
+# services also deadlock the LCD35 display, so reboot never finishes.
 systemctl mask plymouth-quit-wait.service
+systemctl mask plymouth-reboot.service
+systemctl mask plymouth-poweroff.service
+systemctl mask plymouth-halt.service
 systemctl disable NetworkManager-wait-online.service || true
 
+install -d /etc/systemd/system.conf.d
+cat > /etc/systemd/system.conf.d/tcradios-reboot.conf <<EOF
+[Manager]
+DefaultTimeoutStopSec=15s
+DefaultTimeoutAbortSec=15s
+EOF
+
+install -d /etc/systemd/logind.conf.d
+cat > /etc/systemd/logind.conf.d/tcradios.conf <<EOF
+[Login]
+KillUserProcesses=yes
+UserStopDelaySec=5
+EOF
+
+cat > /etc/systemd/system/tcradios-release-display.service <<EOF
+[Unit]
+Description=Release the TCRADIOS boot splash
+DefaultDependencies=no
+After=plymouth-start.service
+Before=graphical.target display-manager.service
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '/usr/bin/plymouth quit || true'
+TimeoutStartSec=5
+
+[Install]
+WantedBy=graphical.target
+EOF
+systemctl enable tcradios-release-display.service
+
 cat > /etc/sudoers.d/tcradios-power <<EOF
-${INSTALL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff
+${INSTALL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl reboot
 EOF
 chmod 0440 /etc/sudoers.d/tcradios-power
 visudo -cf /etc/sudoers.d/tcradios-power

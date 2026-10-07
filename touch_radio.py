@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import pygame, vlc, requests, time, os, io, math, socket, sys, threading, qrcode, json, base64, random, re, shutil
+import pygame, vlc, requests, time, os, io, math, socket, sys, threading, qrcode, json, base64, random, re, shutil, signal
 from urllib.request import urlopen
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
@@ -4069,6 +4069,18 @@ screen.blit(splash_subtitle, splash_subtitle.get_rect(center=(160, 257)))
 pygame.draw.line(screen, (38, 150, 210), (100, 282), (220, 282), 2)
 pygame.display.flip()
 splash_started_at = time.time()
+
+def release_display_and_exit(_signum, _frame):
+    # Exit immediately so a fullscreen window cannot hold up reboot.
+    try:
+        pygame.display.quit()
+        pygame.quit()
+    except Exception:
+        pass
+    os._exit(0)
+
+signal.signal(signal.SIGTERM, release_display_and_exit)
+signal.signal(signal.SIGINT, release_display_and_exit)
 
 UI_BG_TOP = (0, 0, 0)
 UI_BG_BOTTOM = (7, 7, 10)
