@@ -69,6 +69,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     pulseaudio-utils \
     espeak \
     espeak-ng \
+    libttspico-utils \
     fonts-noto-core \
     fonts-noto-extra \
     fonts-lohit-taml \

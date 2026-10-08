@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import pygame, vlc, requests, time, os, io, math, socket, sys, threading, qrcode, json, base64, random, re, shutil, signal
+import pygame, vlc, requests, time, os, io, math, socket, sys, threading, qrcode, json, base64, random, re, shutil, signal, tempfile
 from urllib.request import urlopen
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
@@ -6439,22 +6439,6 @@ _EN_TENS = [
     "", "", "twenty", "thirty", "forty", "fifty",
     "sixty", "seventy", "eighty", "ninety",
 ]
-_TA_ONES = [
-    "பூஜ்ஜியம்", "ஒன்று", "இரண்டு", "மூன்று", "நான்கு",
-    "ஐந்து", "ஆறு", "ஏழு", "எட்டு", "ஒன்பது",
-]
-_TA_TEENS = [
-    "பத்து", "பதினொன்று", "பன்னிரண்டு", "பதின்மூன்று", "பதினான்கு",
-    "பதினைந்து", "பதினாறு", "பதினேழு", "பதினெட்டு", "பத்தொன்பது",
-]
-_TA_TENS = {
-    20: "இருபது", 30: "முப்பது", 40: "நாற்பது", 50: "ஐம்பது",
-    60: "அறுபது", 70: "எழுபது", 80: "எண்பது", 90: "தொண்ணூறு",
-}
-_TA_TENS_PREFIX = {
-    20: "இருபத்தி", 30: "முப்பத்தி", 40: "நாற்பத்தி", 50: "ஐம்பத்தி",
-    60: "அறுபத்தி", 70: "எழுபத்தி", 80: "எண்பத்தி", 90: "தொண்ணூற்றி",
-}
 
 def spoken_number_en(value):
     value = int(round(float(value)))
@@ -6469,161 +6453,127 @@ def spoken_number_en(value):
         return f"{_EN_TENS[tens]} {_EN_ONES[ones]}"
     return str(value)
 
-def spoken_number_ta(value):
-    value = int(round(float(value)))
-    if value < 0:
-        return _TA_ONES[0]
-    if value < 10:
-        return _TA_ONES[value]
-    if value < 20:
-        return _TA_TEENS[value - 10]
-    if value < 100:
-        tens = (value // 10) * 10
-        ones = value % 10
-        if ones == 0:
-            return _TA_TENS[tens]
-        return f"{_TA_TENS_PREFIX[tens]} {_TA_ONES[ones]}"
-    return str(value)
-
 def talking_clock_period(hour):
     if 5 <= hour < 12:
-        return "in the morning", "காலை"
+        return "in the morning"
     if 12 <= hour < 17:
-        return "in the afternoon", "மதியம்"
+        return "in the afternoon"
     if 17 <= hour < 21:
-        return "in the evening", "மாலை"
-    return "at night", "இரவு"
+        return "in the evening"
+    return "at night"
 
-def talking_clock_weather_phrases():
+def talking_clock_weather_phrase():
     kind = str(weather_type or "clear")
-    english = {
+    return {
         "clear": "clear",
         "cloud": "cloudy",
-        "rain": "rain",
-    }.get(kind, "mixed weather")
-    tamil = {
-        "clear": "தெளிவு",
-        "cloud": "மேகமூட்டம்",
-        "rain": "மழை",
-    }.get(kind, "வானிலை")
-    return english, tamil
+        "rain": "rainy",
+    }.get(kind, "mixed")
 
 def talking_clock_station_name():
     if not stations:
-        return "TCRADIOS"
-    name = sanitize_text(stations[current_idx].get("name") or "TCRADIOS")
+        return "T C Radios"
+    name = sanitize_text(stations[current_idx].get("name") or "T C Radios")
     if name.startswith("YT: "):
         name = name[4:]
     return name[:80]
 
-def talking_clock_lines():
+def talking_clock_line():
     now = datetime.now()
     hour_12 = now.hour % 12 or 12
-    period_en, period_ta = talking_clock_period(now.hour)
+    period = talking_clock_period(now.hour)
     if now.minute == 0:
-        english_time = f"It's {spoken_number_en(hour_12)} o'clock {period_en}."
-        tamil_time = f"{period_ta} {spoken_number_ta(hour_12)} மணி."
+        spoken = f"It's {spoken_number_en(hour_12)} o'clock {period}."
     else:
-        minute_en = (
-            f"oh {spoken_number_en(now.minute)}"
-            if now.minute < 10
-            else spoken_number_en(now.minute)
+        spoken = (
+            f"It's {spoken_number_en(hour_12)} "
+            f"{spoken_number_en(now.minute)} {period}."
         )
-        english_time = (
-            f"It's {spoken_number_en(hour_12)} {minute_en} {period_en}."
-        )
-        tamil_time = (
-            f"{period_ta} {spoken_number_ta(hour_12)} மணி "
-            f"{spoken_number_ta(now.minute)} நிமிடம்."
-        )
-    weather_en, weather_ta = talking_clock_weather_phrases()
+    weather = talking_clock_weather_phrase()
     if current_temp:
-        english_weather = f"{spoken_number_en(current_temp)} degrees. {weather_en.capitalize()}."
-        tamil_weather = f"{spoken_number_ta(current_temp)} டிகிரி. {weather_ta}."
+        spoken += (
+            f" It's {spoken_number_en(current_temp)} degrees, and {weather}."
+        )
     else:
-        english_weather = f"{weather_en.capitalize()}."
-        tamil_weather = f"{weather_ta}."
-    station = talking_clock_station_name()
-    english_station = f"Playing {station}."
-    tamil_station = f"{station} இயங்குகிறது."
-    return (
-        f"{tamil_time} {tamil_weather} {tamil_station}",
-        f"{english_time} {english_weather} {english_station}",
-    )
+        spoken += f" It's {weather}."
+    spoken += f" You're listening to {talking_clock_station_name()}."
+    return spoken
 
 def _tts_safe_text(text):
-    text = re.sub(r"[^\w\s\u0B80-\u0BFF'.,:-]", " ", str(text or ""), flags=re.UNICODE)
+    text = re.sub(r"[^\w\s'.,:-]", " ", str(text or ""), flags=re.UNICODE)
     return re.sub(r"\s+", " ", text).strip()[:220]
 
-_TTS_BIN = None
-_TTS_EN_VOICE = None
-_TTS_TA_VOICE = None
-
-def _tts_probe():
-    global _TTS_BIN, _TTS_EN_VOICE, _TTS_TA_VOICE
-    if _TTS_BIN is not False and _TTS_BIN is not None:
-        return
-    _TTS_BIN = False
-    for binary in ("espeak-ng", "espeak"):
-        if not shutil.which(binary):
+def _play_wav(wav_path):
+    for command in (
+        ["paplay", wav_path],
+        ["pw-play", wav_path],
+        ["aplay", "-q", wav_path],
+    ):
+        if not shutil.which(command[0]):
             continue
         try:
             result = subprocess.run(
-                [binary, "--voices"],
-                capture_output=True, text=True, timeout=3,
+                command, timeout=20, capture_output=True, check=False
             )
+            if result.returncode == 0:
+                return True
         except (OSError, subprocess.TimeoutExpired):
             continue
-        listing = (result.stdout or "").lower()
-        _TTS_BIN = binary
-        if "en-gb" in listing or "en-uk" in listing:
-            _TTS_EN_VOICE = "en-gb" if binary == "espeak-ng" else "en-uk"
-        elif re.search(r"\ben\b", listing):
-            _TTS_EN_VOICE = "en"
-        else:
-            _TTS_EN_VOICE = "en"
-        if re.search(r"\bta\b", listing) or "tamil" in listing:
-            _TTS_TA_VOICE = "ta"
-        break
+    return False
 
-def _speak_with_voice(voice, text):
-    _tts_probe()
+def _speak_english(text):
     spoken = _tts_safe_text(text)
-    if not spoken or not _TTS_BIN or not voice:
+    if not spoken:
         return
-    try:
-        subprocess.run(
-            [_TTS_BIN, "-v", voice, "-s", "145", "-a", "140", spoken],
-            timeout=20,
-            capture_output=True,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        print(f"Talking clock speak error: {error}")
+    if shutil.which("pico2wave"):
+        wav_path = ""
+        try:
+            handle, wav_path = tempfile.mkstemp(prefix="tcradios-clock-", suffix=".wav")
+            os.close(handle)
+            subprocess.run(
+                ["pico2wave", "-l", "en-US", "-w", wav_path, spoken],
+                timeout=12,
+                capture_output=True,
+                check=False,
+            )
+            if os.path.getsize(wav_path) > 44:
+                _play_wav(wav_path)
+                return
+        except (OSError, subprocess.TimeoutExpired) as error:
+            print(f"Talking clock pico error: {error}")
+        finally:
+            if wav_path:
+                try:
+                    os.remove(wav_path)
+                except OSError:
+                    pass
+    for binary, voice in (
+        ("espeak-ng", "en+f3"),
+        ("espeak-ng", "en-us+f3"),
+        ("espeak", "en+f3"),
+        ("espeak-ng", "en"),
+        ("espeak", "en"),
+    ):
+        if not shutil.which(binary):
+            continue
+        try:
+            subprocess.run(
+                [binary, "-v", voice, "-s", "130", "-a", "200", spoken],
+                timeout=20,
+                capture_output=True,
+                check=False,
+            )
+            return
+        except (OSError, subprocess.TimeoutExpired):
+            continue
 
 def _run_talking_clock():
     global talking_clock_busy, talking_clock_until
-    previous_volume = vol_level
     try:
-        tamil_line, english_line = talking_clock_lines()
-        try:
-            player.audio_set_volume(max(8, int(previous_volume * 0.28)))
-        except Exception:
-            pass
-        _tts_probe()
-        if _TTS_TA_VOICE:
-            _speak_with_voice(_TTS_TA_VOICE, tamil_line)
-        else:
-            roman = transliterate_tamil(tamil_line)
-            _speak_with_voice(_TTS_EN_VOICE, roman or english_line)
-        _speak_with_voice(_TTS_EN_VOICE, english_line)
+        _speak_english(talking_clock_line())
     except Exception as error:
         print(f"Talking clock error: {error}")
     finally:
-        try:
-            player.audio_set_volume(previous_volume)
-        except Exception:
-            pass
         talking_clock_busy = False
         talking_clock_until = time.time()
 
