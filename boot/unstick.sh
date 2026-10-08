@@ -30,6 +30,42 @@ if [[ -f "/var/lib/AccountsService/users/${USER_NAME}" ]]; then
     sed -i '/^XSession=tcradios/d;/^Session=tcradios/d' \
         "/var/lib/AccountsService/users/${USER_NAME}" || true
 fi
+if [[ -f /etc/greetd/config.toml ]] && grep -q tcradios /etc/greetd/config.toml; then
+    python3 - <<'PY'
+from pathlib import Path
+path = Path("/etc/greetd/config.toml")
+lines, skip = [], False
+for line in path.read_text().splitlines():
+    stripped = line.strip()
+    if stripped == "[initial_session]":
+        skip = True
+        continue
+    if skip and stripped.startswith("["):
+        skip = False
+    if skip:
+        continue
+    lines.append(line)
+path.write_text("\n".join(lines).rstrip() + "\n")
+PY
+fi
+for sys_autostart in /etc/xdg/labwc/autostart /usr/share/labwc/autostart; do
+    if [[ -f "${sys_autostart}.tcradios-backup" ]]; then
+        mv -f "${sys_autostart}.tcradios-backup" "${sys_autostart}"
+    fi
+done
+LABWC_DIR="${USER_HOME}/.config/labwc"
+install -d -o "${USER_NAME}" -g "${USER_NAME}" "${LABWC_DIR}"
+cat > "${LABWC_DIR}/autostart" <<'EOF'
+#!/bin/sh
+if [ -x /etc/xdg/labwc/autostart ]; then
+    /etc/xdg/labwc/autostart &
+elif [ -x /usr/share/labwc/autostart ]; then
+    /usr/share/labwc/autostart &
+fi
+/usr/local/bin/tcradios-start &
+EOF
+chown "${USER_NAME}:${USER_NAME}" "${LABWC_DIR}/autostart"
+chmod 0755 "${LABWC_DIR}/autostart"
 
 if [[ -d "${USER_HOME}/.config/autostart" ]]; then
     find "${USER_HOME}/.config/autostart" -maxdepth 1 -name '*.desktop' \
@@ -75,6 +111,27 @@ exec $(printf '%q' "${REPO_DIR}/boot/tcradios-start") "\$@"
 EOF
 chmod 0755 /usr/local/bin/tcradios-start
 chmod 0755 "${REPO_DIR}/boot/tcradios-start"
+
+cat > /etc/systemd/system/tcradios-release-display.service <<'EOF'
+[Unit]
+Description=Release the TCRADIOS boot splash
+DefaultDependencies=no
+After=plymouth-start.service
+Before=graphical.target display-manager.service
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'timeout 2 /usr/bin/plymouth quit || true'
+TimeoutStartSec=5
+
+[Install]
+WantedBy=graphical.target
+EOF
+systemctl daemon-reload || true
+systemctl enable tcradios-release-display.service >/dev/null 2>&1 || true
+systemctl mask plymouth-quit-wait.service >/dev/null 2>&1 || true
+systemctl start tcradios-release-display.service >/dev/null 2>&1 || true
 
 timeout 2 plymouth quit >/dev/null 2>&1 || true
 runuser -u "${USER_NAME}" -- env DISPLAY=:0 "${REPO_DIR}/boot/tcradios-start" >/dev/null 2>&1 &

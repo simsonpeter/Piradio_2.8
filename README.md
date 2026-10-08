@@ -9,7 +9,7 @@ Install Raspberry Pi OS Desktop, connect the Pi to the internet, open a
 terminal, and paste this single command:
 
 ```bash
-sudo apt update && sudo apt install -y git && rm -rf "$HOME/tcradio" && git clone -b cursor/one-command-pi-install-b322 https://github.com/simsonpeter/Piradio_2.8.git "$HOME/tcradio" && cd "$HOME/tcradio" && sudo ./install_raspberry_pi_kiosk.sh
+sudo apt update && sudo apt install -y git && rm -rf "$HOME/tcradio" && git clone https://github.com/simsonpeter/Piradio_2.8.git "$HOME/tcradio" && cd "$HOME/tcradio" && sudo ./install_raspberry_pi_kiosk.sh
 ```
 
 The installer automatically:
@@ -26,13 +26,14 @@ installation. No separate LCD commands are required.
 
 ## Updating an existing installation
 
+Do not re-run the full installer. That can freeze the splash.
+
 ```bash
 cd "$HOME/tcradio"
-git fetch origin cursor/one-command-pi-install-b322
-git checkout -f cursor/one-command-pi-install-b322
-git reset --hard origin/cursor/one-command-pi-install-b322
-sudo ./install_raspberry_pi_kiosk.sh
-sudo reboot -f
+git fetch origin
+git checkout main
+git reset --hard origin/main
+sudo ./boot/unstick.sh
 ```
 
 Additional boot and troubleshooting details are available in

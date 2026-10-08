@@ -157,38 +157,7 @@ fi
 echo "Installing automatic TCRADIOS launch..."
 cat > /usr/local/bin/tcradios-start <<EOF
 #!/usr/bin/env bash
-set -e
-# Both XDG and compositor launchers must contend for the same lock.
-exec 9>"/tmp/tcradios-\${UID}.lock"
-flock -n 9 || exit 0
-
-if [[ ! -t 1 ]]; then
-    exec >>"\${HOME}/.tcradios-start.log" 2>&1
-fi
-
-export DISPLAY="\${DISPLAY:-:0}"
-export XDG_CURRENT_DESKTOP="\${XDG_CURRENT_DESKTOP:-labwc}"
-DISPLAY_NUMBER="\${DISPLAY#:}"
-for _ in {1..20}; do
-    if [[ -S "/tmp/.X11-unix/X\${DISPLAY_NUMBER}" ]] || [[ -n "\${WAYLAND_DISPLAY:-}" ]]; then
-        break
-    fi
-    sleep 0.25
-done
-# Do not reveal the desktop: keep Plymouth up until the radio window is drawn.
-if command -v xset >/dev/null 2>&1; then
-    xset s off >/dev/null 2>&1 || true
-    xset -dpms >/dev/null 2>&1 || true
-    xset s noblank >/dev/null 2>&1 || true
-fi
-if command -v xsetroot >/dev/null 2>&1; then
-    xsetroot -cursor_name none >/dev/null 2>&1 || true
-fi
-if command -v unclutter >/dev/null 2>&1; then
-    unclutter -idle 0 -root >/dev/null 2>&1 &
-fi
-cd $(printf '%q' "${SCRIPT_DIR}")
-exec /usr/bin/python3 $(printf '%q' "${SCRIPT_DIR}/touch_radio.py")
+exec $(printf '%q' "${SCRIPT_DIR}/boot/tcradios-start") "\$@"
 EOF
 chmod 0755 /usr/local/bin/tcradios-start
 

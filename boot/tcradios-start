@@ -25,6 +25,7 @@ for _ in {1..40}; do
     fi
     sleep 0.25
 done
+sleep 1
 
 timeout 2 plymouth quit >/dev/null 2>&1 || true
 

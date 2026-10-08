@@ -368,7 +368,9 @@ class AudioOutputManager:
         }
         
         try:
-            result = subprocess.run(['aplay', '-l'], capture_output=True, text=True)
+            result = subprocess.run(
+                ['aplay', '-l'], capture_output=True, text=True, timeout=3
+            )
             output = result.stdout.lower()
             if 'bcm2835' in output or 'headphones' in output or 'analog' in output:
                 self.outputs['analog']['available'] = True
@@ -378,7 +380,10 @@ class AudioOutputManager:
             print(f"Error scanning ALSA: {e}")
         
         try:
-            result = subprocess.run(['pactl', 'list', 'sinks', 'short'], capture_output=True, text=True)
+            result = subprocess.run(
+                ['pactl', 'list', 'sinks', 'short'],
+                capture_output=True, text=True, timeout=3,
+            )
             if result.returncode == 0:
                 for line in result.stdout.split('\n'):
                     if 'bluez' in line.lower() or 'bluetooth' in line.lower():
@@ -386,11 +391,14 @@ class AudioOutputManager:
                         parts = line.split()
                         if len(parts) >= 2:
                             self.outputs['bluetooth']['device'] = parts[1]
-        except:
+        except Exception:
             pass
         
         try:
-            result = subprocess.run(['bluetoothctl', 'devices', 'Connected'], capture_output=True, text=True)
+            result = subprocess.run(
+                ['bluetoothctl', 'devices', 'Connected'],
+                capture_output=True, text=True, timeout=3,
+            )
             if result.stdout.strip():
                 self.outputs['bluetooth']['available'] = True
                 self.outputs['bluetooth']['connected_device'] = result.stdout.strip().split('\n')[0]
