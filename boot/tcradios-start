@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Last working radio launch: dismiss splash, then start Python.
+set -u
+
+REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+timeout 2 plymouth quit >/dev/null 2>&1 || true
+
+exec 9>"/tmp/tcradios-${UID:-0}.lock"
+if ! flock -n 9; then
+    if pgrep -f touch_radio.py >/dev/null 2>&1; then
+        exit 0
+    fi
+fi
+
+if [[ ! -t 1 ]]; then
+    exec >>"${HOME}/.tcradios-start.log" 2>&1
+fi
+echo "tcradios-start $(date -Is) ${DISPLAY:-:0} ${REPO_DIR}"
+
+export DISPLAY="${DISPLAY:-:0}"
+DISPLAY_NUMBER="${DISPLAY#:}"
+for _ in {1..40}; do
+    if [[ -S "/tmp/.X11-unix/X${DISPLAY_NUMBER}" ]]; then
+        break
+    fi
+    sleep 0.25
+done
+
+timeout 2 plymouth quit >/dev/null 2>&1 || true
+
+cd "${REPO_DIR}"
+exec /usr/bin/python3 "${REPO_DIR}/touch_radio.py"
