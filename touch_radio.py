@@ -6895,14 +6895,11 @@ while True:
             draw_modern_button(screen, sleep_chip, (35, 40, 67), (75, 61, 126), 10)
             draw_centered_text(screen, f_tiny, sleep_label, sleep_color, sleep_chip)
 
-        # Volume strip
-        vol_minus_rect = pygame.Rect(12, 277, 42, 36)
-        vol_plus_rect = pygame.Rect(266, 277, 42, 36)
-        vol_bar_rect = pygame.Rect(67, 285, 186, 18)
-        draw_modern_button(screen, vol_minus_rect, UI_SURFACE_RAISED, UI_AMBER, 12)
-        mc = vol_minus_rect.center
-        pygame.draw.line(screen, UI_AMBER, (mc[0] - 9, mc[1]), (mc[0] + 9, mc[1]), 3)
-
+        # Volume strip: solid − / + labels, percent always visible
+        vol_minus_rect = pygame.Rect(12, 272, 48, 44)
+        vol_plus_rect = pygame.Rect(260, 272, 48, 44)
+        vol_bar_rect = pygame.Rect(68, 278, 184, 20)
+        labeled_button(screen, vol_minus_rect, UI_AMBER, f_lg, "−", 12)
         pygame.draw.rect(screen, (37, 48, 72), vol_bar_rect, border_radius=10)
         fill_width = int(vol_bar_rect.width * vol_level / 100)
         if fill_width > 0:
@@ -6914,14 +6911,9 @@ while True:
         knob_x = vol_bar_rect.x + int(vol_bar_rect.width * vol_level / 100)
         knob_x = max(vol_bar_rect.x + 8, min(vol_bar_rect.right - 8, knob_x))
         pygame.draw.circle(screen, UI_TEXT, (knob_x, vol_bar_rect.centery), 7)
-        if show_volume_bar or adjusting_volume:
-            vol_pct_surf = f_tiny.render(f"{vol_level}%", True, UI_TEXT)
-            screen.blit(vol_pct_surf, (160 - vol_pct_surf.get_width() // 2, 307))
-
-        draw_modern_button(screen, vol_plus_rect, UI_SURFACE_RAISED, UI_GREEN, 12)
-        pc = vol_plus_rect.center
-        pygame.draw.line(screen, UI_GREEN, (pc[0], pc[1] - 9), (pc[0], pc[1] + 9), 3)
-        pygame.draw.line(screen, UI_GREEN, (pc[0] - 9, pc[1]), (pc[0] + 9, pc[1]), 3)
+        vol_pct_surf = f_tiny.render(f"{vol_level}%", True, UI_TEXT)
+        screen.blit(vol_pct_surf, (160 - vol_pct_surf.get_width() // 2, 302))
+        labeled_button(screen, vol_plus_rect, UI_GREEN, f_lg, "+", 12)
 
         # Primary transport controls
         btn_prev = pygame.Rect(12, 329, 92, 53)
