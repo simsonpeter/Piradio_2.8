@@ -483,6 +483,26 @@ class AudioOutputManager:
             return False
 
 audio_manager = AudioOutputManager()
+vol_level = 80
+last_unmuted_volume = 80
+
+def apply_live_volume(level):
+    global vol_level, last_unmuted_volume
+    vol_level = max(0, min(100, int(level)))
+    if vol_level > 0:
+        last_unmuted_volume = vol_level
+    try:
+        player.audio_set_volume(vol_level)
+    except Exception:
+        pass
+    try:
+        audio_manager.set_volume(vol_level)
+    except Exception as error:
+        print(f"Volume error: {error}")
+    try:
+        save_playback_state()
+    except NameError:
+        pass
 
 # --- ALARM & SLEEP TIMER SYSTEM ---
 class SmartAlarm:
@@ -3294,19 +3314,13 @@ def remote_action(action):
             current_idx = (current_idx - 1) % len(stations)
             play()
         elif action == 'volup':
-            vol_level = min(vol_level + 10, 100)
-            player.audio_set_volume(vol_level)
-            audio_manager.set_volume(vol_level)
+            apply_live_volume(min(vol_level + 10, 100))
         elif action == 'voldown':
-            vol_level = max(vol_level - 10, 0)
-            player.audio_set_volume(vol_level)
-            audio_manager.set_volume(vol_level)
+            apply_live_volume(max(vol_level - 10, 0))
         elif action == 'toggle':
             player.pause()
         elif action == 'mute':
-            vol_level = 0 if vol_level > 0 else 80
-            player.audio_set_volume(vol_level)
-            audio_manager.set_volume(vol_level)
+            apply_live_volume(0 if vol_level > 0 else last_unmuted_volume)
         return "OK"
     except Exception as e:
         return f"Error: {str(e)}", 500
@@ -3325,9 +3339,7 @@ def play_index(idx):
 def set_volume_level(level):
     global vol_level
     try:
-        vol_level = max(0, min(100, level))
-        player.audio_set_volume(vol_level)
-        audio_manager.set_volume(vol_level)
+        apply_live_volume(level)
         return jsonify({"volume": vol_level})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -3928,7 +3940,7 @@ def search_youtube(query):
         return [], err or 'YouTube search failed'
     return parse_youtube_payload(stdout), None
 
-def youtube_audio_url(video_id):
+def youtube_audio_url(video_id, timeout=40):
     if not re.fullmatch(r'[A-Za-z0-9_-]{6,32}', str(video_id or '')):
         return '', 'No video ID'
     stdout, err = run_ytdlp([
@@ -3937,7 +3949,7 @@ def youtube_audio_url(video_id):
         '--get-url',
         '--no-playlist',
         f'https://www.youtube.com/watch?v={video_id}',
-    ], timeout=40)
+    ], timeout=timeout)
     if stdout:
         for line in stdout.splitlines():
             candidate = line.strip()
@@ -4452,6 +4464,10 @@ splash_started_at = time.time()
 def release_display_and_exit(_signum, _frame):
     # Exit immediately so a fullscreen window cannot hold up reboot.
     try:
+        save_playback_state(force=True)
+    except Exception:
+        pass
+    try:
         pygame.display.quit()
         pygame.quit()
     except Exception:
@@ -4653,6 +4669,7 @@ LANGUAGE_STREAMS = {
     "Telugu": f"{LANGUAGE_BASE_URL}/telugu.json"
 }
 LAST_STATION_FILE = os.path.expanduser("~/.last_station")
+PLAYBACK_FILE = os.path.expanduser("~/.tcradios_playback.json")
 STATIONS_CACHE_FILE = os.path.expanduser("~/.tcradios_stations.json")
 BUNDLED_STATIONS_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -4660,7 +4677,68 @@ BUNDLED_STATIONS_FILE = os.path.join(
 )
 saved_station_url = ""
 saved_station_index = 0
+saved_playback = {}
 stations_waiting_for_github = False
+_playback_save_at = 0
+
+def load_playback_state():
+    global saved_station_url, saved_station_index, saved_playback
+    saved_playback = {}
+    for path in (PLAYBACK_FILE, LAST_STATION_FILE):
+        try:
+            text = open(path, "r").read().strip()
+            if not text:
+                continue
+            if text.startswith("{"):
+                saved = json.loads(text)
+            else:
+                saved = {"index": int(text)}
+            saved_playback = saved if isinstance(saved, dict) else {}
+            saved_station_url = str(saved_playback.get("url", "")).strip()
+            saved_station_index = int(saved_playback.get("index", 0) or 0)
+            return
+        except (OSError, ValueError, TypeError):
+            continue
+    saved_station_url = ""
+    saved_station_index = 0
+
+def playback_snapshot():
+    snapshot = {
+        "volume": int(vol_level),
+        "last_unmuted_volume": int(last_unmuted_volume),
+    }
+    try:
+        if stations and 0 <= current_idx < len(stations):
+            station = stations[current_idx]
+            snapshot.update({
+                "index": current_idx,
+                "url": station.get("url", ""),
+                "name": station.get("name", ""),
+                "youtube_id": station.get("youtube_id", ""),
+                "language": station.get("language", ""),
+                "genre": station.get("genre", ""),
+                "logo": station.get("logo", ""),
+                "direct_link_id": station.get("direct_link_id", ""),
+            })
+    except NameError:
+        pass
+    return snapshot
+
+def save_playback_state(force=False):
+    global _playback_save_at
+    now = time.time()
+    if not force and now - _playback_save_at < 0.5:
+        return
+    _playback_save_at = now
+    try:
+        payload = json.dumps(playback_snapshot())
+        for path in (PLAYBACK_FILE, LAST_STATION_FILE):
+            temp_path = path + ".tmp"
+            with open(temp_path, "w") as handle:
+                handle.write(payload)
+            os.replace(temp_path, path)
+    except (OSError, TypeError, ValueError) as error:
+        print(f"Could not save playback: {error}")
 
 def normalize_stations(raw_stations):
     loaded = []
@@ -4680,18 +4758,7 @@ def normalize_stations(raw_stations):
     return loaded
 
 def read_saved_station():
-    global saved_station_url, saved_station_index
-    try:
-        text = open(LAST_STATION_FILE, "r").read().strip()
-        if text.startswith("{"):
-            saved = json.loads(text)
-            saved_station_url = str(saved.get("url", "")).strip()
-            saved_station_index = int(saved.get("index", 0))
-        else:
-            saved_station_index = int(text)
-    except (OSError, ValueError, TypeError):
-        saved_station_url = ""
-        saved_station_index = 0
+    load_playback_state()
 
 def read_stations_file(path):
     try:
@@ -4719,9 +4786,24 @@ def fetch_github_stations():
     return normalize_stations(response.json())
 
 def choose_station_index(loaded):
+    youtube_id = str(saved_playback.get("youtube_id") or "").strip()
+    if youtube_id:
+        for index, station in enumerate(loaded):
+            if station.get("youtube_id") == youtube_id:
+                return index
+    direct_link_id = saved_playback.get("direct_link_id")
+    if direct_link_id not in (None, ""):
+        for index, station in enumerate(loaded):
+            if station.get("direct_link_id") == direct_link_id:
+                return index
     if saved_station_url:
         for index, station in enumerate(loaded):
             if station.get("url") == saved_station_url:
+                return index
+    saved_name = str(saved_playback.get("name") or "").strip()
+    if saved_name:
+        for index, station in enumerate(loaded):
+            if station.get("name") == saved_name:
                 return index
     if 0 <= saved_station_index < len(loaded):
         return saved_station_index
@@ -4771,7 +4853,23 @@ def load_favorite_indices():
 
 load_favorite_indices()
 
-vol_level = 80
+try:
+    vol_level = max(0, min(100, int(saved_playback.get("volume", vol_level))))
+    last_unmuted_volume = max(
+        1,
+        min(100, int(saved_playback.get("last_unmuted_volume", vol_level or 80))),
+    )
+except (TypeError, ValueError):
+    vol_level = 80
+    last_unmuted_volume = 80
+if vol_level > 0:
+    last_unmuted_volume = vol_level
+try:
+    player.audio_set_volume(vol_level)
+    audio_manager.set_volume(vol_level)
+except Exception as error:
+    print(f"Volume restore error: {error}")
+print(f"Restored volume {vol_level}%")
 last_weather_update = 0
 last_system_update = 0
 saver_mode = False
@@ -4927,14 +5025,11 @@ def play():
         player.set_media(instance.media_new(station['url']))
         player.play()
         player.audio_set_volume(vol_level)
+        audio_manager.set_volume(vol_level)
         update_logo(station.get('logo', ''))
         saved_station_url = station.get("url", "")
         saved_station_index = current_idx
-        with open(LAST_STATION_FILE, "w") as last_station_file:
-            json.dump(
-                {"index": current_idx, "url": saved_station_url},
-                last_station_file,
-            )
+        save_playback_state(force=True)
         rebuild_qr_surface()
     except:
         pass
@@ -4942,8 +5037,13 @@ def play():
 def apply_github_station_list(loaded):
     global current_idx, base_stations, stations_waiting_for_github
     previous_url = ""
+    previous_youtube = ""
+    previous_direct = None
     if stations and 0 <= current_idx < len(stations):
-        previous_url = stations[current_idx].get("url") or ""
+        previous = stations[current_idx]
+        previous_url = previous.get("url") or ""
+        previous_youtube = previous.get("youtube_id") or ""
+        previous_direct = previous.get("direct_link_id")
     extras = [
         station for station in stations
         if station.get("youtube_id") or station.get("language")
@@ -4951,17 +5051,22 @@ def apply_github_station_list(loaded):
     ]
     stations[:] = list(loaded) + extras
     base_stations = [station.copy() for station in loaded]
-    if previous_url:
-        matched = next(
-            (index for index, station in enumerate(stations)
-             if station.get("url") == previous_url),
-            None,
-        )
-        if matched is not None:
-            current_idx = matched
-            stations_waiting_for_github = False
-            return
-    current_idx = choose_station_index(loaded)
+    matched = None
+    for index, station in enumerate(stations):
+        if previous_youtube and station.get("youtube_id") == previous_youtube:
+            matched = index
+            break
+        if previous_direct not in (None, "") and station.get("direct_link_id") == previous_direct:
+            matched = index
+            break
+        if previous_url and station.get("url") == previous_url:
+            matched = index
+            break
+    if matched is not None:
+        current_idx = matched
+        stations_waiting_for_github = False
+        return
+    current_idx = choose_station_index(stations)
     stations_waiting_for_github = False
     load_favorite_indices()
     play()
@@ -5354,11 +5459,41 @@ def play_language_stream(stream):
         current_idx = existing_index
     play()
 
+def resume_last_playback():
+    global current_idx
+    youtube_id = str(saved_playback.get("youtube_id") or "").strip()
+    if youtube_id:
+        title = str(saved_playback.get("name") or "YouTube")
+        if title.startswith("YT: "):
+            title = title[4:]
+        audio_url, err = youtube_audio_url(youtube_id, timeout=18)
+        if audio_url:
+            play_youtube_station(youtube_id, title, audio_url)
+            return
+        print(f"Could not restore YouTube item: {err}")
+    saved_url = str(saved_station_url or "").strip()
+    if youtube_id:
+        saved_url = ""
+    if saved_url and all(station.get("url") != saved_url for station in stations):
+        restored = {
+            "name": saved_playback.get("name") or "Last played",
+            "url": saved_url,
+            "genre": saved_playback.get("genre") or "Radio",
+            "logo": saved_playback.get("logo") or "",
+        }
+        for key in ("language", "direct_link_id"):
+            value = saved_playback.get(key)
+            if value not in (None, ""):
+                restored[key] = value
+        stations.append(restored)
+        current_idx = len(stations) - 1
+    play()
+
 splash_remaining = 5.0 - (time.time() - splash_started_at)
 if splash_remaining > 0:
     time.sleep(splash_remaining)
 
-play()
+resume_last_playback()
 if stations_waiting_for_github:
     threading.Thread(target=retry_github_stations, daemon=True).start()
 ip_display_time = time.time() + 10
@@ -6406,25 +6541,15 @@ btn_language_next = pygame.Rect(214, 360, 88, 44)
 btn_language_back = pygame.Rect(70, 430, 180, 38)
 
 def adjust_volume(delta):
-    global vol_level, show_volume_bar, volume_bar_timer, last_interaction_time
-    vol_level = max(0, min(100, vol_level + delta))
-    try:
-        player.audio_set_volume(vol_level)
-        audio_manager.set_volume(vol_level)
-    except Exception as error:
-        print(f"Volume adjustment error: {error}")
+    global show_volume_bar, volume_bar_timer, last_interaction_time
+    apply_live_volume(vol_level + delta)
     show_volume_bar = True
     volume_bar_timer = time.time()
     last_interaction_time = time.time()
 
 def toggle_output_mute():
-    global vol_level, show_volume_bar, volume_bar_timer, last_interaction_time
-    vol_level = 0 if vol_level > 0 else 80
-    try:
-        player.audio_set_volume(vol_level)
-        audio_manager.set_volume(vol_level)
-    except Exception as error:
-        print(f"Mute error: {error}")
+    global show_volume_bar, volume_bar_timer, last_interaction_time
+    apply_live_volume(0 if vol_level > 0 else last_unmuted_volume)
     show_volume_bar = True
     volume_bar_timer = time.time()
     last_interaction_time = time.time()
@@ -7102,6 +7227,7 @@ while True:
                 active_page = "menu"
                 continue
             if btn_exit.collidepoint(event.pos):
+                save_playback_state(force=True)
                 pygame.quit()
                 sys.exit()
             if btn_qr.collidepoint(event.pos):
@@ -7115,9 +7241,7 @@ while True:
             if btn_toggle.collidepoint(event.pos):
                 player.pause()
             if btn_mute.collidepoint(event.pos):
-                vol_level = 0 if vol_level > 0 else 80
-                player.audio_set_volume(vol_level)
-                audio_manager.set_volume(vol_level)
+                apply_live_volume(0 if vol_level > 0 else last_unmuted_volume)
             if btn_sleep.collidepoint(event.pos):
                 if alarm_system.sleep_timer_enabled:
                     alarm_system.stop_sleep_timer()
@@ -7131,23 +7255,18 @@ while True:
                 alarm_system.alarm_enabled = not alarm_system.alarm_enabled
                 alarm_system.save_alarm_settings()
             if vol_minus_rect.collidepoint(event.pos):
-                vol_level = max(0, vol_level - 5)
-                player.audio_set_volume(vol_level)
-                audio_manager.set_volume(vol_level)
+                apply_live_volume(vol_level - 5)
                 show_volume_bar = True
                 volume_bar_timer = time.time()
             if vol_plus_rect.collidepoint(event.pos):
-                vol_level = min(100, vol_level + 5)
-                player.audio_set_volume(vol_level)
-                audio_manager.set_volume(vol_level)
+                apply_live_volume(vol_level + 5)
                 show_volume_bar = True
                 volume_bar_timer = time.time()
             if vol_bar_rect.collidepoint(event.pos):
                 adjusting_volume = True
-                vol_level = int((event.pos[0] - vol_bar_rect.x) * 100 / vol_bar_rect.width)
-                vol_level = max(0, min(100, vol_level))
-                player.audio_set_volume(vol_level)
-                audio_manager.set_volume(vol_level)
+                apply_live_volume(
+                    int((event.pos[0] - vol_bar_rect.x) * 100 / vol_bar_rect.width)
+                )
                 show_volume_bar = True
                 volume_bar_timer = time.time()
             if vol_rect.collidepoint(event.pos):
@@ -7182,22 +7301,18 @@ while True:
                     else:
                         alarm_system.start_sleep_timer(30)
                 elif abs(dy) > 30:
-                    if dy > 0:
-                        vol_level = min(100, vol_level + 5)
-                    else:
-                        vol_level = max(0, vol_level - 5)
-                    player.audio_set_volume(vol_level)
-                    audio_manager.set_volume(vol_level)
+                    apply_live_volume(vol_level + (5 if dy > 0 else -5))
                     show_volume_bar = True
                     volume_bar_timer = time.time()
+            if adjusting_volume:
+                save_playback_state(force=True)
             adjusting_volume = False
         
         elif event.type == pygame.MOUSEMOTION and adjusting_volume:
             if event.pos[0] >= vol_bar_rect.x and event.pos[0] <= vol_bar_rect.right:
-                vol_level = int((event.pos[0] - vol_bar_rect.x) * 100 / vol_bar_rect.width)
-                vol_level = max(0, min(100, vol_level))
-                player.audio_set_volume(vol_level)
-                audio_manager.set_volume(vol_level)
+                apply_live_volume(
+                    int((event.pos[0] - vol_bar_rect.x) * 100 / vol_bar_rect.width)
+                )
                 volume_bar_timer = time.time()
     
     apply_display_brightness(now)
