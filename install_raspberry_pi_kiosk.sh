@@ -91,10 +91,17 @@ import qrcode
 import requests
 import vlc
 from flask import Flask
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 print("All TCRADIOS Python dependencies are available.")
 PY
+
+echo "Installing the bundled Tamil font for song names..."
+install -d /usr/local/share/fonts/tcradios
+if [[ -d "${SCRIPT_DIR}/fonts" ]]; then
+    install -m 0644 "${SCRIPT_DIR}"/fonts/*.ttf /usr/local/share/fonts/tcradios/ || true
+fi
+fc-cache -f /usr/local/share/fonts/tcradios >/dev/null 2>&1 || true
 
 echo "Installing a current yt-dlp for YouTube search and playback..."
 YTDLP_TMP="$(mktemp)"

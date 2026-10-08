@@ -979,13 +979,20 @@ HTML_TEMPLATE = """
             --safe-top: env(safe-area-inset-top);
             --safe-bottom: env(safe-area-inset-bottom);
         }
+
+        @font-face {
+            font-family: 'TCRTamil';
+            src: url('/static/NotoSansTamil-Regular.ttf') format('truetype');
+            unicode-range: U+0B80-0BFF;
+            font-display: swap;
+        }
         
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
             -webkit-tap-highlight-color: transparent;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            font-family: 'TCRTamil', 'Noto Sans Tamil', 'Lohit Tamil', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
         }
         
         html, body {
@@ -3891,6 +3898,15 @@ def youtube_play():
 
 @app.route('/static/<path:filename>')
 def serve_static(filename):
+    if filename == 'NotoSansTamil-Regular.ttf':
+        font_file = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)),
+            'fonts',
+            'NotoSansTamil-Regular.ttf',
+        )
+        if os.path.isfile(font_file):
+            with open(font_file, 'rb') as handle:
+                return Response(handle.read(), mimetype='font/ttf')
     if filename == 'radio.png' and PIL_AVAILABLE:
         try:
             img = Image.new('RGBA', (100, 100), (0,0,0,0))
@@ -3924,7 +3940,18 @@ pygame.init()
 
 # --- UNICODE FONT SETUP (Tamil Support) ---
 TAMIL_RANGE = range(0x0B80, 0x0BFF + 1)
-APP_FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+APP_FONT_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "fonts")
+TAMIL_FONT_CANDIDATES = [
+    os.path.join(APP_FONT_DIR, "NotoSansTamil-Regular.ttf"),
+    "/usr/local/share/fonts/tcradios/NotoSansTamil-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansTamil-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansTamil-Bold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansTamilUI-Regular.ttf",
+    "/usr/share/fonts/truetype/lohit-tamil/Lohit-Tamil.ttf",
+    "/usr/share/fonts/truetype/lohit-taml/Lohit-Tamil.ttf",
+    "/usr/share/fonts/truetype/samyak/Samyak-Tamil.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansTamil-Regular.otf",
+]
 
 def first_existing_font(paths):
     for path in paths:
@@ -3948,15 +3975,42 @@ def latin_font_path(bold=False):
         '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
     ])
 
+def font_supports_tamil(path):
+    if not path or not os.path.isfile(path):
+        return False
+    sample = '\u0b95'
+    try:
+        font = pygame.font.Font(path, 18)
+        metrics = font.metrics(sample)
+        return bool(metrics and metrics[0] and metrics[0][4] > 0)
+    except Exception:
+        pass
+    try:
+        if not PIL_AVAILABLE:
+            return True
+        font = ImageFont.truetype(path, 18)
+        probe = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
+        box = probe.textbbox((0, 0), sample, font=font)
+        return box[2] > box[0]
+    except Exception:
+        return False
+
 def tamil_font_path():
-    return first_existing_font([
-        os.path.join(APP_FONT_DIR, "NotoSansTamil-Regular.ttf"),
-        '/usr/share/fonts/truetype/noto/NotoSansTamil-Regular.ttf',
-        '/usr/share/fonts/truetype/noto/NotoSansTamil-Bold.ttf',
-        '/usr/share/fonts/truetype/lohit-tamil/Lohit-Tamil.ttf',
-        '/usr/share/fonts/truetype/lohit-taml/Lohit-Tamil.ttf',
-        '/usr/share/fonts/truetype/samyak/Samyak-Tamil.ttf',
-    ])
+    found = []
+    for path in TAMIL_FONT_CANDIDATES:
+        if path and os.path.isfile(path) and path not in found:
+            found.append(path)
+    try:
+        import glob
+        for path in glob.glob('/usr/share/fonts/**/*[Tt]amil*.ttf', recursive=True):
+            if path not in found:
+                found.append(path)
+    except Exception:
+        pass
+    for path in found:
+        if font_supports_tamil(path):
+            return path
+    return found[0] if found else None
 
 def load_pygame_font(path, size):
     if path:
@@ -4100,13 +4154,47 @@ def render_pil_text(font_path, size, text, color, use_raqm=False):
     except Exception:
         return None
 
-def render_shaped_text(font_path, size, text, color):
-    """Shape Tamil with RAQM when possible; otherwise use a visual fallback."""
-    if not font_path or not text:
+def split_script_runs(text):
+    """Keep Tamil syllables together; draw Latin with a Latin font."""
+    runs = []
+    kind = None
+    chunk = []
+    for char in str(text or ''):
+        tamil_char = (
+            ord(char) in TAMIL_RANGE
+            or char in '\u200c\u200d'
+            or (kind == 'ta' and is_tamil_combiner(char))
+        )
+        next_kind = 'ta' if tamil_char else 'lt'
+        if next_kind != kind and chunk:
+            runs.append((kind, ''.join(chunk)))
+            chunk = []
+        kind = next_kind
+        chunk.append(char)
+    if chunk:
+        runs.append((kind, ''.join(chunk)))
+    return runs
+
+def stitch_text_surfaces(parts, background=None):
+    parts = [part for part in parts if part is not None]
+    if not parts:
+        surface = pygame.Surface((1, 1), pygame.SRCALPHA)
+        return surface
+    width = sum(part.get_width() for part in parts)
+    height = max(part.get_height() for part in parts)
+    surface = pygame.Surface((max(1, width), max(1, height)), pygame.SRCALPHA)
+    if background:
+        surface.fill(background)
+    x = 0
+    for part in parts:
+        surface.blit(part, (x, (height - part.get_height()) // 2))
+        x += part.get_width()
+    return surface
+
+def render_tamil_run(font_path, pygame_font, size, text, color, antialias, background):
+    """Draw Tamil from an explicit Tamil file. SDL_ttf often shows boxes."""
+    if not text:
         return None
-    shaped = render_pil_text(font_path, size, text, color, use_raqm=True)
-    if shaped is not None:
-        return shaped
     display = tamil_visual_order(text)
     try:
         import pygame.freetype
@@ -4114,19 +4202,27 @@ def render_shaped_text(font_path, size, text, color):
         font.kerning = True
         font.pad = True
         surface, _rect = font.render(display, color)
-        if surface is not None:
+        if surface is not None and surface.get_width() > 1:
             return surface.convert_alpha()
     except Exception:
         pass
-    return render_pil_text(font_path, size, display, color, use_raqm=False)
+    surface = render_pil_text(font_path, size, display, color, use_raqm=False)
+    if surface is not None:
+        return surface
+    surface = render_pil_text(font_path, size, text, color, use_raqm=True)
+    if surface is not None:
+        return surface
+    if pygame_font is not None:
+        return pygame_font.render(display, antialias, color, background)
+    return None
 
 class UiFont:
-    """Latin font with a Tamil font for whole words, so syllables stay intact."""
+    """Latin font plus a dedicated Tamil font, mixed in the same label."""
 
     def __init__(self, size, bold=False):
         self.size = size
         self.latin_path = latin_font_path(bold)
-        self.tamil_path = tamil_font_path() or self.latin_path
+        self.tamil_path = tamil_font_path()
         self.latin = load_pygame_font(self.latin_path, size)
         self.tamil = load_pygame_font(self.tamil_path, size)
         self._shaped_cache = {}
@@ -4141,9 +4237,16 @@ class UiFont:
         cached = self._shaped_cache.get(cache_key)
         if cached is not None:
             return cached
-        shaped = render_shaped_text(self.tamil_path, self.size, text, color)
-        if shaped is None:
-            shaped = self.tamil.render(tamil_visual_order(text), antialias, color, background)
+        parts = []
+        for kind, chunk in split_script_runs(text):
+            if kind == 'ta':
+                parts.append(render_tamil_run(
+                    self.tamil_path, self.tamil, self.size,
+                    chunk, color, antialias, background
+                ))
+            else:
+                parts.append(self.latin.render(chunk, antialias, color, background))
+        shaped = stitch_text_surfaces(parts, background)
         if len(self._shaped_cache) > 80:
             self._shaped_cache.clear()
         self._shaped_cache[cache_key] = shaped
@@ -4166,7 +4269,10 @@ try:
     f_med = get_unicode_font(24, bold=True)
     f_tiny = get_unicode_font(12, bold=True)
     f_weather = get_unicode_font(42, bold=True)
-    print(f"Unicode fonts loaded. Tamil font: {tamil_font_path() or 'missing'}")
+    tamil_loaded = tamil_font_path() or 'missing'
+    print(f"Unicode fonts loaded. Tamil font: {tamil_loaded}")
+    if tamil_loaded == 'missing':
+        print("Tamil names will show as boxes until NotoSansTamil-Regular.ttf is installed.")
 except Exception as e:
     print(f"Font error: {e}, using defaults")
     f_lg = pygame.font.Font(None, 24)
