@@ -9,7 +9,7 @@ Install Raspberry Pi OS Desktop, connect the Pi to the internet, open a
 terminal, and paste this single command:
 
 ```bash
-sudo apt update && sudo apt install -y git && rm -rf "$HOME/tcradio" && git clone https://github.com/simsonpeter/Piradio_2.8.git "$HOME/tcradio" && cd "$HOME/tcradio" && sudo ./install_raspberry_pi_kiosk.sh
+sudo apt update && sudo apt install -y git && rm -rf "$HOME/tcradio" && git clone -b cursor/one-command-pi-install-b322 https://github.com/simsonpeter/Piradio_2.8.git "$HOME/tcradio" && cd "$HOME/tcradio" && sudo ./install_raspberry_pi_kiosk.sh
 ```
 
 The installer automatically:

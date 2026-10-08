@@ -4,14 +4,9 @@ Window.SetBackgroundBottomColor(0.0, 0.0, 0.0);
 title_image = Image.Text("TCRADIOS", 0.92, 0.95, 1.0);
 title_sprite = Sprite(title_image);
 title_sprite.SetX(Window.GetWidth() / 2 - title_image.GetWidth() / 2);
-title_sprite.SetY(Window.GetHeight() / 2 - title_image.GetHeight() - 8);
+title_sprite.SetY(Window.GetHeight() / 2 - title_image.GetHeight());
 
-by_image = Image.Text("by", 0.38, 0.48, 0.64);
-by_sprite = Sprite(by_image);
-by_sprite.SetX(Window.GetWidth() / 2 - by_image.GetWidth() / 2);
-by_sprite.SetY(Window.GetHeight() / 2 + 12);
-
-brand_image = Image.Text("JayathaSoft", 0.38, 0.48, 0.64);
-brand_sprite = Sprite(brand_image);
-brand_sprite.SetX(Window.GetWidth() / 2 - brand_image.GetWidth() / 2);
-brand_sprite.SetY(Window.GetHeight() / 2 + 36);
+subtitle_image = Image.Text("by JayathaSoft", 0.38, 0.48, 0.64);
+subtitle_sprite = Sprite(subtitle_image);
+subtitle_sprite.SetX(Window.GetWidth() / 2 - subtitle_image.GetWidth() / 2);
+subtitle_sprite.SetY(Window.GetHeight() / 2 + 18);

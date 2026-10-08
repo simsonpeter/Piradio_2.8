@@ -1,17 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_LCD=true
-if [[ "${TCRADIOS_SKIP_LCD:-0}" == "1" ]]; then
-    INSTALL_LCD=false
-fi
-if [[ ${1:-} == "--skip-lcd" ]]; then
-    INSTALL_LCD=false
-elif [[ $# -gt 0 ]]; then
-    echo "Usage: sudo $0 [--skip-lcd]" >&2
-    exit 1
-fi
-
 if [[ ${EUID} -ne 0 ]]; then
     echo "Run this installer with sudo: sudo ./install_raspberry_pi_kiosk.sh" >&2
     exit 1
@@ -53,9 +42,6 @@ if [[ -z "${CONFIG_FILE}" || -z "${CMDLINE_FILE}" ]]; then
     echo "Raspberry Pi boot configuration was not found." >&2
     exit 1
 fi
-
-cp -an "${CONFIG_FILE}" "${CONFIG_FILE}.tcradios-backup"
-cp -an "${CMDLINE_FILE}" "${CMDLINE_FILE}.tcradios-backup"
 
 echo "Installing all TCRADIOS application, audio, and boot dependencies..."
 apt-get update
@@ -397,55 +383,25 @@ echo "Backups:"
 echo "  ${CONFIG_FILE}.tcradios-backup"
 echo "  ${CMDLINE_FILE}.tcradios-backup"
 
-LCD_SHOW_DIR="/opt/tcradios-LCD-show"
-if [[ "${INSTALL_LCD}" != true ]]; then
-    echo "LCD driver installation skipped."
+if [[ "${TCRADIOS_SKIP_LCD:-0}" == "1" ]]; then
+    echo "LCD driver installation skipped (TCRADIOS_SKIP_LCD=1)."
     echo "Reboot to activate TCRADIOS: sudo reboot"
-elif [[ -f "${LCD_DRIVER_DIR}/.have_installed" || -f "${LCD_SHOW_DIR}/.have_installed" ]]; then
+elif [[ -f "${LCD_DRIVER_DIR}/.have_installed" ]]; then
     echo "GoodTFT LCD35 driver is already installed."
     echo "Reboot to activate TCRADIOS: sudo reboot"
 else
     echo
-    echo "Installing the GoodTFT LCD35 driver with 270-degree rotation..."
-    if [[ -e "${LCD_SHOW_DIR}" && ! -d "${LCD_SHOW_DIR}/.git" ]]; then
-        echo "${LCD_SHOW_DIR} exists but is not a Git checkout." >&2
-        echo "Move or remove it, then run this installer again." >&2
-        exit 1
-    fi
-    if [[ ! -d "${LCD_SHOW_DIR}/.git" ]]; then
-        git clone https://github.com/goodtft/LCD-show.git "${LCD_SHOW_DIR}"
-    fi
-    git -C "${LCD_SHOW_DIR}" fetch origin "${LCD_SHOW_COMMIT}"
-    git -C "${LCD_SHOW_DIR}" -c advice.detachedHead=false \
-        checkout --detach "${LCD_SHOW_COMMIT}"
-    chmod -R 0755 "${LCD_SHOW_DIR}"
-
-    # The vendor scripts reboot twice and switch the Pi to console auto-login.
-    # Defer those reboots so this installer can restore graphical auto-login
-    # and finish the TCRADIOS boot configuration first.
-    python3 - \
-        "${LCD_SHOW_DIR}/LCD35-show" \
-        "${LCD_SHOW_DIR}/rotate.sh" <<'PY'
-import pathlib
-import sys
-
-marker = ": # reboot deferred to the TCRADIOS installer"
-for filename in sys.argv[1:]:
-    path = pathlib.Path(filename)
-    content = path.read_text()
-    if marker not in content:
-        path.write_text(content.replace("sudo reboot", marker))
-    if "sudo reboot" in path.read_text():
-        raise SystemExit(f"Could not defer reboot in {filename}")
-PY
-
-    (
-        cd "${LCD_SHOW_DIR}"
-        ./LCD35-show 270
-    )
-    echo "GoodTFT LCD35 installed at 270 degrees."
-    echo "Rebooting to activate the display and TCRADIOS..."
+    echo "Installing the reviewed GoodTFT LCD35 driver with 270-degree rotation."
+    echo "The display installer will reboot the Raspberry Pi automatically."
+    rm -rf "${LCD_DRIVER_DIR}"
+    install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${LCD_DRIVER_DIR}"
+    git -C "${LCD_DRIVER_DIR}" init
+    git -C "${LCD_DRIVER_DIR}" remote add origin https://github.com/goodtft/LCD-show.git
+    git -C "${LCD_DRIVER_DIR}" fetch --depth 1 origin "${LCD_SHOW_COMMIT}"
+    git -C "${LCD_DRIVER_DIR}" checkout --detach FETCH_HEAD
+    chown -R "${INSTALL_USER}:${INSTALL_USER}" "${LCD_DRIVER_DIR}"
+    chmod -R 0755 "${LCD_DRIVER_DIR}"
     sync
-    reboot
-    exit 0
+    cd "${LCD_DRIVER_DIR}"
+    exec ./LCD35-show 270
 fi

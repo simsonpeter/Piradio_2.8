@@ -11,7 +11,6 @@ The installer configures:
 - the GoodTFT `LCD35-show` driver with 270-degree rotation;
 - desktop auto-login where `raspi-config` is available;
 - automatic fullscreen launch of `touch_radio.py`;
-- the GoodTFT LCD35 driver with 270-degree screen and touch rotation;
 - a five-second in-app splash that covers the remaining application startup time.
 
 Run from the repository directory on the Raspberry Pi:
@@ -19,13 +18,6 @@ Run from the repository directory on the Raspberry Pi:
 ```bash
 chmod +x install_raspberry_pi_kiosk.sh
 sudo ./install_raspberry_pi_kiosk.sh
-```
-
-The GoodTFT driver reboots the Raspberry Pi automatically at the end. To
-install TCRADIOS without modifying the display driver, use:
-
-```bash
-sudo ./install_raspberry_pi_kiosk.sh --skip-lcd
 sudo reboot
 ```
 
@@ -66,4 +58,5 @@ and reboot:
 
 ```bash
 sudo ./install_raspberry_pi_kiosk.sh
+sudo reboot
 ```
