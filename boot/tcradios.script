@@ -4,33 +4,9 @@ Window.SetBackgroundBottomColor(0.0, 0.0, 0.0);
 title_image = Image.Text("TCRADIOS", 0.92, 0.95, 1.0);
 title_sprite = Sprite(title_image);
 title_sprite.SetX(Window.GetWidth() / 2 - title_image.GetWidth() / 2);
-title_sprite.SetY(Window.GetHeight() / 2 - title_image.GetHeight() - 6);
+title_sprite.SetY(Window.GetHeight() / 2 - title_image.GetHeight());
 
 subtitle_image = Image.Text("by JayathaSoft", 0.38, 0.48, 0.64);
 subtitle_sprite = Sprite(subtitle_image);
 subtitle_sprite.SetX(Window.GetWidth() / 2 - subtitle_image.GetWidth() / 2);
-subtitle_sprite.SetY(Window.GetHeight() / 2 + 12);
-
-dot_image = Image.Text("o", 0.15, 0.59, 0.82);
-dot_sprites = [];
-for (i = 0; i < 3; i++) {
-    dot_sprites[i] = Sprite(dot_image);
-    dot_sprites[i].SetX(Window.GetWidth() / 2 - 20 + i * 16);
-    dot_sprites[i].SetY(Window.GetHeight() / 2 + 48);
-}
-
-tick = 0;
-fun refresh_callback () {
-    tick = tick + 1;
-    active = tick % 3;
-    for (i = 0; i < 3; i++) {
-        if (i == active) {
-            dot_sprites[i].SetOpacity(1);
-        }
-        else {
-            dot_sprites[i].SetOpacity(0.25);
-        }
-    }
-}
-
-Plymouth.SetRefreshFunction(refresh_callback);
+subtitle_sprite.SetY(Window.GetHeight() / 2 + 18);
