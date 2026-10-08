@@ -4139,7 +4139,14 @@ def load_pygame_font(path, size):
             return pygame.font.Font(path, size)
         except Exception:
             pass
-    return pygame.font.Font(None, size)
+    try:
+        return pygame.font.SysFont(
+            "DejaVu Sans,Liberation Sans,FreeSans,Noto Sans,sans-serif",
+            size,
+            bold=size >= 16,
+        )
+    except Exception:
+        return pygame.font.Font(None, size)
 
 def contains_tamil(text):
     return any(ord(char) in TAMIL_RANGE for char in str(text or ''))
@@ -4598,6 +4605,54 @@ def draw_centered_text(surface, font, text, color, rect):
     rendered = font.render(text, True, color)
     surface.blit(rendered, rendered.get_rect(center=rect.center))
     return rendered
+
+try:
+    import pygame.gfxdraw
+    _GFXDRAW = True
+except ImportError:
+    _GFXDRAW = False
+
+def draw_smooth_circle(surface, center, radius, color):
+    x, y = int(center[0]), int(center[1])
+    radius = max(1, int(radius))
+    if _GFXDRAW:
+        pygame.gfxdraw.filled_circle(surface, x, y, radius, color)
+        pygame.gfxdraw.aacircle(surface, x, y, radius, color)
+    else:
+        pygame.draw.circle(surface, color, (x, y), radius)
+
+def draw_round_cap_line(surface, start, end, color, width):
+    pygame.draw.line(surface, color, start, end, width)
+    cap = max(1, int(width / 2))
+    draw_smooth_circle(surface, start, cap, color)
+    draw_smooth_circle(surface, end, cap, color)
+
+def draw_vector_icon(surface, center, kind, color, radius=10, width=4):
+    x, y = center
+    if kind == "minus":
+        draw_round_cap_line(surface, (x - radius, y), (x + radius, y), color, width)
+    elif kind == "plus":
+        draw_round_cap_line(surface, (x - radius, y), (x + radius, y), color, width)
+        draw_round_cap_line(surface, (x, y - radius), (x, y + radius), color, width)
+    elif kind == "close":
+        inset = int(radius * 0.75)
+        draw_round_cap_line(
+            surface, (x - inset, y - inset), (x + inset, y + inset), color, width
+        )
+        draw_round_cap_line(
+            surface, (x - inset, y + inset), (x + inset, y - inset), color, width
+        )
+
+def draw_circle_icon_button(surface, rect, fill, kind):
+    radius = min(rect.width, rect.height) // 2
+    draw_smooth_circle(surface, rect.center, radius, fill)
+    ink = ink_on(fill)
+    draw_vector_icon(
+        surface, rect.center, kind, ink,
+        radius=max(8, radius // 2),
+        width=4 if radius >= 18 else 3,
+    )
+    return fill
 
 def draw_modern_button(surface, rect, fill, border, radius=14, border_width=0):
     body = border if (border[0] + border[1] + border[2]) > 90 else fill
@@ -6895,25 +6950,25 @@ while True:
             draw_modern_button(screen, sleep_chip, (35, 40, 67), (75, 61, 126), 10)
             draw_centered_text(screen, f_tiny, sleep_label, sleep_color, sleep_chip)
 
-        # Volume strip: solid − / + labels, percent always visible
-        vol_minus_rect = pygame.Rect(12, 272, 48, 44)
-        vol_plus_rect = pygame.Rect(260, 272, 48, 44)
-        vol_bar_rect = pygame.Rect(68, 278, 184, 20)
-        labeled_button(screen, vol_minus_rect, UI_AMBER, f_lg, "−", 12)
-        pygame.draw.rect(screen, (37, 48, 72), vol_bar_rect, border_radius=10)
+        # Volume strip: circular vector − / + so glyphs never become boxes
+        vol_minus_rect = pygame.Rect(10, 270, 46, 46)
+        vol_plus_rect = pygame.Rect(264, 270, 46, 46)
+        vol_bar_rect = pygame.Rect(64, 284, 192, 14)
+        draw_circle_icon_button(screen, vol_minus_rect, UI_AMBER, "minus")
+        pygame.draw.rect(screen, (37, 48, 72), vol_bar_rect, border_radius=8)
         fill_width = int(vol_bar_rect.width * vol_level / 100)
         if fill_width > 0:
-            pygame.draw.rect(
-                screen, UI_BLUE,
-                (vol_bar_rect.x, vol_bar_rect.y, fill_width, vol_bar_rect.height),
-                border_radius=10
+            fill_rect = pygame.Rect(
+                vol_bar_rect.x, vol_bar_rect.y, max(14, fill_width), vol_bar_rect.height
             )
+            pygame.draw.rect(screen, UI_BLUE, fill_rect, border_radius=8)
         knob_x = vol_bar_rect.x + int(vol_bar_rect.width * vol_level / 100)
         knob_x = max(vol_bar_rect.x + 8, min(vol_bar_rect.right - 8, knob_x))
-        pygame.draw.circle(screen, UI_TEXT, (knob_x, vol_bar_rect.centery), 7)
+        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), 9, UI_TEXT)
+        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), 4, UI_BLUE)
         vol_pct_surf = f_tiny.render(f"{vol_level}%", True, UI_TEXT)
         screen.blit(vol_pct_surf, (160 - vol_pct_surf.get_width() // 2, 302))
-        labeled_button(screen, vol_plus_rect, UI_GREEN, f_lg, "+", 12)
+        draw_circle_icon_button(screen, vol_plus_rect, UI_GREEN, "plus")
 
         # Primary transport controls
         btn_prev = pygame.Rect(12, 329, 92, 53)
@@ -6966,10 +7021,13 @@ while True:
             )
 
         fab_fill = UI_PINK if fab_open else UI_PURPLE
-        pygame.draw.circle(screen, fab_fill, btn_fab.center, 26)
-        pygame.draw.circle(screen, UI_TEXT, btn_fab.center, 26, 1)
-        draw_centered_text(
-            screen, f_sm, "X" if fab_open else "+", UI_TEXT, btn_fab
+        draw_smooth_circle(screen, btn_fab.center, 26, fab_fill)
+        draw_vector_icon(
+            screen, btn_fab.center,
+            "close" if fab_open else "plus",
+            ink_on(fab_fill),
+            radius=10,
+            width=4,
         )
         if (
             not fab_open
