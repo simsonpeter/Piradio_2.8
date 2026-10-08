@@ -402,7 +402,7 @@ class AudioOutputManager:
             if result.stdout.strip():
                 self.outputs['bluetooth']['available'] = True
                 self.outputs['bluetooth']['connected_device'] = result.stdout.strip().split('\n')[0]
-        except:
+        except Exception:
             pass
         
         print(f"Audio outputs detected: {[(k, v['available']) for k, v in self.outputs.items()]}")
