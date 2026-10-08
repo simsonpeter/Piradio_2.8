@@ -2,6 +2,9 @@
 set -euo pipefail
 
 INSTALL_LCD=true
+if [[ "${TCRADIOS_SKIP_LCD:-0}" == "1" ]]; then
+    INSTALL_LCD=false
+fi
 if [[ ${1:-} == "--skip-lcd" ]]; then
     INSTALL_LCD=false
 elif [[ $# -gt 0 ]]; then
@@ -16,6 +19,8 @@ fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_USER="${SUDO_USER:-}"
+LCD_DRIVER_DIR=""
+LCD_SHOW_COMMIT="a36c00a55e11f0de3b4be0e66f0a2cec47076e23"
 
 if [[ -z "${INSTALL_USER}" || "${INSTALL_USER}" == "root" ]]; then
     echo "Run this installer with sudo from the desktop user account." >&2
@@ -27,6 +32,7 @@ if [[ -z "${INSTALL_HOME}" || ! -d "${INSTALL_HOME}" ]]; then
     echo "Could not determine the home directory for ${INSTALL_USER}." >&2
     exit 1
 fi
+LCD_DRIVER_DIR="${INSTALL_HOME}/LCD-show"
 
 CONFIG_FILE=""
 CMDLINE_FILE=""
@@ -51,7 +57,7 @@ fi
 cp -an "${CONFIG_FILE}" "${CONFIG_FILE}.tcradios-backup"
 cp -an "${CMDLINE_FILE}" "${CMDLINE_FILE}.tcradios-backup"
 
-echo "Installing TCRADIOS system and Bluetooth audio dependencies..."
+echo "Installing all TCRADIOS application, audio, and boot dependencies..."
 apt-get update
 AUDIO_PACKAGES=(pulseaudio-module-bluetooth)
 if dpkg-query -W -f='${Status}' pipewire 2>/dev/null | grep -q "install ok installed"; then
@@ -65,59 +71,70 @@ if dpkg-query -W -f='${Status}' pipewire 2>/dev/null | grep -q "install ok insta
 fi
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
     git \
+    vlc \
+    python3-vlc \
+    python3-pygame \
+    python3-gpiozero \
+    python3-flask \
+    python3-requests \
+    python3-pil \
+    python3-qrcode \
+    alsa-utils \
+    pulseaudio-utils \
+    espeak \
+    fonts-noto-core \
+    fonts-noto-extra \
+    fonts-lohit-taml \
+    libraqm0 \
+    ffmpeg \
+    nodejs \
+    curl \
+    yt-dlp \
+    util-linux \
+    x11-xserver-utils \
+    unclutter \
     plymouth \
     plymouth-themes \
     bluez \
+    network-manager \
     "${AUDIO_PACKAGES[@]}"
 
-if [[ "${INSTALL_LCD}" == true ]]; then
-    LCD_SHOW_DIR="/opt/tcradios-LCD-show"
-    LCD_SHOW_COMMIT="a36c00a55e11f0de3b4be0e66f0a2cec47076e23"
+echo "Verifying Python dependencies..."
+/usr/bin/python3 - <<'PY'
+import pygame
+import qrcode
+import requests
+import vlc
+from flask import Flask
+from PIL import Image, ImageDraw, ImageFont
 
-    echo
-    echo "Installing the GoodTFT LCD35 driver with 270-degree rotation..."
-    if [[ -e "${LCD_SHOW_DIR}" && ! -d "${LCD_SHOW_DIR}/.git" ]]; then
-        echo "${LCD_SHOW_DIR} exists but is not a Git checkout." >&2
-        echo "Move or remove it, then run this installer again." >&2
-        exit 1
-    fi
-    if [[ ! -d "${LCD_SHOW_DIR}/.git" ]]; then
-        git clone https://github.com/goodtft/LCD-show.git "${LCD_SHOW_DIR}"
-    fi
-    git -C "${LCD_SHOW_DIR}" fetch origin "${LCD_SHOW_COMMIT}"
-    git -C "${LCD_SHOW_DIR}" -c advice.detachedHead=false \
-        checkout --detach "${LCD_SHOW_COMMIT}"
-    chmod -R 0755 "${LCD_SHOW_DIR}"
-
-    # The vendor scripts reboot twice and switch the Pi to console auto-login.
-    # Defer those reboots so this installer can restore graphical auto-login
-    # and finish the TCRADIOS boot configuration first.
-    python3 - \
-        "${LCD_SHOW_DIR}/LCD35-show" \
-        "${LCD_SHOW_DIR}/rotate.sh" <<'PY'
-import pathlib
-import sys
-
-marker = ": # reboot deferred to the TCRADIOS installer"
-for filename in sys.argv[1:]:
-    path = pathlib.Path(filename)
-    content = path.read_text()
-    if marker not in content:
-        path.write_text(content.replace("sudo reboot", marker))
-    if "sudo reboot" in path.read_text():
-        raise SystemExit(f"Could not defer reboot in {filename}")
+print("All TCRADIOS Python dependencies are available.")
 PY
 
-    (
-        cd "${LCD_SHOW_DIR}"
-        ./LCD35-show 270
-    )
+echo "Installing the bundled Tamil font for song names..."
+install -d /usr/local/share/fonts/tcradios
+if [[ -d "${SCRIPT_DIR}/fonts" ]]; then
+    install -m 0644 "${SCRIPT_DIR}"/fonts/*.ttf /usr/local/share/fonts/tcradios/ || true
 fi
+fc-cache -f /usr/local/share/fonts/tcradios >/dev/null 2>&1 || true
+
+echo "Installing a current yt-dlp for YouTube search and playback..."
+YTDLP_TMP="$(mktemp)"
+if curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" -o "${YTDLP_TMP}"; then
+    install -m 0755 "${YTDLP_TMP}" /usr/local/bin/yt-dlp
+    echo "yt-dlp $(/usr/local/bin/yt-dlp --version) installed."
+else
+    echo "Warning: current yt-dlp could not be downloaded. The apt package will be used." >&2
+fi
+rm -f "${YTDLP_TMP}"
 
 THEME_DIR="/usr/share/plymouth/themes/tcradios"
 install -d "${THEME_DIR}"
 install -m 0644 "${SCRIPT_DIR}/boot/tcradios.plymouth" "${THEME_DIR}/tcradios.plymouth"
 install -m 0644 "${SCRIPT_DIR}/boot/tcradios.script" "${THEME_DIR}/tcradios.script"
+
+cp -an "${CONFIG_FILE}" "${CONFIG_FILE}.tcradios-backup"
+cp -an "${CMDLINE_FILE}" "${CMDLINE_FILE}.tcradios-backup"
 
 if ! grep -qF "# TCRADIOS quiet boot" "${CONFIG_FILE}"; then
     printf '\n[all]\n# TCRADIOS quiet boot\ndisable_splash=1\n' >> "${CONFIG_FILE}"
@@ -164,14 +181,26 @@ if [[ ! -t 1 ]]; then
 fi
 
 export DISPLAY="\${DISPLAY:-:0}"
+export XDG_CURRENT_DESKTOP="\${XDG_CURRENT_DESKTOP:-labwc}"
 DISPLAY_NUMBER="\${DISPLAY#:}"
-for _ in {1..30}; do
-    [[ -S "/tmp/.X11-unix/X\${DISPLAY_NUMBER}" ]] && break
-    sleep 1
+for _ in {1..20}; do
+    if [[ -S "/tmp/.X11-unix/X\${DISPLAY_NUMBER}" ]] || [[ -n "\${WAYLAND_DISPLAY:-}" ]]; then
+        break
+    fi
+    sleep 0.25
 done
-
-# Give the desktop session time to finish establishing display authorization.
-sleep 3
+# Do not reveal the desktop: keep Plymouth up until the radio window is drawn.
+if command -v xset >/dev/null 2>&1; then
+    xset s off >/dev/null 2>&1 || true
+    xset -dpms >/dev/null 2>&1 || true
+    xset s noblank >/dev/null 2>&1 || true
+fi
+if command -v xsetroot >/dev/null 2>&1; then
+    xsetroot -cursor_name none >/dev/null 2>&1 || true
+fi
+if command -v unclutter >/dev/null 2>&1; then
+    unclutter -idle 0 -root >/dev/null 2>&1 &
+fi
 cd $(printf '%q' "${SCRIPT_DIR}")
 exec /usr/bin/python3 $(printf '%q' "${SCRIPT_DIR}/touch_radio.py")
 EOF
@@ -179,23 +208,137 @@ chmod 0755 /usr/local/bin/tcradios-start
 
 AUTOSTART_DIR="${INSTALL_HOME}/.config/autostart"
 install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${AUTOSTART_DIR}"
+# Remove the legacy direct launcher, which bypasses the shared process lock.
+rm -f "${AUTOSTART_DIR}/tcradio.desktop"
 install -m 0644 -o "${INSTALL_USER}" -g "${INSTALL_USER}" \
     "${SCRIPT_DIR}/boot/tcradios-autostart.desktop" \
     "${AUTOSTART_DIR}/tcradios.desktop"
 
 LABWC_DIR="${INSTALL_HOME}/.config/labwc"
 LABWC_AUTOSTART="${LABWC_DIR}/autostart"
+install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${LABWC_DIR}"
+cat > "${LABWC_AUTOSTART}" <<'EOF'
+#!/bin/sh
+# TCRADIOS kiosk: radio only. No panel, desktop, or notification popups.
+/usr/local/bin/tcradios-start &
+EOF
+chown "${INSTALL_USER}:${INSTALL_USER}" "${LABWC_AUTOSTART}"
+chmod 0755 "${LABWC_AUTOSTART}"
+for sys_autostart in /etc/xdg/labwc/autostart /usr/share/labwc/autostart; do
+    if [[ -f "${sys_autostart}" ]]; then
+        cp -an "${sys_autostart}" "${sys_autostart}.tcradios-backup"
+        cat > "${sys_autostart}" <<'EOF'
+#!/bin/sh
+/usr/local/bin/tcradios-start &
+EOF
+        chmod 0755 "${sys_autostart}"
+    fi
+done
 
-if [[ -d /etc/xdg/labwc ]]; then
-    # Register with Labwc as well. Some Raspberry Pi OS images include Labwc
-    # while the selected desktop still uses XDG autostart. The launcher lock
-    # safely prevents both mechanisms from creating duplicate radio processes.
-    install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${LABWC_DIR}"
-    touch "${LABWC_AUTOSTART}"
-    sed -i '\|/usr/local/bin/tcradios-start|d' "${LABWC_AUTOSTART}"
-    printf '\n/usr/local/bin/tcradios-start &\n' >> "${LABWC_AUTOSTART}"
-    chown "${INSTALL_USER}:${INSTALL_USER}" "${LABWC_AUTOSTART}"
-    chmod 0755 "${LABWC_AUTOSTART}"
+# Hide the Raspberry Pi desktop chrome so boot is splash then radio.
+hide_xdg_autostart() {
+    local name="$1"
+    printf '%s\n' "[Desktop Entry]" "Hidden=true" \
+        > "${AUTOSTART_DIR}/${name}.desktop"
+    chown "${INSTALL_USER}:${INSTALL_USER}" "${AUTOSTART_DIR}/${name}.desktop"
+}
+
+keep_autostart='pulseaudio|pipewire|wireplumber|gnome-keyring|polkit|at-spi|xdg-permission|xdg-desktop-portal'
+if [[ -d /etc/xdg/autostart ]]; then
+    while IFS= read -r desktop_file; do
+        base="$(basename "${desktop_file}" .desktop)"
+        if echo "${base}" | grep -Eiq "${keep_autostart}"; then
+            continue
+        fi
+        hide_xdg_autostart "${base}"
+    done < <(find /etc/xdg/autostart -maxdepth 1 -name '*.desktop' | sort)
+fi
+for extra in \
+    wf-panel-pi \
+    lxpanel \
+    lxpanel-pi \
+    pcmanfm \
+    pcmanfm-desktop \
+    pcmanfm-pi \
+    nm-applet \
+    nm-tray \
+    notification-daemon \
+    xfce4-notifyd \
+    mako \
+    dunst \
+    fnott \
+    lxqt-notificationd \
+    update-notifier \
+    gnome-software-service \
+    piwiz \
+    pprompt \
+    print-applet \
+    light-locker \
+    xscreensaver \
+    pi-packages \
+    rp-prefapps \
+    geoclue-demo-agent \
+    user-dirs-update-gtk \
+    xdg-user-dirs
+do
+    hide_xdg_autostart "${extra}"
+done
+
+LXSESSION_DIR="${INSTALL_HOME}/.config/lxsession/LXDE-pi"
+if [[ -d /etc/xdg/lxsession/LXDE-pi || -d "${LXSESSION_DIR}" ]]; then
+    install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${LXSESSION_DIR}"
+    cat > "${LXSESSION_DIR}/autostart" <<'EOF'
+@/usr/local/bin/tcradios-start
+EOF
+    chown "${INSTALL_USER}:${INSTALL_USER}" "${LXSESSION_DIR}/autostart"
+fi
+
+WAYFIRE_INI="${INSTALL_HOME}/.config/wayfire.ini"
+if [[ -f "${WAYFIRE_INI}" ]]; then
+    python3 - "${WAYFIRE_INI}" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+lines = []
+skip_keys = {"panel", "background", "autostart_wf_shell", "xdg_autostart"}
+in_autostart = False
+for line in text.splitlines():
+    stripped = line.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        in_autostart = stripped.lower() == "[autostart]"
+        lines.append(line)
+        continue
+    if in_autostart:
+        key = stripped.split("=", 1)[0].strip().lower()
+        if key in skip_keys or key.endswith("panel") or "wf-panel" in stripped or "pcmanfm" in stripped:
+            continue
+        if "tcradios-start" in stripped:
+            continue
+    lines.append(line)
+if "[autostart]" not in text.lower():
+    lines.append("[autostart]")
+lines.append("autostart_wf_shell = false")
+lines.append("tcradios = /usr/local/bin/tcradios-start")
+path.write_text("\n".join(lines) + "\n")
+PY
+    chown "${INSTALL_USER}:${INSTALL_USER}" "${WAYFIRE_INI}"
+fi
+
+install -d /etc/NetworkManager/conf.d
+cat > /etc/NetworkManager/conf.d/tcradios-kiosk.conf <<'EOF'
+[connectivity]
+uri=
+interval=0
+EOF
+if command -v nmcli >/dev/null 2>&1; then
+    nmcli general reload >/dev/null 2>&1 || true
+fi
+
+# Disable the legacy service used by older PiRadio installations. It starts a
+# second process outside the launcher's shared lock.
+if systemctl list-unit-files tcradio.service --no-legend 2>/dev/null | grep -q '^tcradio.service'; then
+    systemctl disable --now tcradio.service || true
 fi
 
 if command -v raspi-config >/dev/null 2>&1; then
@@ -205,6 +348,48 @@ if command -v raspi-config >/dev/null 2>&1; then
 fi
 
 systemctl set-default graphical.target
+# The long Plymouth wait keeps the splash on screen. Shutdown Plymouth
+# services also deadlock the LCD35 display, so reboot never finishes.
+systemctl mask plymouth-quit-wait.service
+systemctl mask plymouth-reboot.service
+systemctl mask plymouth-poweroff.service
+systemctl mask plymouth-halt.service
+systemctl disable NetworkManager-wait-online.service || true
+
+install -d /etc/systemd/system.conf.d
+cat > /etc/systemd/system.conf.d/tcradios-reboot.conf <<EOF
+[Manager]
+DefaultTimeoutStopSec=15s
+DefaultTimeoutAbortSec=15s
+EOF
+
+install -d /etc/systemd/logind.conf.d
+cat > /etc/systemd/logind.conf.d/tcradios.conf <<EOF
+[Login]
+KillUserProcesses=yes
+UserStopDelaySec=5
+EOF
+
+if [[ -d /etc/lightdm ]]; then
+    install -d /etc/lightdm/lightdm.conf.d
+    cat > /etc/lightdm/lightdm.conf.d/90-tcradios-nocursor.conf <<'EOF'
+[Seat:*]
+xserver-command=X -nocursor
+EOF
+fi
+
+# Keep Plymouth covering the desktop until the radio window is on screen.
+systemctl disable --now tcradios-release-display.service >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/tcradios-release-display.service
+systemctl daemon-reload || true
+
+usermod -aG netdev,plugdev "${INSTALL_USER}" || true
+
+cat > /etc/sudoers.d/tcradios-power <<EOF
+${INSTALL_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl reboot, /usr/bin/nmcli
+EOF
+chmod 0440 /etc/sudoers.d/tcradios-power
+visudo -cf /etc/sudoers.d/tcradios-power
 
 echo
 echo "TCRADIOS branded boot is installed."
@@ -212,12 +397,55 @@ echo "Backups:"
 echo "  ${CONFIG_FILE}.tcradios-backup"
 echo "  ${CMDLINE_FILE}.tcradios-backup"
 
-if [[ "${INSTALL_LCD}" == true ]]; then
+LCD_SHOW_DIR="/opt/tcradios-LCD-show"
+if [[ "${INSTALL_LCD}" != true ]]; then
+    echo "LCD driver installation skipped."
+    echo "Reboot to activate TCRADIOS: sudo reboot"
+elif [[ -f "${LCD_DRIVER_DIR}/.have_installed" || -f "${LCD_SHOW_DIR}/.have_installed" ]]; then
+    echo "GoodTFT LCD35 driver is already installed."
+    echo "Reboot to activate TCRADIOS: sudo reboot"
+else
+    echo
+    echo "Installing the GoodTFT LCD35 driver with 270-degree rotation..."
+    if [[ -e "${LCD_SHOW_DIR}" && ! -d "${LCD_SHOW_DIR}/.git" ]]; then
+        echo "${LCD_SHOW_DIR} exists but is not a Git checkout." >&2
+        echo "Move or remove it, then run this installer again." >&2
+        exit 1
+    fi
+    if [[ ! -d "${LCD_SHOW_DIR}/.git" ]]; then
+        git clone https://github.com/goodtft/LCD-show.git "${LCD_SHOW_DIR}"
+    fi
+    git -C "${LCD_SHOW_DIR}" fetch origin "${LCD_SHOW_COMMIT}"
+    git -C "${LCD_SHOW_DIR}" -c advice.detachedHead=false \
+        checkout --detach "${LCD_SHOW_COMMIT}"
+    chmod -R 0755 "${LCD_SHOW_DIR}"
+
+    # The vendor scripts reboot twice and switch the Pi to console auto-login.
+    # Defer those reboots so this installer can restore graphical auto-login
+    # and finish the TCRADIOS boot configuration first.
+    python3 - \
+        "${LCD_SHOW_DIR}/LCD35-show" \
+        "${LCD_SHOW_DIR}/rotate.sh" <<'PY'
+import pathlib
+import sys
+
+marker = ": # reboot deferred to the TCRADIOS installer"
+for filename in sys.argv[1:]:
+    path = pathlib.Path(filename)
+    content = path.read_text()
+    if marker not in content:
+        path.write_text(content.replace("sudo reboot", marker))
+    if "sudo reboot" in path.read_text():
+        raise SystemExit(f"Could not defer reboot in {filename}")
+PY
+
+    (
+        cd "${LCD_SHOW_DIR}"
+        ./LCD35-show 270
+    )
     echo "GoodTFT LCD35 installed at 270 degrees."
     echo "Rebooting to activate the display and TCRADIOS..."
     sync
     reboot
     exit 0
 fi
-
-echo "LCD installation skipped. Reboot to activate TCRADIOS: sudo reboot"

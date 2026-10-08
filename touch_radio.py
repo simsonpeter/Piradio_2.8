@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import pygame, vlc, requests, time, os, io, math, socket, sys, threading, qrcode, json, base64, random, re
+import pygame, vlc, requests, time, os, io, math, socket, sys, threading, qrcode, json, base64, random, re, shutil, signal
 from urllib.request import urlopen
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
@@ -8,7 +8,7 @@ from flask import Flask, render_template_string, Response, jsonify, request
 import subprocess
 
 try:
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageFont
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
@@ -483,6 +483,40 @@ class AudioOutputManager:
             return False
 
 audio_manager = AudioOutputManager()
+vol_level = 80
+last_unmuted_volume = 80
+
+def apply_live_volume(level):
+    global vol_level, last_unmuted_volume
+    vol_level = max(0, min(100, int(level)))
+    if vol_level > 0:
+        last_unmuted_volume = vol_level
+    try:
+        player.audio_set_volume(vol_level)
+    except Exception:
+        pass
+    try:
+        audio_manager.set_volume(vol_level)
+    except Exception as error:
+        print(f"Volume error: {error}")
+    try:
+        save_playback_state()
+    except NameError:
+        pass
+
+def skip_playback(step):
+    global current_idx
+    try:
+        if current_youtube_id() and continue_youtube_queue(step, user=True):
+            return
+    except NameError:
+        pass
+    try:
+        if stations:
+            current_idx = (current_idx + step) % len(stations)
+            play()
+    except (NameError, ZeroDivisionError):
+        pass
 
 # --- ALARM & SLEEP TIMER SYSTEM ---
 class SmartAlarm:
@@ -705,11 +739,11 @@ class Theme:
         self.secondary = colors.get('secondary', '#9d50bb')
         self.accent = colors.get('accent', '#ffcc00')
         self.text = colors.get('text', '#ffffff')
-        self.card = colors.get('card', 'rgba(20,20,20,0.95)')
-        self.button = colors.get('button', 'rgba(30,30,30,0.95)')
-        self.button_hover = colors.get('button_hover', 'rgba(50,50,50,0.95)')
+        self.card = colors.get('card', 'rgba(8,10,14,0.96)')
+        self.button = colors.get('button', colors.get('primary', '#2ee6ff'))
+        self.button_hover = colors.get('button_hover', colors.get('secondary', '#c86bff'))
         self.gradient_start = colors.get('gradient_start', '#000000')
-        self.gradient_end = colors.get('gradient_end', '#000000')
+        self.gradient_end = colors.get('gradient_end', colors.get('primary', '#2ee6ff'))
         self.pygame_primary = self.hex_to_rgb(self.primary)
         self.pygame_secondary = self.hex_to_rgb(self.secondary)
         self.pygame_accent = self.hex_to_rgb(self.accent)
@@ -725,120 +759,32 @@ class Theme:
         except ValueError:
             return (255, 255, 255)
 
-THEMES = {
-    'true_black': Theme('True Black', {
-        'name': 'True Black',
+def dark_theme(name, primary, secondary, accent):
+    return Theme(name, {
         'background': '#000000',
-        'primary': '#00d2ff',
-        'secondary': '#9d50bb',
-        'accent': '#ffcc00',
-        'text': '#ffffff',
-        'card': 'rgba(20,20,20,0.95)',
-        'button': 'rgba(30,30,30,0.95)',
-        'button_hover': 'rgba(50,50,50,0.95)',
+        'primary': primary,
+        'secondary': secondary,
+        'accent': accent,
+        'text': '#f6f7ff',
+        'card': 'rgba(8,10,14,0.96)',
+        'button': primary,
+        'button_hover': secondary,
         'gradient_start': '#000000',
-        'gradient_end': '#000000'
-    }),
-    'midnight_black': Theme('Midnight Black', {
-        'name': 'Midnight Black',
-        'background': '#0a0a0a',
-        'primary': '#00d2ff',
-        'secondary': '#9d50bb',
-        'accent': '#ffcc00',
-        'text': '#ffffff',
-        'gradient_start': '#0a0a0a',
-        'gradient_end': '#1a1a1a'
-    }),
-    'pure_white': Theme('Pure White', {
-        'name': 'Pure White',
-        'background': '#ffffff',
-        'primary': '#2c3e50',
-        'secondary': '#3498db',
-        'accent': '#e74c3c',
-        'text': '#2c3e50',
-        'gradient_start': '#f8f9fa',
-        'gradient_end': '#e9ecef'
-    }),
-    'ocean_blue': Theme('Ocean Blue', {
-        'name': 'Ocean Blue',
-        'background': '#0f3460',
-        'primary': '#00d2ff',
-        'secondary': '#1e90ff',
-        'accent': '#ff6b6b',
-        'text': '#ffffff',
-        'gradient_start': '#0f3460',
-        'gradient_end': '#16213e'
-    }),
-    'sunset_orange': Theme('Sunset Orange', {
-        'name': 'Sunset Orange',
-        'background': '#ff7e5f',
-        'primary': '#feb47b',
-        'secondary': '#ff6b6b',
-        'accent': '#2c3e50',
-        'text': '#ffffff',
-        'gradient_start': '#ff7e5f',
-        'gradient_end': '#feb47b'
-    }),
-    'forest_green': Theme('Forest Green', {
-        'name': 'Forest Green',
-        'background': '#1a472a',
-        'primary': '#2ecc71',
-        'secondary': '#27ae60',
-        'accent': '#f39c12',
-        'text': '#ffffff',
-        'gradient_start': '#1a472a',
-        'gradient_end': '#2d5a27'
-    }),
-    'purple_haze': Theme('Purple Haze', {
-        'name': 'Purple Haze',
-        'background': '#6a11cb',
-        'primary': '#2575fc',
-        'secondary': '#8a2be2',
-        'accent': '#ff416c',
-        'text': '#ffffff',
-        'gradient_start': '#6a11cb',
-        'gradient_end': '#2575fc'
-    }),
-    'cyberpunk': Theme('Cyberpunk', {
-        'name': 'Cyberpunk',
-        'background': '#0d0221',
-        'primary': '#ff00ff',
-        'secondary': '#00ffff',
-        'accent': '#ff6b00',
-        'text': '#ffffff',
-        'gradient_start': '#0d0221',
-        'gradient_end': '#2d00aa'
-    }),
-    'golden_hour': Theme('Golden Hour', {
-        'name': 'Golden Hour',
-        'background': '#f39c12',
-        'primary': '#e74c3c',
-        'secondary': '#d35400',
-        'accent': '#2c3e50',
-        'text': '#ffffff',
-        'gradient_start': '#f39c12',
-        'gradient_end': '#e74c3c'
-    }),
-    'mint_fresh': Theme('Mint Fresh', {
-        'name': 'Mint Fresh',
-        'background': '#00b894',
-        'primary': '#00cec9',
-        'secondary': '#81ecec',
-        'accent': '#fd79a8',
-        'text': '#2d3436',
-        'gradient_start': '#00b894',
-        'gradient_end': '#00cec9'
-    }),
-    'crimson_red': Theme('Crimson Red', {
-        'name': 'Crimson Red',
-        'background': '#c0392b',
-        'primary': '#e74c3c',
-        'secondary': '#ff7675',
-        'accent': '#fdcb6e',
-        'text': '#ffffff',
-        'gradient_start': '#c0392b',
-        'gradient_end': '#e74c3c'
+        'gradient_end': primary,
     })
+
+THEMES = {
+    'true_black': dark_theme('True Black', '#2ee6c7', '#5ba8ff', '#f0c45a'),
+    'midnight_black': dark_theme('Midnight Black', '#8ea2ff', '#d4a4ff', '#f0c45a'),
+    'pure_white': dark_theme('Ice Night', '#7ed4ff', '#9bb0ff', '#f4d27a'),
+    'ocean_blue': dark_theme('Ocean Blue', '#33d6ff', '#4f8cff', '#5ee0b8'),
+    'sunset_orange': dark_theme('Sunset Orange', '#ff8a3d', '#ff6b9d', '#ffd166'),
+    'forest_green': dark_theme('Forest Green', '#3ee6a0', '#7ae08a', '#f0c45a'),
+    'purple_haze': dark_theme('Purple Haze', '#c9a0ff', '#8b85ff', '#ff9ec8'),
+    'cyberpunk': dark_theme('Cyberpunk', '#ff4ec8', '#2ee6e0', '#ffb347'),
+    'golden_hour': dark_theme('Golden Hour', '#f0c03a', '#ff9a3d', '#3ee6c7'),
+    'mint_fresh': dark_theme('Mint Fresh', '#3ee6c7', '#7ae0e8', '#8bb4ff'),
+    'crimson_red': dark_theme('Crimson Red', '#ff5a73', '#f0c45a', '#3ee6c7'),
 }
 
 current_theme = THEMES['true_black']
@@ -878,6 +824,154 @@ GRAY = (100, 100, 100)
 BLACK = (0, 0, 0)
 BACKGROUND = current_theme.pygame_background
 
+# --- WEATHER, DISPLAY & POWER SETTINGS ---
+class DeviceSettingsManager:
+    def __init__(self):
+        self.settings_file = os.path.expanduser("~/.radio_device_settings")
+        self.weather_name = "Hove"
+        self.weather_country = "United Kingdom"
+        self.weather_latitude = 50.83
+        self.weather_longitude = -0.17
+        self.brightness = 100
+        self.auto_dim_enabled = False
+        self.auto_dim_minutes = 5
+        self.dim_brightness = 25
+        self.applied_brightness = None
+        self.hardware_brightness_available = False
+        self.load()
+
+    def load(self):
+        try:
+            with open(self.settings_file, "r", encoding="utf-8") as settings:
+                data = json.load(settings)
+            self.weather_name = str(
+                data.get("weather_name", self.weather_name)
+            )[:60]
+            self.weather_country = str(
+                data.get("weather_country", self.weather_country)
+            )[:60]
+            self.weather_latitude = float(
+                data.get("weather_latitude", self.weather_latitude)
+            )
+            self.weather_longitude = float(
+                data.get("weather_longitude", self.weather_longitude)
+            )
+            self.brightness = max(
+                10, min(100, int(data.get("brightness", self.brightness)))
+            )
+            self.auto_dim_enabled = bool(
+                data.get("auto_dim_enabled", self.auto_dim_enabled)
+            )
+            self.auto_dim_minutes = max(
+                1, min(60, int(
+                    data.get("auto_dim_minutes", self.auto_dim_minutes)
+                ))
+            )
+            self.dim_brightness = max(
+                5, min(50, int(
+                    data.get("dim_brightness", self.dim_brightness)
+                ))
+            )
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def save(self):
+        data = {
+            "weather_name": self.weather_name,
+            "weather_country": self.weather_country,
+            "weather_latitude": self.weather_latitude,
+            "weather_longitude": self.weather_longitude,
+            "brightness": self.brightness,
+            "auto_dim_enabled": self.auto_dim_enabled,
+            "auto_dim_minutes": self.auto_dim_minutes,
+            "dim_brightness": self.dim_brightness
+        }
+        try:
+            with open(self.settings_file, "w", encoding="utf-8") as settings:
+                json.dump(data, settings, indent=2)
+        except OSError as error:
+            print(f"Device settings save error: {error}")
+
+    def weather_url(self):
+        return (
+            "https://api.open-meteo.com/v1/forecast"
+            f"?latitude={self.weather_latitude}"
+            f"&longitude={self.weather_longitude}"
+            "&current_weather=true"
+            "&daily=weather_code,temperature_2m_max,temperature_2m_min"
+            "&forecast_days=5&timezone=auto"
+        )
+
+    def set_hardware_brightness(self, level):
+        level = max(5, min(100, int(level)))
+        if self.applied_brightness == level:
+            return
+        self.applied_brightness = level
+        self.hardware_brightness_available = False
+
+        backlight_root = "/sys/class/backlight"
+        try:
+            for device in os.listdir(backlight_root):
+                device_path = os.path.join(backlight_root, device)
+                with open(
+                    os.path.join(device_path, "max_brightness"), "r"
+                ) as maximum_file:
+                    maximum = int(maximum_file.read().strip())
+                value = max(1, round(maximum * level / 100))
+                with open(
+                    os.path.join(device_path, "brightness"), "w"
+                ) as brightness_file:
+                    brightness_file.write(str(value))
+                self.hardware_brightness_available = True
+                return
+        except (OSError, ValueError):
+            pass
+
+        try:
+            query = subprocess.run(
+                ["xrandr", "--query"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                env={**os.environ, "DISPLAY": ":0"}
+            )
+            output = next(
+                (
+                    line.split()[0]
+                    for line in query.stdout.splitlines()
+                    if " connected" in line
+                ),
+                None
+            )
+            if output:
+                result = subprocess.run(
+                    [
+                        "xrandr", "--output", output,
+                        "--brightness", f"{level / 100:.2f}"
+                    ],
+                    capture_output=True,
+                    timeout=3,
+                    env={**os.environ, "DISPLAY": ":0"}
+                )
+                self.hardware_brightness_available = result.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    def as_dict(self):
+        return {
+            "weather_name": self.weather_name,
+            "weather_country": self.weather_country,
+            "weather_latitude": self.weather_latitude,
+            "weather_longitude": self.weather_longitude,
+            "brightness": self.brightness,
+            "auto_dim_enabled": self.auto_dim_enabled,
+            "auto_dim_minutes": self.auto_dim_minutes,
+            "dim_brightness": self.dim_brightness
+        }
+
+device_settings = DeviceSettingsManager()
+last_interaction_time = time.time()
+
 # --- WEB REMOTE APP ---
 app = Flask(__name__)
 
@@ -889,6 +983,14 @@ def add_cors_headers(response):
     return response
 
 youtube_results_cache = []
+youtube_queue = []
+youtube_queue_index = -1
+youtube_skip_ids = set()
+youtube_touch_offset = 0
+_youtube_was_playing = False
+_youtube_ended_handled = False
+_youtube_play_started_at = 0
+YOUTUBE_SEARCH_COUNT = 24
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -915,8 +1017,16 @@ HTML_TEMPLATE = """
             --button-hover: {{ theme.button_hover }};
             --gradient-start: {{ theme.gradient_start }};
             --gradient-end: {{ theme.gradient_end }};
+            --muted: #e6ebf6;
             --safe-top: env(safe-area-inset-top);
             --safe-bottom: env(safe-area-inset-bottom);
+        }
+
+        @font-face {
+            font-family: 'TCRTamil';
+            src: url('/static/NotoSansTamil-Regular.ttf') format('truetype');
+            unicode-range: U+0B80-0BFF;
+            font-display: swap;
         }
         
         * {
@@ -924,12 +1034,12 @@ HTML_TEMPLATE = """
             padding: 0;
             box-sizing: border-box;
             -webkit-tap-highlight-color: transparent;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            font-family: 'TCRTamil', 'Noto Sans Tamil', 'Lohit Tamil', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
         }
         
         html, body {
             height: 100%;
-            background: var(--bg);
+            background: #000;
             color: var(--text);
             overflow: hidden;
             position: fixed;
@@ -941,7 +1051,7 @@ HTML_TEMPLATE = """
             height: 100dvh;
             display: flex;
             flex-direction: column;
-            background: var(--bg);
+            background: #000;
             padding-top: var(--safe-top);
             padding-bottom: var(--safe-bottom);
         }
@@ -978,8 +1088,8 @@ HTML_TEMPLATE = """
             width: 40px;
             height: 40px;
             border-radius: 12px;
-            background: var(--card);
-            border: 1px solid rgba(255,255,255,0.1);
+            background: color-mix(in srgb, var(--primary) 22%, #08080c);
+            border: 2px solid var(--primary);
             color: var(--text);
             display: flex;
             align-items: center;
@@ -1041,7 +1151,7 @@ HTML_TEMPLATE = """
         
         .np-subtitle {
             font-size: 12px;
-            color: rgba(255,255,255,0.6);
+            color: var(--muted);
             margin-top: 2px;
         }
         
@@ -1100,11 +1210,12 @@ HTML_TEMPLATE = """
         }
         
         .card {
-            background: var(--card);
+            background: #0a0c10;
+            color: var(--text);
             border-radius: 16px;
             padding: 16px;
             margin-bottom: 12px;
-            border: 1px solid rgba(255,255,255,0.05);
+            border: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
         }
         
         .player-card {
@@ -1158,7 +1269,7 @@ HTML_TEMPLATE = """
         
         .big-subtitle {
             font-size: 16px;
-            color: rgba(255,255,255,0.6);
+            color: var(--muted);
         }
         
         .controls-grid {
@@ -1169,8 +1280,8 @@ HTML_TEMPLATE = """
         }
         
         .control-btn {
-            background: var(--button);
-            border: 1px solid rgba(255,255,255,0.1);
+            background: color-mix(in srgb, var(--button) 28%, #08080c);
+            border: 2px solid var(--primary);
             border-radius: 16px;
             padding: 20px;
             color: var(--text);
@@ -1322,7 +1433,7 @@ HTML_TEMPLATE = """
         
         .station-genre {
             font-size: 12px;
-            color: rgba(255,255,255,0.6);
+            color: var(--muted);
         }
         
         .input-group {
@@ -1498,7 +1609,7 @@ HTML_TEMPLATE = """
         
         .link-url {
             font-size: 12px;
-            color: rgba(255,255,255,0.5);
+            color: var(--muted);
             margin-top: 2px;
             white-space: nowrap;
             overflow: hidden;
@@ -1535,7 +1646,7 @@ HTML_TEMPLATE = """
             align-items: center;
             gap: 4px;
             padding: 8px;
-            color: rgba(255,255,255,0.5);
+            color: var(--muted);
             cursor: pointer;
             transition: all 0.2s;
             border: none;
@@ -1598,7 +1709,7 @@ HTML_TEMPLATE = """
         }
         
         .connection-subtitle {
-            color: rgba(255,255,255,0.6);
+            color: var(--muted);
             margin-bottom: 40px;
             font-size: 16px;
         }
@@ -1693,7 +1804,7 @@ HTML_TEMPLATE = """
         .empty-state {
             text-align: center;
             padding: 60px 20px;
-            color: rgba(255,255,255,0.5);
+            color: var(--muted);
         }
         
         .empty-icon {
@@ -1796,7 +1907,7 @@ HTML_TEMPLATE = """
         
         .output-sub {
             font-size: 11px;
-            color: rgba(255,255,255,0.5);
+            color: var(--muted);
             margin-top: 2px;
         }
 
@@ -1809,7 +1920,7 @@ HTML_TEMPLATE = """
         }
 
         .bluetooth-status {
-            color: rgba(255,255,255,0.65);
+            color: var(--muted);
             font-size: 12px;
             line-height: 1.4;
         }
@@ -1851,7 +1962,7 @@ HTML_TEMPLATE = """
         }
 
         .bluetooth-device-meta {
-            color: rgba(255,255,255,0.55);
+            color: var(--muted);
             font-size: 11px;
             margin-top: 3px;
         }
@@ -1950,7 +2061,7 @@ HTML_TEMPLATE = """
         
         .youtube-meta {
             font-size: 12px;
-            color: rgba(255,255,255,0.5);
+            color: var(--muted);
         }
         
         .search-container {
@@ -2315,6 +2426,61 @@ HTML_TEMPLATE = """
                     </div>
                     {% endfor %}
                 </div>
+
+                <div class="section-header">
+                    <span class="section-title">Weather Location</span>
+                </div>
+                <div class="card">
+                    <div class="input-group">
+                        <label class="input-label">Town, city, or postcode</label>
+                        <input type="text" id="weather-location" class="text-input" value="{{ device_settings.weather_name }}" placeholder="Hove">
+                    </div>
+                    <div id="weather-location-current" style="font-size: 13px; color: var(--muted); margin-bottom: 12px;">
+                        {{ device_settings.weather_name }}{% if device_settings.weather_country %}, {{ device_settings.weather_country }}{% endif %}
+                    </div>
+                    <button class="btn-primary" onclick="saveWeatherLocation()">📍 Update Weather</button>
+                </div>
+
+                <div class="section-header">
+                    <span class="section-title">Screen Brightness</span>
+                </div>
+                <div class="card">
+                    <div class="setting-row">
+                        <span class="setting-label">Brightness</span>
+                        <span class="setting-value" id="brightness-value">{{ device_settings.brightness }}%</span>
+                    </div>
+                    <input type="range" id="brightness-slider" min="10" max="100" value="{{ device_settings.brightness }}" class="text-input" oninput="previewBrightness(this.value)" onchange="saveDisplaySettings()">
+
+                    <div class="setting-row" style="margin-top: 18px;">
+                        <span class="setting-label">Automatic dimming</span>
+                        <div class="toggle-switch {% if device_settings.auto_dim_enabled %}active{% endif %}" id="auto-dim-toggle" onclick="toggleAutoDim()"></div>
+                    </div>
+
+                    <div class="input-group" style="margin-top: 15px;">
+                        <label class="input-label">Dim after</label>
+                        <select id="auto-dim-minutes" class="select-input" onchange="saveDisplaySettings()">
+                            {% for minutes in [1, 2, 5, 10, 15, 30, 60] %}
+                            <option value="{{ minutes }}" {% if minutes == device_settings.auto_dim_minutes %}selected{% endif %}>{{ minutes }} minute{% if minutes != 1 %}s{% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="setting-row">
+                        <span class="setting-label">Dimmed level</span>
+                        <span class="setting-value" id="dim-brightness-value">{{ device_settings.dim_brightness }}%</span>
+                    </div>
+                    <input type="range" id="dim-brightness-slider" min="5" max="50" value="{{ device_settings.dim_brightness }}" class="text-input" oninput="document.getElementById('dim-brightness-value').textContent = this.value + '%'" onchange="saveDisplaySettings()">
+                </div>
+
+                <div class="section-header">
+                    <span class="section-title">Power</span>
+                </div>
+                <div class="card">
+                    <div style="font-size: 13px; color: var(--muted); margin-bottom: 12px;">
+                        Safely stop playback and shut down before removing power.
+                    </div>
+                    <button class="btn-primary" onclick="requestSafeShutdown()" style="background: #c0392b; color: #fff;">⏻ Safe Shutdown</button>
+                </div>
             </div>
         </div>
         
@@ -2358,17 +2524,17 @@ HTML_TEMPLATE = """
     <script>
         // Theme definitions for instant switching without reload
         const themes = {
-            'true_black': { bg: '#000000', primary: '#00d2ff', secondary: '#9d50bb', accent: '#ffcc00', text: '#ffffff', card: 'rgba(20,20,20,0.95)', button: 'rgba(30,30,30,0.95)', buttonHover: 'rgba(50,50,50,0.95)', gradientStart: '#000000', gradientEnd: '#000000' },
-            'midnight_black': { bg: '#0a0a0a', primary: '#00d2ff', secondary: '#9d50bb', accent: '#ffcc00', text: '#ffffff', card: 'rgba(20,20,20,0.95)', button: 'rgba(30,30,30,0.95)', buttonHover: 'rgba(50,50,50,0.95)', gradientStart: '#0a0a0a', gradientEnd: '#1a1a1a' },
-            'pure_white': { bg: '#ffffff', primary: '#2c3e50', secondary: '#3498db', accent: '#e74c3c', text: '#2c3e50', card: 'rgba(240,240,240,0.95)', button: 'rgba(220,220,220,0.95)', buttonHover: 'rgba(200,200,200,0.95)', gradientStart: '#f8f9fa', gradientEnd: '#e9ecef' },
-            'ocean_blue': { bg: '#0f3460', primary: '#00d2ff', secondary: '#1e90ff', accent: '#ff6b6b', text: '#ffffff', card: 'rgba(15,52,96,0.95)', button: 'rgba(20,60,100,0.95)', buttonHover: 'rgba(25,70,120,0.95)', gradientStart: '#0f3460', gradientEnd: '#16213e' },
-            'sunset_orange': { bg: '#ff7e5f', primary: '#feb47b', secondary: '#ff6b6b', accent: '#2c3e50', text: '#ffffff', card: 'rgba(255,126,95,0.95)', button: 'rgba(255,140,100,0.95)', buttonHover: 'rgba(255,160,120,0.95)', gradientStart: '#ff7e5f', gradientEnd: '#feb47b' },
-            'forest_green': { bg: '#1a472a', primary: '#2ecc71', secondary: '#27ae60', accent: '#f39c12', text: '#ffffff', card: 'rgba(26,71,42,0.95)', button: 'rgba(30,80,50,0.95)', buttonHover: 'rgba(40,100,60,0.95)', gradientStart: '#1a472a', gradientEnd: '#2d5a27' },
-            'purple_haze': { bg: '#6a11cb', primary: '#2575fc', secondary: '#8a2be2', accent: '#ff416c', text: '#ffffff', card: 'rgba(106,17,203,0.95)', button: 'rgba(120,30,220,0.95)', buttonHover: 'rgba(140,50,240,0.95)', gradientStart: '#6a11cb', gradientEnd: '#2575fc' },
-            'cyberpunk': { bg: '#0d0221', primary: '#ff00ff', secondary: '#00ffff', accent: '#ff6b00', text: '#ffffff', card: 'rgba(13,2,33,0.95)', button: 'rgba(30,5,60,0.95)', buttonHover: 'rgba(50,10,100,0.95)', gradientStart: '#0d0221', gradientEnd: '#2d00aa' },
-            'golden_hour': { bg: '#f39c12', primary: '#e74c3c', secondary: '#d35400', accent: '#2c3e50', text: '#ffffff', card: 'rgba(243,156,18,0.95)', button: 'rgba(255,170,30,0.95)', buttonHover: 'rgba(255,190,50,0.95)', gradientStart: '#f39c12', gradientEnd: '#e74c3c' },
-            'mint_fresh': { bg: '#00b894', primary: '#00cec9', secondary: '#81ecec', accent: '#fd79a8', text: '#2d3436', card: 'rgba(0,184,148,0.95)', button: 'rgba(0,200,160,0.95)', buttonHover: 'rgba(0,220,180,0.95)', gradientStart: '#00b894', gradientEnd: '#00cec9' },
-            'crimson_red': { bg: '#c0392b', primary: '#e74c3c', secondary: '#ff7675', accent: '#fdcb6e', text: '#ffffff', card: 'rgba(192,57,43,0.95)', button: 'rgba(220,70,50,0.95)', buttonHover: 'rgba(240,90,70,0.95)', gradientStart: '#c0392b', gradientEnd: '#e74c3c' }
+            'true_black': { bg: '#000000', primary: '#2ee6c7', secondary: '#5ba8ff', accent: '#f0c45a', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#2ee6c7', buttonHover: '#5ba8ff', gradientStart: '#000000', gradientEnd: '#2ee6c7' },
+            'midnight_black': { bg: '#000000', primary: '#8ea2ff', secondary: '#d4a4ff', accent: '#f0c45a', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#8ea2ff', buttonHover: '#d4a4ff', gradientStart: '#000000', gradientEnd: '#8ea2ff' },
+            'pure_white': { bg: '#000000', primary: '#7ed4ff', secondary: '#9bb0ff', accent: '#f4d27a', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#7ed4ff', buttonHover: '#9bb0ff', gradientStart: '#000000', gradientEnd: '#7ed4ff' },
+            'ocean_blue': { bg: '#000000', primary: '#33d6ff', secondary: '#4f8cff', accent: '#5ee0b8', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#33d6ff', buttonHover: '#4f8cff', gradientStart: '#000000', gradientEnd: '#33d6ff' },
+            'sunset_orange': { bg: '#000000', primary: '#ff8a3d', secondary: '#ff6b9d', accent: '#ffd166', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ff8a3d', buttonHover: '#ff6b9d', gradientStart: '#000000', gradientEnd: '#ff8a3d' },
+            'forest_green': { bg: '#000000', primary: '#3ee6a0', secondary: '#7ae08a', accent: '#f0c45a', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#3ee6a0', buttonHover: '#7ae08a', gradientStart: '#000000', gradientEnd: '#3ee6a0' },
+            'purple_haze': { bg: '#000000', primary: '#c9a0ff', secondary: '#8b85ff', accent: '#ff9ec8', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#c9a0ff', buttonHover: '#8b85ff', gradientStart: '#000000', gradientEnd: '#c9a0ff' },
+            'cyberpunk': { bg: '#000000', primary: '#ff4ec8', secondary: '#2ee6e0', accent: '#ffb347', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ff4ec8', buttonHover: '#2ee6e0', gradientStart: '#000000', gradientEnd: '#ff4ec8' },
+            'golden_hour': { bg: '#000000', primary: '#f0c03a', secondary: '#ff9a3d', accent: '#3ee6c7', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#f0c03a', buttonHover: '#ff9a3d', gradientStart: '#000000', gradientEnd: '#f0c03a' },
+            'mint_fresh': { bg: '#000000', primary: '#3ee6c7', secondary: '#7ae0e8', accent: '#8bb4ff', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#3ee6c7', buttonHover: '#7ae0e8', gradientStart: '#000000', gradientEnd: '#3ee6c7' },
+            'crimson_red': { bg: '#000000', primary: '#ff5a73', secondary: '#f0c45a', accent: '#3ee6c7', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ff5a73', buttonHover: '#f0c45a', gradientStart: '#000000', gradientEnd: '#ff5a73' }
         };
         
         function applyTheme(themeKey) {
@@ -2379,6 +2545,7 @@ HTML_TEMPLATE = """
             root.style.setProperty('--secondary', t.secondary);
             root.style.setProperty('--accent', t.accent);
             root.style.setProperty('--text', t.text);
+            root.style.setProperty('--muted', t.muted || '#e6ebf6');
             root.style.setProperty('--card', t.card);
             root.style.setProperty('--button', t.button);
             root.style.setProperty('--button-hover', t.buttonHover);
@@ -2403,6 +2570,7 @@ HTML_TEMPLATE = """
         let currentVolume = {{ vol_level }};
         let alarmEnabled = {{ alarm_settings.enabled|tojson }};
         let alarmDays = {{ alarm_settings.days|tojson }};
+        let autoDimEnabled = {{ device_settings.auto_dim_enabled|tojson }};
         let html5QrCode = null;
         let youtubeResults = [];
         
@@ -2565,15 +2733,21 @@ HTML_TEMPLATE = """
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({query: query})
-            }).then(r => r.json()).then(data => {
+            }).then(r => r.text()).then(text => {
+                let data;
+                try {
+                    data = JSON.parse(text);
+                } catch (e) {
+                    throw new Error('Search failed');
+                }
                 if (data.success) {
-                    youtubeResults = data.results;
-                    displayYouTubeResults(data.results);
+                    youtubeResults = data.results || [];
+                    displayYouTubeResults(youtubeResults);
                 } else {
-                    resultsDiv.innerHTML = '<div class="empty-state"><div class="empty-text">Error: ' + (data.error || 'Unknown error') + '</div></div>';
+                    resultsDiv.innerHTML = '<div class="empty-state"><div class="empty-text">' + escapeHtml(data.error || 'Search failed') + '</div></div>';
                 }
             }).catch(err => {
-                resultsDiv.innerHTML = '<div class="empty-state"><div class="empty-text">Search failed</div></div>';
+                resultsDiv.innerHTML = '<div class="empty-state"><div class="empty-text">' + escapeHtml(err.message || 'Search failed') + '</div></div>';
             });
         }
         
@@ -2810,6 +2984,79 @@ HTML_TEMPLATE = """
                 showToast('Theme updated');
             });
         }
+
+        function saveWeatherLocation() {
+            const location = document.getElementById('weather-location').value.trim();
+            if (!location) {
+                showToast('Enter a town, city, or postcode');
+                return;
+            }
+            showToast('Finding weather location…');
+            fetch(apiBase + '/api/weather/location', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({location: location})
+            }).then(async response => {
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Location update failed');
+                }
+                document.getElementById('weather-location').value = data.weather_name;
+                document.getElementById('weather-location-current').textContent =
+                    data.weather_name + (data.weather_country ? ', ' + data.weather_country : '');
+                showToast('Weather location updated');
+            }).catch(error => showToast(error.message));
+        }
+
+        function previewBrightness(value) {
+            document.getElementById('brightness-value').textContent = value + '%';
+        }
+
+        function saveDisplaySettings() {
+            const brightness = parseInt(document.getElementById('brightness-slider').value);
+            const autoDimMinutes = parseInt(document.getElementById('auto-dim-minutes').value);
+            const dimBrightness = parseInt(document.getElementById('dim-brightness-slider').value);
+            fetch(apiBase + '/api/display/settings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    brightness: brightness,
+                    autoDimEnabled: autoDimEnabled,
+                    autoDimMinutes: autoDimMinutes,
+                    dimBrightness: dimBrightness
+                })
+            }).then(async response => {
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Display update failed');
+                }
+                showToast('Display settings saved');
+            }).catch(error => showToast(error.message));
+        }
+
+        function toggleAutoDim() {
+            autoDimEnabled = !autoDimEnabled;
+            document.getElementById('auto-dim-toggle').classList.toggle(
+                'active', autoDimEnabled
+            );
+            saveDisplaySettings();
+        }
+
+        function requestSafeShutdown() {
+            if (!confirm('Safely shut down TCRADIOS now?')) return;
+            if (!confirm('The radio will turn off. Continue?')) return;
+            fetch(apiBase + '/api/system/shutdown', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({confirm: 'SHUTDOWN'})
+            }).then(async response => {
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Shutdown failed');
+                }
+                showToast('Shutting down safely…');
+            }).catch(error => showToast(error.message));
+        }
         
         function showThemeModal() {
             switchView('audio');
@@ -3032,6 +3279,7 @@ def home():
         all_themes=THEMES,
         alarm_settings=alarm_settings,
         sleep_timer_settings=sleep_timer_settings,
+        device_settings=device_settings.as_dict(),
         outputs=outputs_data,
         current_output=audio_manager.current_output
     )
@@ -3081,25 +3329,17 @@ def remote_action(action):
     global current_idx, vol_level
     try:
         if action == 'next':
-            current_idx = (current_idx + 1) % len(stations)
-            play()
+            skip_playback(1)
         elif action == 'prev':
-            current_idx = (current_idx - 1) % len(stations)
-            play()
+            skip_playback(-1)
         elif action == 'volup':
-            vol_level = min(vol_level + 10, 100)
-            player.audio_set_volume(vol_level)
-            audio_manager.set_volume(vol_level)
+            apply_live_volume(min(vol_level + 10, 100))
         elif action == 'voldown':
-            vol_level = max(vol_level - 10, 0)
-            player.audio_set_volume(vol_level)
-            audio_manager.set_volume(vol_level)
+            apply_live_volume(max(vol_level - 10, 0))
         elif action == 'toggle':
             player.pause()
         elif action == 'mute':
-            vol_level = 0 if vol_level > 0 else 80
-            player.audio_set_volume(vol_level)
-            audio_manager.set_volume(vol_level)
+            apply_live_volume(0 if vol_level > 0 else last_unmuted_volume)
         return "OK"
     except Exception as e:
         return f"Error: {str(e)}", 500
@@ -3118,9 +3358,7 @@ def play_index(idx):
 def set_volume_level(level):
     global vol_level
     try:
-        vol_level = max(0, min(100, level))
-        player.audio_set_volume(vol_level)
-        audio_manager.set_volume(vol_level)
+        apply_live_volume(level)
         return jsonify({"volume": vol_level})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -3147,6 +3385,81 @@ def get_volume():
 def get_now_playing():
     return jsonify({"text": meta_text if meta_text else stations[current_idx]['name']})
 
+LISTEN_ALONG_PAGE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Listen along • TCRADIOS</title>
+<style>
+body { margin:0; min-height:100vh; background:#000; color:#fff;
+  font-family:'TCRTamil','Noto Sans Tamil',system-ui,sans-serif;
+  display:flex; align-items:center; justify-content:center; text-align:center;
+  padding:24px; }
+.card { width:min(420px,100%); }
+.kicker { letter-spacing:.18em; font-size:12px; color:#e6ebf6; margin-bottom:12px; }
+h1 { font-size:28px; margin:0 0 8px; }
+.now { color:#e6ebf6; min-height:24px; margin-bottom:22px; }
+audio { width:100%; margin:18px 0; }
+a { color:#7ed4ff; }
+.err { color:#ffb347; font-size:14px; margin-top:12px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="kicker">LISTEN ALONG</div>
+  <h1 id="name">TCRADIOS</h1>
+  <div class="now" id="now"></div>
+  <audio id="player" controls autoplay></audio>
+  <div class="err" id="err"></div>
+  <p><a id="stream" href="#">Open this station</a> · <a href="/">Full remote</a></p>
+</div>
+<script>
+async function loadListen() {
+  const res = await fetch('/api/listen');
+  const data = await res.json();
+  document.getElementById('name').textContent = data.name || 'TCRADIOS';
+  document.getElementById('now').textContent = data.now_playing || '';
+  const player = document.getElementById('player');
+  const err = document.getElementById('err');
+  const stream = document.getElementById('stream');
+  if (data.url) stream.href = data.url;
+  if (data.url && player.dataset.src !== data.url) {
+    player.dataset.src = data.url;
+    player.src = data.url;
+    player.play().catch(() => {
+      err.textContent = 'This station is playing on TCRADIOS. Tap play, or open the stream.';
+    });
+  }
+  if (!data.url) err.textContent = 'No stream is ready yet.';
+}
+loadListen();
+setInterval(loadListen, 8000);
+</script>
+</body>
+</html>
+"""
+
+@app.route('/listen')
+def listen_along():
+    return Response(LISTEN_ALONG_PAGE, mimetype='text/html')
+
+@app.route('/api/listen')
+def api_listen():
+    try:
+        station = stations[current_idx]
+        playing = meta_text or station.get('name', '')
+    except Exception:
+        station = {}
+        playing = ''
+    return jsonify({
+        'name': station.get('name', 'TCRADIOS'),
+        'url': station.get('url', ''),
+        'now_playing': playing,
+        'genre': station.get('genre', ''),
+        'youtube': bool(station.get('youtube_id')),
+    })
+
 @app.route('/api/status')
 def get_status():
     try:
@@ -3158,6 +3471,112 @@ def get_status():
         "volume": vol_level,
         "station": current_idx
     })
+
+@app.route('/api/weather/location', methods=['GET', 'POST'])
+def weather_location():
+    global last_weather_update
+    if request.method == 'GET':
+        return jsonify({'success': True, **device_settings.as_dict()})
+
+    try:
+        data = request.get_json(silent=True) or {}
+        query = str(data.get('location', '')).strip()
+        if not query:
+            return jsonify({
+                'success': False,
+                'error': 'Enter a town, city, or postcode'
+            }), 400
+
+        response = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={
+                'name': query,
+                'count': 1,
+                'language': 'en',
+                'format': 'json'
+            },
+            timeout=8
+        )
+        response.raise_for_status()
+        results = response.json().get('results', [])
+        if not results:
+            return jsonify({
+                'success': False,
+                'error': 'Location not found'
+            }), 404
+
+        location = results[0]
+        device_settings.weather_name = str(location.get('name', query))[:60]
+        device_settings.weather_country = str(
+            location.get('country', '')
+        )[:60]
+        device_settings.weather_latitude = float(location['latitude'])
+        device_settings.weather_longitude = float(location['longitude'])
+        device_settings.save()
+        last_weather_update = 0
+        return jsonify({
+            'success': True,
+            **device_settings.as_dict()
+        })
+    except (KeyError, ValueError, requests.RequestException) as error:
+        return jsonify({'success': False, 'error': str(error)}), 502
+
+@app.route('/api/display/settings', methods=['GET', 'POST'])
+def display_settings():
+    global last_interaction_time
+    if request.method == 'GET':
+        return jsonify({'success': True, **device_settings.as_dict()})
+
+    try:
+        data = request.get_json(silent=True) or {}
+        if 'brightness' in data:
+            device_settings.brightness = max(
+                10, min(100, int(data['brightness']))
+            )
+        if 'autoDimEnabled' in data:
+            device_settings.auto_dim_enabled = bool(data['autoDimEnabled'])
+        if 'autoDimMinutes' in data:
+            device_settings.auto_dim_minutes = max(
+                1, min(60, int(data['autoDimMinutes']))
+            )
+        if 'dimBrightness' in data:
+            device_settings.dim_brightness = max(
+                5, min(50, int(data['dimBrightness']))
+            )
+        device_settings.save()
+        last_interaction_time = time.time()
+        device_settings.set_hardware_brightness(device_settings.brightness)
+        return jsonify({
+            'success': True,
+            **device_settings.as_dict()
+        })
+    except (ValueError, TypeError) as error:
+        return jsonify({'success': False, 'error': str(error)}), 400
+
+def perform_safe_shutdown():
+    time.sleep(1)
+    try:
+        player.stop()
+    except Exception:
+        pass
+    result = subprocess.run(
+        ['sudo', '-n', '/usr/bin/systemctl', 'poweroff'],
+        capture_output=True,
+        text=True
+    )
+    if result.returncode != 0:
+        print(f"Safe shutdown failed: {result.stderr.strip()}")
+
+@app.route('/api/system/shutdown', methods=['POST'])
+def safe_shutdown():
+    data = request.get_json(silent=True) or {}
+    if data.get('confirm') != 'SHUTDOWN':
+        return jsonify({
+            'success': False,
+            'error': 'Shutdown confirmation is required'
+        }), 400
+    threading.Thread(target=perform_safe_shutdown, daemon=True).start()
+    return jsonify({'success': True, 'message': 'Shutting down safely'})
 
 @app.route('/api/stations')
 def get_stations():
@@ -3388,61 +3807,185 @@ def bluetooth_connect():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 503
 
+_ytdlp_extract_args = None
+
+def ytdlp_error_text(result):
+    text = ''
+    if result is not None:
+        text = f"{result.stderr or ''}\n{result.stdout or ''}"
+    lines = [
+        line.strip() for line in text.splitlines()
+        if line.strip() and not line.strip().startswith('{')
+    ]
+    message = lines[-1] if lines else 'YouTube request failed'
+    return message[:240]
+
+def ytdlp_extract_args():
+    """Flags a current yt-dlp needs to solve YouTube playback challenges."""
+    global _ytdlp_extract_args
+    if _ytdlp_extract_args is not None:
+        return list(_ytdlp_extract_args)
+    args = []
+    try:
+        probe = subprocess.run(
+            ['yt-dlp', '--help'],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        help_text = f'{probe.stdout}\n{probe.stderr}'
+        if '--js-runtimes' in help_text and shutil.which('node'):
+            args.extend(['--js-runtimes', 'node'])
+        if '--remote-components' in help_text:
+            args.extend(['--remote-components', 'ejs:github'])
+        _ytdlp_extract_args = args
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return list(args)
+
+def run_ytdlp(args, timeout):
+    cmd = ['yt-dlp', '--no-warnings', '--no-progress', *args]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        return None, 'yt-dlp is not installed'
+    except subprocess.TimeoutExpired:
+        return None, 'YouTube request timed out'
+    stdout = (result.stdout or '').strip()
+    if result.returncode != 0 or not stdout:
+        return None, ytdlp_error_text(result)
+    return stdout, None
+
+def format_youtube_duration(value):
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    try:
+        total = int(float(value))
+    except (TypeError, ValueError):
+        return '0:00'
+    if total < 0:
+        return '0:00'
+    minutes, seconds = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f'{hours}:{minutes:02d}:{seconds:02d}'
+    return f'{minutes}:{seconds:02d}'
+
+def youtube_result_from_info(video, fallback_id=''):
+    video_id = str(video.get('id') or fallback_id or '').strip()
+    if not re.fullmatch(r'[A-Za-z0-9_-]{6,32}', video_id):
+        url = video.get('url') or video.get('webpage_url') or ''
+        match = re.search(r'(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{6,32})', str(url))
+        video_id = match.group(1) if match else ''
+    thumbnail = video.get('thumbnail') or ''
+    if not thumbnail:
+        for item in reversed(video.get('thumbnails') or []):
+            if isinstance(item, dict) and item.get('url'):
+                thumbnail = item['url']
+                break
+    if not thumbnail and video_id:
+        thumbnail = f'https://i.ytimg.com/vi/{video_id}/mqdefault.jpg'
+    duration = video.get('duration_string')
+    if not duration:
+        if video.get('is_live') or video.get('live_status') == 'is_live':
+            duration = 'LIVE'
+        else:
+            duration = format_youtube_duration(video.get('duration'))
+    return {
+        'id': video_id,
+        'title': video.get('title') or 'Unknown',
+        'uploader': video.get('uploader') or video.get('channel') or video.get('uploader_id') or 'Unknown',
+        'duration': duration,
+        'thumbnail': thumbnail,
+    }
+
+def parse_youtube_payload(stdout):
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        videos = []
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                videos.append(youtube_result_from_info(item))
+        return [video for video in videos if video['id']]
+    if isinstance(payload, dict) and isinstance(payload.get('entries'), list):
+        videos = [
+            youtube_result_from_info(item)
+            for item in payload['entries']
+            if isinstance(item, dict)
+        ]
+        return [video for video in videos if video['id']]
+    if isinstance(payload, dict):
+        video = youtube_result_from_info(payload)
+        return [video] if video['id'] else []
+    return []
+
+def search_youtube(query):
+    query = str(query or '').strip()
+    if not query:
+        return [], 'Empty query'
+    video_id = ''
+    if 'youtube.com' in query or 'youtu.be' in query:
+        match = re.search(r'(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{6,32})', query)
+        video_id = match.group(1) if match else ''
+    if video_id:
+        stdout, err = run_ytdlp([
+            *ytdlp_extract_args(),
+            '--dump-single-json',
+            '--skip-download',
+            '--no-playlist',
+            f'https://www.youtube.com/watch?v={video_id}',
+        ], timeout=30)
+        if not stdout:
+            return [], err or 'Could not open that YouTube link'
+        return parse_youtube_payload(stdout), None
+    # Metadata only. --extract-audio used to download every hit, so search
+    # was capped at 8. Flat metadata can return a longer list safely.
+    stdout, err = run_ytdlp([
+        '--dump-single-json',
+        '--flat-playlist',
+        '--skip-download',
+        '--no-warnings',
+        f'ytsearch{YOUTUBE_SEARCH_COUNT}:{query}',
+    ], timeout=40)
+    if not stdout:
+        return [], err or 'YouTube search failed'
+    return parse_youtube_payload(stdout), None
+
+def youtube_audio_url(video_id, timeout=40):
+    if not re.fullmatch(r'[A-Za-z0-9_-]{6,32}', str(video_id or '')):
+        return '', 'No video ID'
+    stdout, err = run_ytdlp([
+        *ytdlp_extract_args(),
+        '-f', 'bestaudio/best',
+        '--get-url',
+        '--no-playlist',
+        f'https://www.youtube.com/watch?v={video_id}',
+    ], timeout=timeout)
+    if stdout:
+        for line in stdout.splitlines():
+            candidate = line.strip()
+            if candidate.startswith('http'):
+                return candidate, None
+    return '', err or 'Could not extract audio URL'
+
 # YouTube API Routes
 @app.route('/api/youtube/search', methods=['POST'])
 def youtube_search():
     global youtube_results_cache
     try:
-        data = request.get_json()
-        query = data.get('query', '').strip()
-        if not query:
-            return jsonify({'success': False, 'error': 'Empty query'})
-        
-        # Check if it's a URL
-        if 'youtube.com' in query or 'youtu.be' in query:
-            # Extract video ID from URL
-            video_id = None
-            if 'v=' in query:
-                video_id = query.split('v=')[1].split('&')[0]
-            elif 'youtu.be/' in query:
-                video_id = query.split('youtu.be/')[1].split('?')[0]
-            
-            if video_id:
-                # Get video info
-                cmd = ['yt-dlp', '--dump-json', '--no-playlist', f'https://youtube.com/watch?v={video_id}']
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-                if result.stdout:
-                    video = json.loads(result.stdout.strip().split('\n')[0])
-                    return jsonify({
-                        'success': True,
-                        'results': [{
-                            'id': video.get('id', video_id),
-                            'title': video.get('title', 'Unknown'),
-                            'uploader': video.get('uploader', 'Unknown'),
-                            'duration': video.get('duration_string', '0:00'),
-                            'thumbnail': video.get('thumbnail', f'https://img.youtube.com/vi/{video_id}/mqdefault.jpg')
-                        }]
-                    })
-        
-        # Regular search
-        cmd = ['yt-dlp', '--dump-json', '--no-playlist', f'ytsearch8:{query}', '--extract-audio', '--audio-format', 'mp3']
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        
-        videos = []
-        for line in result.stdout.strip().split('\n'):
-            if line:
-                try:
-                    video = json.loads(line)
-                    videos.append({
-                        'id': video.get('id', ''),
-                        'title': video.get('title', 'Unknown'),
-                        'uploader': video.get('uploader', 'Unknown'),
-                        'duration': video.get('duration_string', '0:00'),
-                        'thumbnail': video.get('thumbnail', '')
-                    })
-                except:
-                    continue
-        
+        data = request.get_json(silent=True) or {}
+        videos, err = search_youtube(data.get('query', ''))
+        if err and not videos:
+            status = 400 if err == 'Empty query' else 502
+            return jsonify({'success': False, 'error': err}), status
         youtube_results_cache = videos
         return jsonify({'success': True, 'results': videos})
     except Exception as e:
@@ -3450,38 +3993,30 @@ def youtube_search():
 
 @app.route('/api/youtube/play', methods=['POST'])
 def youtube_play():
-    global current_idx
     try:
-        data = request.get_json()
-        video_id = data.get('video_id', '')
-        title = data.get('title', 'YouTube Audio')
-        
-        if not video_id:
-            return jsonify({'success': False, 'error': 'No video ID'})
-        
-        cmd = ['yt-dlp', '-f', 'bestaudio', '--get-url', f'https://youtube.com/watch?v={video_id}']
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        audio_url = result.stdout.strip()
-        
-        if audio_url and audio_url.startswith('http'):
-            youtube_station = {
-                'name': f'YT: {title[:40]}',
-                'url': audio_url,
-                'genre': 'YouTube',
-                'logo': f'https://img.youtube.com/vi/{video_id}/mqdefault.jpg',
-                'youtube_id': video_id
-            }
-            stations.append(youtube_station)
-            current_idx = len(stations) - 1
-            play()
-            return jsonify({'success': True, 'message': f'Playing: {title}'})
-        else:
-            return jsonify({'success': False, 'error': 'Could not extract audio URL'})
+        data = request.get_json(silent=True) or {}
+        video_id = str(data.get('video_id', '')).strip()
+        title = str(data.get('title') or 'YouTube Audio')
+        audio_url, err = youtube_audio_url(video_id)
+        if not audio_url:
+            return jsonify({'success': False, 'error': err}), 502
+        remember_youtube_queue(video_id, title)
+        play_youtube_station(video_id, title, audio_url)
+        return jsonify({'success': True, 'message': f'Playing: {title}'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/static/<path:filename>')
 def serve_static(filename):
+    if filename == 'NotoSansTamil-Regular.ttf':
+        font_file = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)),
+            'fonts',
+            'NotoSansTamil-Regular.ttf',
+        )
+        if os.path.isfile(font_file):
+            with open(font_file, 'rb') as handle:
+                return Response(handle.read(), mimetype='font/ttf')
     if filename == 'radio.png' and PIL_AVAILABLE:
         try:
             img = Image.new('RGBA', (100, 100), (0,0,0,0))
@@ -3512,34 +4047,413 @@ threading.Thread(target=run_flask, daemon=True).start()
 # --- PYGAME SETUP ---
 os.environ['DISPLAY'] = ':0'
 pygame.init()
+pygame.mouse.set_visible(False)
+try:
+    pygame.mouse.set_cursor((8, 8), (0, 0), (0,) * 8, (0,) * 8)
+except Exception:
+    pass
 
 # --- UNICODE FONT SETUP (Tamil Support) ---
-def get_unicode_font(size, bold=False):
-    """Load font with Unicode/Tamil support"""
-    font_paths = [
-        '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
-        '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
-        '/usr/share/fonts/truetype/noto/NotoSansTamil-Regular.ttf',
-        '/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc',
-        '/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf',
-        '/usr/share/fonts/truetype/noto/NotoSansTamil-Bold.ttf',
-        '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
-        '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf',
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-        '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-    ]
-    
+TAMIL_RANGE = range(0x0B80, 0x0BFF + 1)
+APP_FONT_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "fonts")
+TAMIL_FONT_CANDIDATES = [
+    os.path.join(APP_FONT_DIR, "NotoSansTamil-Regular.ttf"),
+    "/usr/local/share/fonts/tcradios/NotoSansTamil-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansTamil-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansTamil-Bold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansTamilUI-Regular.ttf",
+    "/usr/share/fonts/truetype/lohit-tamil/Lohit-Tamil.ttf",
+    "/usr/share/fonts/truetype/lohit-taml/Lohit-Tamil.ttf",
+    "/usr/share/fonts/truetype/samyak/Samyak-Tamil.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansTamil-Regular.otf",
+]
+
+def first_existing_font(paths):
+    for path in paths:
+        if path and os.path.isfile(path):
+            return path
+    return None
+
+def latin_font_path(bold=False):
     if bold:
-        font_paths = [p for p in font_paths if 'Bold' in p] + font_paths
-    
-    for font_path in font_paths:
-        if os.path.exists(font_path):
-            try:
-                return pygame.font.Font(font_path, size)
-            except:
+        return first_existing_font([
+            '/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+            '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf',
+            '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        ])
+    return first_existing_font([
+        '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
+        '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+    ])
+
+def font_supports_tamil(path):
+    if not path or not os.path.isfile(path):
+        return False
+    sample = '\u0b95'
+    try:
+        font = pygame.font.Font(path, 18)
+        metrics = font.metrics(sample)
+        return bool(metrics and metrics[0] and metrics[0][4] > 0)
+    except Exception:
+        pass
+    try:
+        if not PIL_AVAILABLE:
+            return True
+        font = ImageFont.truetype(path, 18)
+        probe = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
+        box = probe.textbbox((0, 0), sample, font=font)
+        return box[2] > box[0]
+    except Exception:
+        return False
+
+_TAMIL_FONT_UNSET = object()
+_TAMIL_FONT_CACHE = _TAMIL_FONT_UNSET
+
+def tamil_font_path():
+    global _TAMIL_FONT_CACHE
+    if _TAMIL_FONT_CACHE is not _TAMIL_FONT_UNSET:
+        return _TAMIL_FONT_CACHE
+    found = []
+    for path in TAMIL_FONT_CANDIDATES:
+        if path and os.path.isfile(path) and path not in found:
+            found.append(path)
+    try:
+        import glob
+        for path in glob.glob('/usr/share/fonts/**/*[Tt]amil*.ttf', recursive=True):
+            if path not in found:
+                found.append(path)
+    except Exception:
+        pass
+    chosen = None
+    for path in found:
+        if font_supports_tamil(path):
+            chosen = path
+            break
+    if chosen is None and found:
+        chosen = found[0]
+    _TAMIL_FONT_CACHE = chosen
+    return chosen
+
+def load_pygame_font(path, size):
+    if path:
+        try:
+            return pygame.font.Font(path, size)
+        except Exception:
+            pass
+    try:
+        return pygame.font.SysFont(
+            "DejaVu Sans,Liberation Sans,FreeSans,Noto Sans,sans-serif",
+            size,
+            bold=size >= 16,
+        )
+    except Exception:
+        return pygame.font.Font(None, size)
+
+def contains_tamil(text):
+    return any(ord(char) in TAMIL_RANGE for char in str(text or ''))
+
+def is_tamil_combiner(char):
+    code = ord(char)
+    return (
+        char in '\u200c\u200d'
+        or code in (0x0B82, 0x0B83, 0x0BD7)
+        or 0x0BBE <= code <= 0x0BCD
+    )
+
+def is_tamil_consonant(char):
+    return '\u0b95' <= char <= '\u0bb9'
+
+def tamil_visual_order(text):
+    """Put left-side Tamil vowels in front when the font cannot shape them."""
+    text = str(text or '')
+    if not contains_tamil(text):
+        return text
+    left_vowels = {'\u0bc6', '\u0bc7', '\u0bc8'}
+    split_vowels = {
+        '\u0bca': ('\u0bc6', '\u0bbe'),
+        '\u0bcb': ('\u0bc7', '\u0bbe'),
+        '\u0bcc': ('\u0bc6', '\u0bb3'),
+    }
+    result = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if not (ord(char) in TAMIL_RANGE or char in '\u200c\u200d'):
+            result.append(char)
+            index += 1
+            continue
+        cluster = [char]
+        index += 1
+        while index < len(text):
+            nxt = text[index]
+            if is_tamil_combiner(nxt):
+                cluster.append(nxt)
+                index += 1
                 continue
-    
-    return pygame.font.Font(None, size)
+            if cluster[-1] == '\u0bcd' and is_tamil_consonant(nxt):
+                cluster.append(nxt)
+                index += 1
+                continue
+            break
+        vowel = cluster[-1]
+        base = ''.join(cluster[:-1])
+        if vowel in left_vowels and base:
+            result.append(vowel + base)
+        elif vowel in split_vowels and base:
+            left, right = split_vowels[vowel]
+            result.append(left + base + right)
+        else:
+            result.append(''.join(cluster))
+    return ''.join(result)
+
+def sanitize_text(text):
+    """Clean text for display - keeps Unicode characters including Tamil"""
+    if not text:
+        return "Unknown"
+    text = str(text)
+    text = ''.join(char for char in text if ord(char) >= 32 or char == '\n')
+    return text.strip()
+
+def style_now_playing(text):
+    text = sanitize_text(text)
+    if contains_tamil(text):
+        return text
+    return text.upper()
+
+_TAMIL_INDEPENDENT = {
+    '\u0b85': 'a', '\u0b86': 'aa', '\u0b87': 'i', '\u0b88': 'ii',
+    '\u0b89': 'u', '\u0b8a': 'uu', '\u0b8e': 'e', '\u0b8f': 'ee',
+    '\u0b90': 'ai', '\u0b92': 'o', '\u0b93': 'oo', '\u0b94': 'au',
+}
+_TAMIL_CONSONANT = {
+    '\u0b95': 'k', '\u0b99': 'ng', '\u0b9a': 'c', '\u0b9c': 'j',
+    '\u0b9e': 'nj', '\u0b9f': 't', '\u0ba3': 'n', '\u0ba4': 'th',
+    '\u0ba8': 'n', '\u0ba9': 'n', '\u0baa': 'p', '\u0bae': 'm',
+    '\u0baf': 'y', '\u0bb0': 'r', '\u0bb1': 'r', '\u0bb2': 'l',
+    '\u0bb3': 'l', '\u0bb4': 'zh', '\u0bb5': 'v', '\u0bb6': 'sh',
+    '\u0bb7': 'sh', '\u0bb8': 's', '\u0bb9': 'h',
+}
+_TAMIL_VOWEL_SIGN = {
+    '\u0bbe': 'aa', '\u0bbf': 'i', '\u0bc0': 'ii', '\u0bc1': 'u',
+    '\u0bc2': 'uu', '\u0bc6': 'e', '\u0bc7': 'ee', '\u0bc8': 'ai',
+    '\u0bca': 'o', '\u0bcb': 'oo', '\u0bcc': 'au',
+}
+
+def transliterate_tamil(text):
+    """Latin letters under a Tamil now-playing line."""
+    text = str(text or '')
+    if not contains_tamil(text):
+        return ''
+    out = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        nxt = text[index + 1] if index + 1 < len(text) else ''
+        if char in _TAMIL_INDEPENDENT:
+            out.append(_TAMIL_INDEPENDENT[char])
+            index += 1
+            continue
+        if char in _TAMIL_CONSONANT:
+            root = _TAMIL_CONSONANT[char]
+            if nxt == '\u0bcd':
+                out.append(root)
+                index += 2
+                continue
+            if nxt in _TAMIL_VOWEL_SIGN:
+                out.append(root + _TAMIL_VOWEL_SIGN[nxt])
+                index += 2
+                continue
+            out.append(root + 'a')
+            index += 1
+            continue
+        if char in _TAMIL_VOWEL_SIGN or char == '\u0bcd':
+            index += 1
+            continue
+        if char == '\u0b82':
+            out.append('m')
+            index += 1
+            continue
+        if char == '\u0b83':
+            out.append('h')
+            index += 1
+            continue
+        out.append(char)
+        index += 1
+    return re.sub(r'\s+', ' ', ''.join(out)).strip()
+
+def station_initials(name):
+    name = sanitize_text(name)
+    if not contains_tamil(name):
+        return name[:2].upper()
+    index = 0
+    while index < len(name) and name[index].isspace():
+        index += 1
+    if index >= len(name):
+        return name[:1]
+    cluster = name[index]
+    index += 1
+    while index < len(name):
+        nxt = name[index]
+        if is_tamil_combiner(nxt):
+            cluster += nxt
+            index += 1
+            continue
+        if cluster.endswith('\u0bcd') and is_tamil_consonant(nxt):
+            cluster += nxt
+            index += 1
+            continue
+        break
+    return tamil_visual_order(cluster)
+
+def truncate_display(text, length, tail=False):
+    text = sanitize_text(text)
+    if len(text) <= length:
+        return text
+    if not contains_tamil(text):
+        return ("…" + text[-(length - 1):]) if tail else (text[:length - 1] + "…")
+    if tail:
+        start = max(0, len(text) - (length - 1))
+        while start < len(text) and is_tamil_combiner(text[start]):
+            start += 1
+        return "…" + text[start:]
+    end = length - 1
+    while end > 0 and is_tamil_combiner(text[end]):
+        end -= 1
+    return text[:end] + "…"
+
+def render_pil_text(font_path, size, text, color, use_raqm=False):
+    if not PIL_AVAILABLE or not font_path:
+        return None
+    try:
+        layout = getattr(getattr(ImageFont, 'Layout', None), 'RAQM', None)
+        if use_raqm and layout is None:
+            return None
+        font = (
+            ImageFont.truetype(font_path, size, layout_engine=layout)
+            if use_raqm and layout is not None
+            else ImageFont.truetype(font_path, size)
+        )
+        probe = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
+        box = probe.textbbox((0, 0), text, font=font)
+        width = max(1, box[2] - box[0])
+        height = max(1, box[3] - box[1])
+        image = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+        fill = (*color, 255) if len(color) == 3 else color
+        ImageDraw.Draw(image).text((-box[0], -box[1]), text, font=font, fill=fill)
+        return pygame.image.fromstring(image.tobytes(), image.size, 'RGBA')
+    except Exception:
+        return None
+
+def split_script_runs(text):
+    """Keep Tamil syllables together; draw Latin with a Latin font."""
+    runs = []
+    kind = None
+    chunk = []
+    for char in str(text or ''):
+        tamil_char = (
+            ord(char) in TAMIL_RANGE
+            or char in '\u200c\u200d'
+            or (kind == 'ta' and is_tamil_combiner(char))
+        )
+        next_kind = 'ta' if tamil_char else 'lt'
+        if next_kind != kind and chunk:
+            runs.append((kind, ''.join(chunk)))
+            chunk = []
+        kind = next_kind
+        chunk.append(char)
+    if chunk:
+        runs.append((kind, ''.join(chunk)))
+    return runs
+
+def stitch_text_surfaces(parts, background=None):
+    parts = [part for part in parts if part is not None]
+    if not parts:
+        surface = pygame.Surface((1, 1), pygame.SRCALPHA)
+        return surface
+    width = sum(part.get_width() for part in parts)
+    height = max(part.get_height() for part in parts)
+    surface = pygame.Surface((max(1, width), max(1, height)), pygame.SRCALPHA)
+    if background:
+        surface.fill(background)
+    x = 0
+    for part in parts:
+        surface.blit(part, (x, (height - part.get_height()) // 2))
+        x += part.get_width()
+    return surface
+
+def render_tamil_run(font_path, pygame_font, size, text, color, antialias, background):
+    """Draw Tamil from an explicit Tamil file. SDL_ttf often shows boxes."""
+    if not text:
+        return None
+    display = tamil_visual_order(text)
+    try:
+        import pygame.freetype
+        font = pygame.freetype.Font(font_path, size)
+        font.kerning = True
+        font.pad = True
+        surface, _rect = font.render(display, color)
+        if surface is not None and surface.get_width() > 1:
+            return surface.convert_alpha()
+    except Exception:
+        pass
+    surface = render_pil_text(font_path, size, display, color, use_raqm=False)
+    if surface is not None:
+        return surface
+    surface = render_pil_text(font_path, size, text, color, use_raqm=True)
+    if surface is not None:
+        return surface
+    if pygame_font is not None:
+        return pygame_font.render(display, antialias, color, background)
+    return None
+
+class UiFont:
+    """Latin font plus a dedicated Tamil font, mixed in the same label."""
+
+    def __init__(self, size, bold=False):
+        self.size = size
+        self.latin_path = latin_font_path(bold)
+        self.tamil_path = tamil_font_path()
+        self.latin = load_pygame_font(self.latin_path, size)
+        self.tamil = load_pygame_font(self.tamil_path, size)
+        self._shaped_cache = {}
+
+    def render(self, text, antialias, color, background=None):
+        text = str(text or '')
+        if not text:
+            return self.latin.render('', antialias, color, background)
+        if not contains_tamil(text):
+            return self.latin.render(text, antialias, color, background)
+        cache_key = (text, tuple(color), background)
+        cached = self._shaped_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        parts = []
+        for kind, chunk in split_script_runs(text):
+            if kind == 'ta':
+                parts.append(render_tamil_run(
+                    self.tamil_path, self.tamil, self.size,
+                    chunk, color, antialias, background
+                ))
+            else:
+                parts.append(self.latin.render(chunk, antialias, color, background))
+        shaped = stitch_text_surfaces(parts, background)
+        if len(self._shaped_cache) > 80:
+            self._shaped_cache.clear()
+        self._shaped_cache[cache_key] = shaped
+        return shaped
+
+    def size(self, text):
+        return self.render(text, True, (255, 255, 255)).get_size()
+
+    def get_height(self):
+        return self.latin.get_height()
+
+def get_unicode_font(size, bold=False):
+    return UiFont(size, bold=bold)
 
 # Load Unicode fonts
 try:
@@ -3549,7 +4463,10 @@ try:
     f_med = get_unicode_font(24, bold=True)
     f_tiny = get_unicode_font(12, bold=True)
     f_weather = get_unicode_font(42, bold=True)
-    print("Unicode fonts loaded successfully")
+    tamil_loaded = tamil_font_path() or 'missing'
+    print(f"Unicode fonts loaded. Tamil font: {tamil_loaded}")
+    if tamil_loaded == 'missing':
+        print("Tamil names will show as boxes until NotoSansTamil-Regular.ttf is installed.")
 except Exception as e:
     print(f"Font error: {e}, using defaults")
     f_lg = pygame.font.Font(None, 24)
@@ -3567,21 +4484,50 @@ except:
 # Cover application initialization with the same branding as the boot splash.
 screen.fill((0, 0, 0))
 splash_title_font = get_unicode_font(38, bold=True)
-splash_subtitle_font = get_unicode_font(16)
+splash_by_font = get_unicode_font(14)
+splash_brand_font = get_unicode_font(18)
 splash_title = splash_title_font.render("TCRADIOS", True, (235, 242, 255))
-splash_subtitle = splash_subtitle_font.render("by JayathaSoft", True, (92, 112, 145))
-screen.blit(splash_title, splash_title.get_rect(center=(160, 218)))
-screen.blit(splash_subtitle, splash_subtitle.get_rect(center=(160, 257)))
-pygame.draw.line(screen, (38, 150, 210), (100, 282), (220, 282), 2)
+splash_by = splash_by_font.render("by", True, (160, 176, 196))
+splash_brand = splash_brand_font.render("JayathaSoft", True, (214, 224, 240))
+screen.blit(splash_title, splash_title.get_rect(center=(160, 200)))
+screen.blit(splash_by, splash_by.get_rect(center=(160, 240)))
+screen.blit(splash_brand, splash_brand.get_rect(center=(160, 264)))
+pygame.draw.line(screen, (38, 150, 210), (100, 292), (220, 292), 2)
 pygame.display.flip()
+pygame.mouse.set_visible(False)
 splash_started_at = time.time()
+try:
+    subprocess.run(
+        ["plymouth", "quit"],
+        timeout=2,
+        capture_output=True,
+        check=False,
+    )
+except Exception:
+    pass
+
+def release_display_and_exit(_signum, _frame):
+    # Exit immediately so a fullscreen window cannot hold up reboot.
+    try:
+        save_playback_state(force=True)
+    except Exception:
+        pass
+    try:
+        pygame.display.quit()
+        pygame.quit()
+    except Exception:
+        pass
+    os._exit(0)
+
+signal.signal(signal.SIGTERM, release_display_and_exit)
+signal.signal(signal.SIGINT, release_display_and_exit)
 
 UI_BG_TOP = (0, 0, 0)
 UI_BG_BOTTOM = (7, 7, 10)
 UI_SURFACE = (15, 18, 25)
 UI_SURFACE_RAISED = (24, 28, 38)
-UI_TEXT = (241, 245, 255)
-UI_MUTED = (120, 126, 140)
+UI_TEXT = (255, 255, 255)
+UI_MUTED = (230, 234, 244)
 UI_BLUE = (50, 205, 255)
 UI_PURPLE = (145, 92, 255)
 UI_PINK = (255, 83, 148)
@@ -3612,41 +4558,155 @@ def create_ui_background():
         pygame.draw.line(background, color, (0, y), (319, y))
 
     glow = pygame.Surface((320, 480), pygame.SRCALPHA)
-    pygame.draw.circle(glow, (*UI_BLUE, 10), (292, 108), 115)
-    pygame.draw.circle(glow, (*UI_PURPLE, 12), (12, 360), 135)
+    pygame.draw.circle(glow, (*UI_BLUE, 28), (292, 108), 120)
+    pygame.draw.circle(glow, (*UI_PURPLE, 26), (12, 360), 140)
+    pygame.draw.circle(glow, (*UI_AMBER, 16), (160, 24), 90)
     background.blit(glow, (0, 0))
     return background
 
 def refresh_ui_palette():
     global UI_BG_TOP, UI_BG_BOTTOM, UI_SURFACE, UI_SURFACE_RAISED
-    global UI_TEXT, UI_MUTED, UI_BLUE, UI_PURPLE, UI_AMBER
+    global UI_TEXT, UI_MUTED, UI_BLUE, UI_PURPLE, UI_AMBER, UI_PINK, UI_GREEN
     global ui_background, ui_palette_theme
 
-    background = current_theme.pygame_background
-    theme_text = ensure_bright(current_theme.pygame_text, 195)
-    UI_BLUE = ensure_bright(current_theme.pygame_primary)
-    UI_PURPLE = ensure_bright(current_theme.pygame_secondary)
-    UI_AMBER = ensure_bright(current_theme.pygame_accent, 140)
-
-    # Keep every theme dark and calm; themes alter the accent pattern.
-    UI_BG_TOP = mix_colors((0, 0, 0), background, 0.08)
-    UI_BG_BOTTOM = mix_colors(UI_BG_TOP, UI_PURPLE, 0.07)
-    UI_SURFACE = mix_colors(UI_BG_TOP, theme_text, 0.07)
-    UI_SURFACE_RAISED = mix_colors(UI_BG_TOP, theme_text, 0.12)
-    UI_TEXT = theme_text
-    UI_MUTED = mix_colors(UI_BG_TOP, theme_text, 0.48)
+    UI_BLUE = ensure_bright(current_theme.pygame_primary, 155)
+    UI_PURPLE = ensure_bright(current_theme.pygame_secondary, 145)
+    UI_AMBER = ensure_bright(current_theme.pygame_accent, 155)
+    UI_PINK = ensure_bright(mix_colors((255, 78, 160), UI_PURPLE, 0.22), 155)
+    UI_GREEN = ensure_bright(mix_colors((52, 220, 150), UI_BLUE, 0.22), 155)
+    UI_TEXT = (255, 255, 255)
+    UI_BG_TOP = (0, 0, 0)
+    UI_BG_BOTTOM = mix_colors((0, 0, 0), UI_BLUE, 0.08)
+    UI_SURFACE = mix_colors((10, 12, 16), UI_BLUE, 0.12)
+    UI_SURFACE_RAISED = mix_colors((16, 18, 24), UI_BLUE, 0.2)
+    UI_MUTED = (230, 234, 244)
     ui_background = create_ui_background()
     ui_palette_theme = current_theme.name
+
+def _srgb_channel(value):
+    scaled = value / 255.0
+    if scaled <= 0.04045:
+        return scaled / 12.92
+    return ((scaled + 0.055) / 1.055) ** 2.4
+
+def relative_luminance(color):
+    red, green, blue = (_srgb_channel(channel) for channel in color[:3])
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+def color_luminance(color):
+    return relative_luminance(color) * 255
+
+def contrast_ratio(first, second):
+    light = max(relative_luminance(first), relative_luminance(second))
+    dark = min(relative_luminance(first), relative_luminance(second))
+    return (light + 0.05) / (dark + 0.05)
+
+def contrasting_text(background):
+    return (16, 18, 24) if relative_luminance(background) > 0.32 else (255, 255, 255)
+
+def contrasting_muted(background):
+    if relative_luminance(background) > 0.32:
+        return (42, 46, 58)
+    return (230, 234, 244)
+
+def ink_on(background, preferred=None, minimum=4.5):
+    if preferred is not None and contrast_ratio(preferred, background) >= minimum:
+        return preferred
+    return contrasting_text(background)
+
+def muted_ink_on(background, preferred=None, minimum=3.5):
+    if preferred is not None and contrast_ratio(preferred, background) >= minimum:
+        return preferred
+    return contrasting_muted(background)
 
 def draw_centered_text(surface, font, text, color, rect):
     rendered = font.render(text, True, color)
     surface.blit(rendered, rendered.get_rect(center=rect.center))
     return rendered
 
-def draw_modern_button(surface, rect, fill, border, radius=14, border_width=1):
-    pygame.draw.rect(surface, fill, rect, border_radius=radius)
-    pygame.draw.rect(surface, border, rect, border_width, border_radius=radius)
-    return rect
+try:
+    import pygame.gfxdraw
+    _GFXDRAW = True
+except ImportError:
+    _GFXDRAW = False
+
+def draw_smooth_circle(surface, center, radius, color):
+    x, y = int(center[0]), int(center[1])
+    radius = max(1, int(radius))
+    if _GFXDRAW:
+        pygame.gfxdraw.filled_circle(surface, x, y, radius, color)
+        pygame.gfxdraw.aacircle(surface, x, y, radius, color)
+    else:
+        pygame.draw.circle(surface, color, (x, y), radius)
+
+def draw_round_cap_line(surface, start, end, color, width):
+    pygame.draw.line(surface, color, start, end, width)
+    cap = max(1, int(width / 2))
+    draw_smooth_circle(surface, start, cap, color)
+    draw_smooth_circle(surface, end, cap, color)
+
+def draw_vector_icon(surface, center, kind, color, radius=10, width=4):
+    x, y = center
+    if kind == "minus":
+        draw_round_cap_line(surface, (x - radius, y), (x + radius, y), color, width)
+    elif kind == "plus":
+        draw_round_cap_line(surface, (x - radius, y), (x + radius, y), color, width)
+        draw_round_cap_line(surface, (x, y - radius), (x, y + radius), color, width)
+    elif kind == "close":
+        inset = int(radius * 0.75)
+        draw_round_cap_line(
+            surface, (x - inset, y - inset), (x + inset, y + inset), color, width
+        )
+        draw_round_cap_line(
+            surface, (x - inset, y + inset), (x + inset, y - inset), color, width
+        )
+    elif kind == "gear":
+        teeth = 6
+        tooth = max(3, int(radius * 0.38))
+        hub = max(4, int(radius * 0.55))
+        for index in range(teeth):
+            angle = math.radians(index * 60)
+            inner = (
+                x + math.cos(angle) * hub,
+                y + math.sin(angle) * hub,
+            )
+            outer = (
+                x + math.cos(angle) * (hub + tooth),
+                y + math.sin(angle) * (hub + tooth),
+            )
+            draw_round_cap_line(surface, inner, outer, color, width + 1)
+        pygame.draw.circle(surface, color, (int(x), int(y)), hub, max(2, width - 1))
+        draw_smooth_circle(surface, (x, y), max(2, hub // 3), color)
+
+def hide_mouse_pointer():
+    pygame.mouse.set_visible(False)
+
+def draw_circle_icon_button(surface, rect, fill, kind):
+    radius = min(rect.width, rect.height) // 2
+    draw_smooth_circle(surface, rect.center, radius, fill)
+    ink = ink_on(fill)
+    draw_vector_icon(
+        surface, rect.center, kind, ink,
+        radius=max(8, radius // 2),
+        width=4 if radius >= 18 else 3,
+    )
+    return fill
+
+def draw_modern_button(surface, rect, fill, border, radius=14, border_width=0):
+    body = border if (border[0] + border[1] + border[2]) > 90 else fill
+    pygame.draw.rect(surface, body, rect, border_radius=radius)
+    return body
+
+def labeled_button(surface, rect, fill, font, text, radius=14, border=None):
+    body = draw_modern_button(surface, rect, fill, border or fill, radius)
+    draw_centered_text(surface, font, text, ink_on(body), rect)
+    return body
+
+def draw_info_card(surface, rect, accent, radius=16):
+    body = UI_SURFACE_RAISED
+    pygame.draw.rect(surface, body, rect, border_radius=radius)
+    pygame.draw.rect(surface, accent, rect, 2, border_radius=radius)
+    return body
 
 def draw_animated_ui_glow(surface, now):
     ui_animation_layer.fill((0, 0, 0, 0))
@@ -3700,19 +4760,13 @@ def draw_pulsing_border(surface, rect, color, now):
 ui_background = None
 ui_palette_theme = None
 ui_animation_layer = pygame.Surface((320, 480), pygame.SRCALPHA)
+brightness_overlay = pygame.Surface((320, 480), pygame.SRCALPHA)
 refresh_ui_palette()
 
 instance = vlc.Instance('--no-video')
 player = instance.media_player_new()
 
 URL = "https://raw.githubusercontent.com/simsonpeter/Tcradios/refs/heads/main/stations.json"
-WEATHER_URL = (
-    "https://api.open-meteo.com/v1/forecast"
-    "?latitude=50.83&longitude=-0.17"
-    "&current_weather=true"
-    "&daily=weather_code,temperature_2m_max,temperature_2m_min"
-    "&forecast_days=5&timezone=auto"
-)
 LANGUAGE_BASE_URL = (
     "https://raw.githubusercontent.com/simsonpeter/Tcradios/"
     "8d31b80bed64167d2887313baf5b3bb12879308d/languages"
@@ -3727,47 +4781,213 @@ LANGUAGE_STREAMS = {
     "Sinhala": f"{LANGUAGE_BASE_URL}/sinhala.json",
     "Telugu": f"{LANGUAGE_BASE_URL}/telugu.json"
 }
-LAST_STATION_FILE = "/home/raspberry/.last_station"
+LAST_STATION_FILE = os.path.expanduser("~/.last_station")
+PLAYBACK_FILE = os.path.expanduser("~/.tcradios_playback.json")
+STATIONS_CACHE_FILE = os.path.expanduser("~/.tcradios_stations.json")
+BUNDLED_STATIONS_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "stations.json",
+)
+saved_station_url = ""
+saved_station_index = 0
+saved_playback = {}
+stations_waiting_for_github = False
+_playback_save_at = 0
 
-try:
-    stations = requests.get(URL, timeout=5).json()
-    print(f"Loaded {len(stations)} stations")
-except:
-    stations = [
-        {"name": "BBC Radio 1", "url": "http://stream.live.vc.bbcmedia.co.uk/bbc_radio_one", "genre": "Pop"},
-        {"name": "BBC Radio 2", "url": "http://stream.live.vc.bbcmedia.co.uk/bbc_radio_two", "genre": "Adult Contemporary"},
-        {"name": "Classic FM", "url": "http://media-ice.musicradio.com/ClassicFMMP3", "genre": "Classical"},
-    ]
+def load_playback_state():
+    global saved_station_url, saved_station_index, saved_playback
+    saved_playback = {}
+    for path in (PLAYBACK_FILE, LAST_STATION_FILE):
+        try:
+            text = open(path, "r").read().strip()
+            if not text:
+                continue
+            if text.startswith("{"):
+                saved = json.loads(text)
+            else:
+                saved = {"index": int(text)}
+            saved_playback = saved if isinstance(saved, dict) else {}
+            saved_station_url = str(saved_playback.get("url", "")).strip()
+            saved_station_index = int(saved_playback.get("index", 0) or 0)
+            return
+        except (OSError, ValueError, TypeError):
+            continue
+    saved_station_url = ""
+    saved_station_index = 0
 
-base_stations = [station.copy() for station in stations]
-
-current_idx = 0
-if os.path.exists(LAST_STATION_FILE):
+def playback_snapshot():
+    snapshot = {
+        "volume": int(vol_level),
+        "last_unmuted_volume": int(last_unmuted_volume),
+    }
     try:
-        with open(LAST_STATION_FILE, "r") as f:
-            saved = int(f.read())
-            if 0 <= saved < len(stations):
-                current_idx = saved
-    except:
+        if stations and 0 <= current_idx < len(stations):
+            station = stations[current_idx]
+            snapshot.update({
+                "index": current_idx,
+                "url": station.get("url", ""),
+                "name": station.get("name", ""),
+                "youtube_id": station.get("youtube_id", ""),
+                "language": station.get("language", ""),
+                "genre": station.get("genre", ""),
+                "logo": station.get("logo", ""),
+                "direct_link_id": station.get("direct_link_id", ""),
+            })
+    except NameError:
         pass
+    return snapshot
+
+def save_playback_state(force=False):
+    global _playback_save_at
+    now = time.time()
+    if not force and now - _playback_save_at < 0.5:
+        return
+    _playback_save_at = now
+    try:
+        payload = json.dumps(playback_snapshot())
+        for path in (PLAYBACK_FILE, LAST_STATION_FILE):
+            temp_path = path + ".tmp"
+            with open(temp_path, "w") as handle:
+                handle.write(payload)
+            os.replace(temp_path, path)
+    except (OSError, TypeError, ValueError) as error:
+        print(f"Could not save playback: {error}")
+
+def normalize_stations(raw_stations):
+    loaded = []
+    if not isinstance(raw_stations, list):
+        return loaded
+    for item in raw_stations:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        url = str(item.get("url", "")).strip()
+        if not name or not url:
+            continue
+        station = dict(item)
+        station["name"] = name
+        station["url"] = url
+        loaded.append(station)
+    return loaded
+
+def read_saved_station():
+    load_playback_state()
+
+def read_stations_file(path):
+    try:
+        with open(path, "r") as station_file:
+            return normalize_stations(json.load(station_file))
+    except (OSError, ValueError, TypeError):
+        return []
+
+def read_stations_cache():
+    return read_stations_file(STATIONS_CACHE_FILE)
+
+def read_bundled_stations():
+    return read_stations_file(BUNDLED_STATIONS_FILE)
+
+def write_stations_cache(loaded):
+    try:
+        with open(STATIONS_CACHE_FILE, "w") as cache_file:
+            json.dump(loaded, cache_file)
+    except OSError as error:
+        print(f"Could not save station list: {error}")
+
+def fetch_github_stations():
+    response = requests.get(URL, timeout=8)
+    response.raise_for_status()
+    return normalize_stations(response.json())
+
+def choose_station_index(loaded):
+    youtube_id = str(saved_playback.get("youtube_id") or "").strip()
+    if youtube_id:
+        for index, station in enumerate(loaded):
+            if station.get("youtube_id") == youtube_id:
+                return index
+    direct_link_id = saved_playback.get("direct_link_id")
+    if direct_link_id not in (None, ""):
+        for index, station in enumerate(loaded):
+            if station.get("direct_link_id") == direct_link_id:
+                return index
+    if saved_station_url:
+        for index, station in enumerate(loaded):
+            if station.get("url") == saved_station_url:
+                return index
+    saved_name = str(saved_playback.get("name") or "").strip()
+    if saved_name:
+        for index, station in enumerate(loaded):
+            if station.get("name") == saved_name:
+                return index
+    if 0 <= saved_station_index < len(loaded):
+        return saved_station_index
+    return 0
+
+read_saved_station()
+try:
+    stations = fetch_github_stations()
+    if not stations:
+        raise ValueError("GitHub station list was empty")
+    write_stations_cache(stations)
+    print(f"Loaded {len(stations)} stations from GitHub")
+except Exception as error:
+    print(f"GitHub station list unavailable: {error}")
+    stations = read_stations_cache() or read_bundled_stations()
+    if stations:
+        print(f"Loaded {len(stations)} TCRADIOS stations from the local copy")
+        stations_waiting_for_github = True
+    else:
+        stations = [{
+            "name": "Loading stations",
+            "url": "",
+            "genre": "TCRADIOS",
+        }]
+        stations_waiting_for_github = True
+        print("Waiting for the TCRADIOS station list")
+
+base_stations = [station.copy() for station in stations if station.get("url")]
+current_idx = choose_station_index(stations) if stations and stations[0].get("url") else 0
 
 FAVORITES_FILE = os.path.expanduser("~/.radio_favorites")
 favorite_indices = []
-try:
-    with open(FAVORITES_FILE, "r") as favorites_file:
-        favorite_indices = [
-            index for index in json.load(favorites_file)
-            if isinstance(index, int) and 0 <= index < len(stations)
-        ][:6]
-except (OSError, ValueError, TypeError):
-    favorite_indices = list(range(min(4, len(stations))))
 
-vol_level = 80
+def load_favorite_indices():
+    global favorite_indices
+    try:
+        with open(FAVORITES_FILE, "r") as favorites_file:
+            favorite_indices = [
+                index for index in json.load(favorites_file)
+                if isinstance(index, int)
+                and 0 <= index < len(stations)
+                and stations[index].get("url")
+            ][:6]
+    except (OSError, ValueError, TypeError):
+        playable = len([station for station in stations if station.get("url")])
+        favorite_indices = list(range(min(4, playable)))
+
+load_favorite_indices()
+
+try:
+    vol_level = max(0, min(100, int(saved_playback.get("volume", vol_level))))
+    last_unmuted_volume = max(
+        1,
+        min(100, int(saved_playback.get("last_unmuted_volume", vol_level or 80))),
+    )
+except (TypeError, ValueError):
+    vol_level = 80
+    last_unmuted_volume = 80
+if vol_level > 0:
+    last_unmuted_volume = vol_level
+try:
+    player.audio_set_volume(vol_level)
+    audio_manager.set_volume(vol_level)
+except Exception as error:
+    print(f"Volume restore error: {error}")
+print(f"Restored volume {vol_level}%")
 last_weather_update = 0
 last_system_update = 0
 saver_mode = False
 show_qr = False
-weather_str = "HOVE: --C"
+weather_str = f"{device_settings.weather_name.upper()}: --C"
 current_temp = 0
 weather_type = "clear"
 weather_forecast = []
@@ -3777,6 +4997,11 @@ saver_scroll_x = 320
 alarm_fade_active = False
 alarm_fade_data = {}
 saver_active = False
+saver_started_at = time.time()
+greeting_until = 0
+greeting_shown_on = None
+shutdown_confirm_until = 0
+shutdown_in_progress = False
 system_stats = {
     'cpu_temp': '--',
     'disk_free': '--',
@@ -3787,6 +5012,16 @@ system_stats_updating = False
 touch_bluetooth_devices = []
 touch_bluetooth_status = "Tap Search to find nearby devices"
 touch_bluetooth_busy = False
+wifi_networks = []
+wifi_status_text = "Choose a network"
+wifi_busy = False
+wifi_pending = None
+wifi_password_open = False
+wifi_password_text = ""
+wifi_shift = False
+wifi_target = None
+wifi_setup_required = False
+wifi_from_settings = False
 language_stream_cache = {}
 selected_language = None
 language_stream_status = "Choose a language"
@@ -3800,35 +5035,43 @@ logo = pygame.Surface((LOGO_SIZE, LOGO_SIZE), pygame.SRCALPHA)
 logo.fill((0, 0, 0, 0))
 pygame.draw.circle(logo, (40, 40, 40), (LOGO_CENTER, LOGO_CENTER), LOGO_CENTER)
 pygame.draw.circle(logo, CYAN, (LOGO_CENTER, LOGO_CENTER), LOGO_CENTER, 2)
-initials = stations[current_idx]['name'][:2].upper()
+initials = station_initials(stations[current_idx]['name'])
 text = f_lg.render(initials, True, CYAN)
 text_rect = text.get_rect(center=(LOGO_CENTER, LOGO_CENTER))
 logo.blit(text, text_rect)
 
-try:
-    qr_img = qrcode.make(f"http://{current_ip}:8080").convert('RGB')
-    qr_surface = pygame.image.fromstring(qr_img.tobytes(), qr_img.size, 'RGB')
-    qr_surface = pygame.transform.scale(qr_surface, (240, 240))
-except:
-    qr_surface = pygame.Surface((240, 240))
-    qr_surface.fill((0, 0, 0))
-
+qr_target = ""
+qr_surface = pygame.Surface((240, 240))
+qr_surface.fill((0, 0, 0))
 last_ip_check = time.time()
 
+def listen_along_url():
+    return f"http://{current_ip}:8080/listen"
+
+def rebuild_qr_surface():
+    global qr_surface, qr_target
+    target = listen_along_url()
+    if target == qr_target and qr_target:
+        return
+    try:
+        qr_img = qrcode.make(target).convert('RGB')
+        qr_surface = pygame.image.fromstring(qr_img.tobytes(), qr_img.size, 'RGB')
+        qr_surface = pygame.transform.scale(qr_surface, (240, 240))
+        qr_target = target
+    except Exception:
+        pass
+
+rebuild_qr_surface()
+
 def update_qr_code():
-    global qr_surface, current_ip, last_ip_check
+    global current_ip, last_ip_check
     now = time.time()
     if now - last_ip_check > 30:
         new_ip = get_local_ip()
         if new_ip != current_ip:
             current_ip = new_ip
-            try:
-                qr_img = qrcode.make(f"http://{current_ip}:8080").convert('RGB')
-                qr_surface = pygame.image.fromstring(qr_img.tobytes(), qr_img.size, 'RGB')
-                qr_surface = pygame.transform.scale(qr_surface, (240, 240))
-            except:
-                pass
         last_ip_check = now
+    rebuild_qr_surface()
 
 def update_logo(url):
     global logo
@@ -3876,34 +5119,145 @@ def update_logo(url):
             2
         )
         if stations[current_idx]['name']:
-            initials = stations[current_idx]['name'][:2].upper()
+            initials = station_initials(stations[current_idx]['name'])
             text = f_lg.render(initials, True, CYAN)
             text_rect = text.get_rect(center=(LOGO_CENTER, LOGO_CENTER))
             logo.blit(text, text_rect)
 
-def sanitize_text(text):
-    """Clean text for display - keeps Unicode characters including Tamil"""
-    if not text:
-        return "Unknown"
-    text = str(text)
-    # Remove control characters except newline
-    text = ''.join(char for char in text if ord(char) >= 32 or char == '\n')
-    return text.strip()
-
 def play():
-    global meta_text, scroll_x, saver_scroll_x
+    global meta_text, scroll_x, saver_scroll_x, saved_station_url, saved_station_index
     scroll_x = 320
     saver_scroll_x = 320
+    if not stations:
+        return
     station = stations[current_idx]
+    if not station.get("url"):
+        meta_text = "LOADING STATIONS"
+        return
     try:
         player.set_media(instance.media_new(station['url']))
         player.play()
         player.audio_set_volume(vol_level)
+        audio_manager.set_volume(vol_level)
         update_logo(station.get('logo', ''))
-        with open(LAST_STATION_FILE, "w") as f:
-            f.write(str(current_idx))
+        saved_station_url = station.get("url", "")
+        saved_station_index = current_idx
+        save_playback_state(force=True)
+        rebuild_qr_surface()
     except:
         pass
+
+def apply_github_station_list(loaded):
+    global current_idx, base_stations, stations_waiting_for_github
+    previous_url = ""
+    previous_youtube = ""
+    previous_direct = None
+    if stations and 0 <= current_idx < len(stations):
+        previous = stations[current_idx]
+        previous_url = previous.get("url") or ""
+        previous_youtube = previous.get("youtube_id") or ""
+        previous_direct = previous.get("direct_link_id")
+    extras = [
+        station for station in stations
+        if station.get("youtube_id") or station.get("language")
+        or station.get("direct_link_id")
+    ]
+    stations[:] = list(loaded) + extras
+    base_stations = [station.copy() for station in loaded]
+    matched = None
+    for index, station in enumerate(stations):
+        if previous_youtube and station.get("youtube_id") == previous_youtube:
+            matched = index
+            break
+        if previous_direct not in (None, "") and station.get("direct_link_id") == previous_direct:
+            matched = index
+            break
+        if previous_url and station.get("url") == previous_url:
+            matched = index
+            break
+    if matched is not None:
+        current_idx = matched
+        stations_waiting_for_github = False
+        return
+    current_idx = choose_station_index(stations)
+    stations_waiting_for_github = False
+    load_favorite_indices()
+    play()
+
+def retry_github_stations():
+    for _attempt in range(24):
+        time.sleep(5)
+        try:
+            loaded = fetch_github_stations()
+        except Exception:
+            continue
+        if not loaded:
+            continue
+        write_stations_cache(loaded)
+        print(f"Loaded {len(loaded)} stations from GitHub")
+        apply_github_station_list(loaded)
+        return
+    print("TCRADIOS station list could not be loaded")
+
+def current_youtube_id():
+    if stations and 0 <= current_idx < len(stations):
+        return str(stations[current_idx].get("youtube_id") or "").strip()
+    return ""
+
+def remember_youtube_queue(video_id, title=""):
+    global youtube_queue, youtube_queue_index, youtube_touch_offset
+    video_id = str(video_id or "").strip()
+    if not video_id:
+        return
+    if youtube_results_cache:
+        youtube_queue = [
+            dict(item) for item in youtube_results_cache if item.get("id")
+        ]
+    if not any(item.get("id") == video_id for item in youtube_queue):
+        youtube_queue.append({
+            "id": video_id,
+            "title": title or "YouTube",
+            "uploader": "",
+            "duration": "",
+        })
+    youtube_queue_index = next(
+        (
+            index for index, item in enumerate(youtube_queue)
+            if item.get("id") == video_id
+        ),
+        0,
+    )
+    youtube_touch_offset = (max(0, youtube_queue_index) // 4) * 4
+
+def play_youtube_station(video_id, title, audio_url):
+    global current_idx, _youtube_play_started_at, _youtube_ended_handled
+    global _youtube_was_playing
+    station = {
+        'name': f"YT: {str(title)[:40]}",
+        'url': audio_url,
+        'genre': 'YouTube',
+        'logo': f'https://img.youtube.com/vi/{video_id}/mqdefault.jpg',
+        'youtube_id': video_id,
+    }
+    existing = next(
+        (
+            index for index, item in enumerate(stations)
+            if item.get('youtube_id') == video_id
+        ),
+        None
+    )
+    if existing is None:
+        stations.append(station)
+        current_idx = len(stations) - 1
+    else:
+        stations[existing] = station
+        current_idx = existing
+    remember_youtube_queue(video_id, title)
+    youtube_skip_ids.discard(video_id)
+    _youtube_play_started_at = time.time()
+    _youtube_ended_handled = False
+    _youtube_was_playing = False
+    play()
 
 def save_favorites():
     try:
@@ -3980,6 +5334,214 @@ def scan_touch_bluetooth():
     finally:
         touch_bluetooth_busy = False
 
+def has_network_connection():
+    try:
+        with open('/proc/net/route', 'r') as route_file:
+            next(route_file)
+            for line in route_file:
+                fields = line.split()
+                if (
+                    len(fields) > 1
+                    and fields[1] == '00000000'
+                    and fields[0] != 'lo'
+                ):
+                    return True
+    except (OSError, StopIteration):
+        pass
+    return False
+
+def run_nmcli(args, timeout=25):
+    last_error = 'Wi-Fi command failed'
+    for prefix in ([], ['sudo', '-n']):
+        try:
+            result = subprocess.run(
+                prefix + ['nmcli', *args],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except FileNotFoundError:
+            return '', 'nmcli is not installed'
+        except subprocess.TimeoutExpired:
+            last_error = 'Wi-Fi request timed out'
+            continue
+        if result.returncode == 0:
+            return (result.stdout or '').strip(), None
+        last_error = (
+            (result.stderr or result.stdout or last_error).strip().split('\n')[-1]
+        )
+    return '', last_error[:160]
+
+def current_wifi_ssid():
+    stdout, _err = run_nmcli(
+        ['-t', '-f', 'active,ssid', 'device', 'wifi'], timeout=8
+    )
+    for line in stdout.splitlines():
+        if line.startswith('yes:'):
+            return line.split(':', 1)[1]
+    return ''
+
+def parse_wifi_networks(stdout):
+    networks = []
+    seen = set()
+    for line in stdout.splitlines():
+        raw = line.replace('\\:', '\x00')
+        parts = raw.split(':')
+        if len(parts) < 4:
+            continue
+        in_use = parts[0] == '*'
+        security = parts[-1].replace('\x00', ':')
+        try:
+            strength = int(parts[-2])
+        except ValueError:
+            strength = 0
+        ssid = ':'.join(parts[1:-2]).replace('\x00', ':').strip()
+        if not ssid or ssid in seen:
+            continue
+        seen.add(ssid)
+        networks.append({
+            'ssid': ssid,
+            'signal': max(0, min(100, strength)),
+            'secure': bool(security and security not in ('--', '')),
+            'connected': in_use,
+        })
+    networks.sort(key=lambda item: (not item['connected'], -item['signal']))
+    return networks[:12]
+
+def wifi_status_label():
+    if wifi_busy:
+        return wifi_status_text
+    ssid = current_wifi_ssid()
+    if ssid:
+        return f"Connected: {ssid}"
+    if has_network_connection():
+        return f"Online • {current_ip}"
+    return "No network. Choose a Wi-Fi."
+
+def scan_touch_wifi():
+    global wifi_busy, wifi_pending
+    try:
+        run_nmcli(['device', 'wifi', 'rescan'], timeout=12)
+        stdout, err = run_nmcli(
+            ['-t', '-f', 'IN-USE,SSID,SIGNAL,SECURITY', 'device', 'wifi', 'list'],
+            timeout=20,
+        )
+        if err and not stdout:
+            wifi_pending = ('error', err)
+            return
+        wifi_pending = ('list', parse_wifi_networks(stdout))
+    except Exception as error:
+        wifi_pending = ('error', str(error))
+
+def connect_touch_wifi(ssid, password=''):
+    global wifi_pending
+    try:
+        args = ['device', 'wifi', 'connect', ssid]
+        if password:
+            args.extend(['password', password])
+        _stdout, err = run_nmcli(args, timeout=35)
+        if err:
+            wifi_pending = ('error', err)
+            return
+        wifi_pending = ('connected', ssid)
+    except Exception as error:
+        wifi_pending = ('error', str(error))
+
+def begin_wifi_scan():
+    global wifi_busy, wifi_status_text
+    if wifi_busy:
+        return
+    wifi_busy = True
+    wifi_status_text = "Scanning…"
+    threading.Thread(target=scan_touch_wifi, daemon=True).start()
+
+def begin_wifi_connect(network):
+    global wifi_busy, wifi_status_text, wifi_password_open, wifi_target
+    global wifi_password_text, wifi_shift
+    if wifi_busy or not network.get('ssid'):
+        return
+    if network.get('secure') and not wifi_password_open:
+        wifi_target = network
+        wifi_password_open = True
+        wifi_password_text = ""
+        wifi_shift = False
+        return
+    wifi_busy = True
+    wifi_password_open = False
+    wifi_status_text = f"Joining {network['ssid']}…"
+    password = wifi_password_text if network.get('secure') else ''
+    threading.Thread(
+        target=connect_touch_wifi,
+        args=(network['ssid'], password),
+        daemon=True,
+    ).start()
+
+def apply_wifi_result():
+    global wifi_pending, wifi_busy, wifi_status_text, wifi_networks
+    global wifi_password_open, wifi_setup_required, active_page, current_ip
+    pending = wifi_pending
+    if not pending:
+        return
+    wifi_pending = None
+    wifi_busy = False
+    kind = pending[0]
+    if kind == 'list':
+        wifi_networks = pending[1]
+        wifi_status_text = (
+            f"{len(wifi_networks)} network"
+            f"{'s' if len(wifi_networks) != 1 else ''}"
+            if wifi_networks else "No networks found"
+        )
+    elif kind == 'connected':
+        wifi_password_open = False
+        current_ip = get_local_ip()
+        wifi_status_text = f"Connected: {pending[1]}"
+        begin_wifi_scan()
+        if stations_waiting_for_github:
+            threading.Thread(target=retry_github_stations, daemon=True).start()
+        if wifi_setup_required:
+            wifi_setup_required = False
+            active_page = "radio"
+    elif kind == 'error':
+        wifi_status_text = str(pending[1])[:80]
+
+def submit_wifi_password():
+    global wifi_busy, wifi_status_text
+    if wifi_busy or not wifi_target:
+        return
+    wifi_busy = True
+    wifi_status_text = f"Joining {wifi_target['ssid']}…"
+    threading.Thread(
+        target=connect_touch_wifi,
+        args=(wifi_target['ssid'], wifi_password_text),
+        daemon=True,
+    ).start()
+
+def handle_wifi_key(value):
+    global wifi_password_text, wifi_shift, wifi_password_open
+    symbols = {
+        '1': '!', '2': '@', '3': '#', '4': '$', '5': '%',
+        '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
+        '-': '_', '.': ',', '/': '?',
+    }
+    if value == 'shift':
+        wifi_shift = not wifi_shift
+    elif value == 'backspace':
+        wifi_password_text = wifi_password_text[:-1]
+    elif value == 'space':
+        if len(wifi_password_text) < 63:
+            wifi_password_text += ' '
+    elif value == 'cancel':
+        wifi_password_open = False
+        wifi_password_text = ''
+        wifi_shift = False
+    elif value == 'connect':
+        submit_wifi_password()
+    elif len(wifi_password_text) < 63:
+        typed = symbols.get(value, value.upper()) if wifi_shift else value
+        wifi_password_text += typed
+        wifi_shift = False
+
 def connect_touch_bluetooth(address, name):
     global touch_bluetooth_devices, touch_bluetooth_status
     global touch_bluetooth_busy
@@ -4046,13 +5608,45 @@ def play_language_stream(stream):
         current_idx = existing_index
     play()
 
+def resume_last_playback():
+    global current_idx
+    youtube_id = str(saved_playback.get("youtube_id") or "").strip()
+    if youtube_id:
+        title = str(saved_playback.get("name") or "YouTube")
+        if title.startswith("YT: "):
+            title = title[4:]
+        audio_url, err = youtube_audio_url(youtube_id, timeout=18)
+        if audio_url:
+            play_youtube_station(youtube_id, title, audio_url)
+            return
+        print(f"Could not restore YouTube item: {err}")
+    saved_url = str(saved_station_url or "").strip()
+    if youtube_id:
+        saved_url = ""
+    if saved_url and all(station.get("url") != saved_url for station in stations):
+        restored = {
+            "name": saved_playback.get("name") or "Last played",
+            "url": saved_url,
+            "genre": saved_playback.get("genre") or "Radio",
+            "logo": saved_playback.get("logo") or "",
+        }
+        for key in ("language", "direct_link_id"):
+            value = saved_playback.get(key)
+            if value not in (None, ""):
+                restored[key] = value
+        stations.append(restored)
+        current_idx = len(stations) - 1
+    play()
+
 splash_remaining = 5.0 - (time.time() - splash_started_at)
 if splash_remaining > 0:
     time.sleep(splash_remaining)
 
-play()
-ip_display_time = time.time() + 10
-show_startup_ip = True
+resume_last_playback()
+if stations_waiting_for_github:
+    threading.Thread(target=retry_github_stations, daemon=True).start()
+ip_display_time = 0
+show_startup_ip = False
 
 def handle_alarm_fade():
     global vol_level, alarm_fade_active, alarm_fade_data, current_idx
@@ -4085,7 +5679,34 @@ def handle_sleep_timer():
         elif alarm_system.sleep_stop_method == "stop":
             player.stop()
 
-def draw_weather_icon(surface, x, y, type, size=30, dimmed=True):
+def target_display_brightness(now):
+    if (
+        device_settings.auto_dim_enabled
+        and now - last_interaction_time
+        >= device_settings.auto_dim_minutes * 60
+    ):
+        return min(
+            device_settings.brightness,
+            device_settings.dim_brightness
+        )
+    return device_settings.brightness
+
+def apply_display_brightness(now):
+    target = target_display_brightness(now)
+    device_settings.set_hardware_brightness(target)
+    if not device_settings.hardware_brightness_available and target < 100:
+        alpha = int(230 * (1 - target / 100))
+        brightness_overlay.fill((0, 0, 0, alpha))
+        screen.blit(brightness_overlay, (0, 0))
+
+def request_touch_shutdown():
+    global shutdown_in_progress
+    if shutdown_in_progress:
+        return
+    shutdown_in_progress = True
+    threading.Thread(target=perform_safe_shutdown, daemon=True).start()
+
+def draw_weather_icon(surface, x, y, type, size=30, dimmed=True, on_background=None):
     line_width = max(2, size // 8)
     if dimmed:
         sun_color = tuple(int(channel * 0.3) for channel in GOLD)
@@ -4093,10 +5714,11 @@ def draw_weather_icon(surface, x, y, type, size=30, dimmed=True):
         cloud_dark = (38, 38, 38)
         cloud_light = (58, 58, 58)
     else:
-        sun_color = UI_AMBER
-        rain_color = UI_BLUE
-        cloud_dark = mix_colors(UI_SURFACE, UI_MUTED, 0.75)
-        cloud_light = mix_colors(UI_MUTED, UI_TEXT, 0.4)
+        background = on_background or UI_SURFACE_RAISED
+        sun_color = ink_on(background, UI_AMBER)
+        rain_color = ink_on(background, UI_BLUE)
+        cloud_dark = muted_ink_on(background)
+        cloud_light = ink_on(background)
     if type == "clear":
         sun_radius = size * 3 // 5
         pygame.draw.circle(surface, sun_color, (x, y), sun_radius)
@@ -4158,48 +5780,53 @@ def draw_forecast_screen(now):
     draw_centered_text(screen, f_lg, "5-DAY FORECAST", UI_TEXT, header_rect)
 
     current_rect = pygame.Rect(14, 72, 292, 84)
-    draw_modern_button(screen, current_rect, UI_SURFACE_RAISED, UI_BLUE, 18)
-    draw_weather_icon(screen, 65, 111, weather_type, 25, dimmed=False)
-    current_surface = f_weather.render(f"{current_temp}°C", True, UI_TEXT)
+    body = draw_info_card(screen, current_rect, UI_BLUE, 18)
+    draw_weather_icon(
+        screen, 65, 111, weather_type, 25, dimmed=False, on_background=body
+    )
+    current_surface = f_weather.render(
+        f"{current_temp}°C", True, ink_on(body)
+    )
     screen.blit(current_surface, (103, 82))
-    now_surface = f_tiny.render("HOVE  •  NOW", True, UI_BLUE)
+    location_label = fit_label(device_settings.weather_name.upper(), 18)
+    now_surface = f_tiny.render(
+        f"{location_label}  •  NOW", True, muted_ink_on(body)
+    )
     screen.blit(now_surface, (106, 127))
 
     if weather_forecast:
         for index, forecast in enumerate(weather_forecast[:5]):
             row = pygame.Rect(14, 166 + index * 52, 292, 45)
-            fill = UI_SURFACE_RAISED if index == 0 else UI_SURFACE
-            border = UI_PURPLE if index == 0 else (48, 54, 72)
-            draw_modern_button(screen, row, fill, border, 13)
+            accent = UI_PURPLE if index == 0 else (72, 80, 98)
+            body = draw_info_card(screen, row, accent, 13)
 
-            day_surface = f_sm.render(forecast['day'].upper(), True, UI_TEXT)
+            day_surface = f_sm.render(
+                forecast['day'].upper(), True, ink_on(body)
+            )
             screen.blit(day_surface, (29, row.y + 7))
-            label_surface = f_tiny.render(forecast['label'], True, UI_MUTED)
+            label_surface = f_tiny.render(
+                forecast['label'], True, muted_ink_on(body)
+            )
             screen.blit(label_surface, (29, row.y + 25))
 
             draw_weather_icon(
                 screen, 196, row.centery - 2,
-                forecast['type'], 12, dimmed=False
+                forecast['type'], 12, dimmed=False, on_background=body
             )
             temperature = f"{forecast['high']}° / {forecast['low']}°"
-            temperature_surface = f_sm.render(temperature, True, UI_TEXT)
+            temperature_surface = f_sm.render(temperature, True, ink_on(body))
             screen.blit(
                 temperature_surface,
                 (292 - temperature_surface.get_width(), row.y + 14)
             )
     else:
         loading_rect = pygame.Rect(14, 166, 292, 253)
-        draw_modern_button(screen, loading_rect, UI_SURFACE, (48, 54, 72), 16)
+        body = draw_info_card(screen, loading_rect, (72, 80, 98), 16)
         draw_centered_text(
-            screen, f_sm, "Forecast unavailable", UI_MUTED, loading_rect
+            screen, f_sm, "Forecast unavailable", muted_ink_on(body), loading_rect
         )
 
-    draw_modern_button(
-        screen, btn_pages, UI_SURFACE_RAISED, UI_BLUE, 16
-    )
-    draw_centered_text(
-        screen, f_sm, "PAGES", UI_TEXT, btn_pages
-    )
+    labeled_button(screen, btn_pages, UI_BLUE, f_sm, "PAGES", 16)
 
 def draw_page_base(title, now):
     screen.blit(ui_background, (0, 0))
@@ -4210,12 +5837,14 @@ def draw_page_base(title, now):
     draw_centered_text(screen, f_lg, title, UI_TEXT, header)
 
 def draw_pages_button():
-    draw_modern_button(screen, btn_pages, UI_SURFACE_RAISED, UI_BLUE, 16)
-    draw_centered_text(screen, f_sm, "PAGES", UI_TEXT, btn_pages)
+    body = draw_modern_button(screen, btn_pages, UI_BLUE, UI_BLUE, 16)
+    draw_centered_text(screen, f_sm, "PAGES", contrasting_text(body), btn_pages)
 
 def fit_label(text, length=16):
-    text = sanitize_text(text)
-    return text if len(text) <= length else text[:length - 1] + "…"
+    return truncate_display(text, length)
+
+def fit_tail(text, length=28):
+    return truncate_display(text, length, tail=True)
 
 def draw_menu_screen(now):
     draw_page_base("TC RADIOS", now)
@@ -4227,21 +5856,25 @@ def draw_menu_screen(now):
         ("ALARM / SLEEP", "Timers"),
         ("SYSTEM", "Pi status"),
         ("LANGUAGES", "More streams"),
-        ("SETTINGS", "Sound • Wi-Fi • Themes")
+        ("SETTINGS", "Audio • Wi-Fi"),
+        ("YOUTUBE", "Search and play"),
     ]
     for index, (title, subtitle) in enumerate(labels):
         rect = menu_card_rects[index]
-        border = (UI_BLUE, UI_PURPLE, UI_AMBER)[index % 3]
-        draw_modern_button(screen, rect, UI_SURFACE_RAISED, border, 16)
-        title_surface = f_sm.render(title, True, UI_TEXT)
+        border = (
+            UI_PINK if index == 8
+            else (UI_BLUE, UI_PURPLE, UI_AMBER)[index % 3]
+        )
+        body = draw_modern_button(screen, rect, border, border, 16)
+        title_surface = f_sm.render(title, True, contrasting_text(body))
         screen.blit(
             title_surface,
-            (rect.centerx - title_surface.get_width() // 2, rect.y + 18)
+            (rect.centerx - title_surface.get_width() // 2, rect.y + 12)
         )
-        subtitle_surface = f_tiny.render(subtitle, True, UI_MUTED)
+        subtitle_surface = f_tiny.render(subtitle, True, contrasting_muted(body))
         screen.blit(
             subtitle_surface,
-            (rect.centerx - subtitle_surface.get_width() // 2, rect.y + 43)
+            (rect.centerx - subtitle_surface.get_width() // 2, rect.y + 34)
         )
 def draw_favorites_screen(now):
     draw_page_base("FAVORITES", now)
@@ -4250,31 +5883,32 @@ def draw_favorites_screen(now):
         "REMOVE CURRENT" if current_idx in favorite_indices
         else "ADD CURRENT"
     )
-    draw_modern_button(
-        screen, btn_favorite_toggle, UI_SURFACE_RAISED, add_border, 13
-    )
-    draw_centered_text(
-        screen, f_tiny, add_label, UI_TEXT, btn_favorite_toggle
+    labeled_button(
+        screen, btn_favorite_toggle, add_border, f_tiny, add_label, 13
     )
 
     for index, rect in enumerate(favorite_card_rects):
         if index < len(favorite_indices):
             station_index = favorite_indices[index]
             station = stations[station_index]
-            border = UI_BLUE if station_index == current_idx else (48, 54, 72)
-            draw_modern_button(screen, rect, UI_SURFACE, border, 14)
-            number = f_tiny.render(f"{index + 1}", True, UI_BLUE)
+            accent = UI_BLUE if station_index == current_idx else (72, 80, 98)
+            body = draw_info_card(screen, rect, accent, 14)
+            number = f_tiny.render(
+                f"{index + 1}", True, ink_on(body, UI_BLUE)
+            )
             screen.blit(number, (rect.x + 10, rect.y + 9))
-            name = f_sm.render(fit_label(station['name'], 15), True, UI_TEXT)
+            name = f_sm.render(
+                fit_label(station['name'], 15), True, ink_on(body)
+            )
             screen.blit(name, (rect.x + 10, rect.y + 31))
             genre = f_tiny.render(
                 fit_label(station.get('genre', 'Radio'), 18),
-                True, UI_MUTED
+                True, muted_ink_on(body)
             )
             screen.blit(genre, (rect.x + 10, rect.y + 54))
         else:
-            draw_modern_button(screen, rect, UI_SURFACE, (42, 47, 61), 14)
-            draw_centered_text(screen, f_tiny, "EMPTY", UI_MUTED, rect)
+            body = draw_info_card(screen, rect, (72, 80, 98), 14)
+            draw_centered_text(screen, f_tiny, "EMPTY", muted_ink_on(body), rect)
     draw_pages_button()
 
 def draw_clock_screen(now):
@@ -4283,47 +5917,55 @@ def draw_clock_screen(now):
     time_surface = f_xl.render(current_time.strftime("%H:%M"), True, UI_TEXT)
     screen.blit(time_surface, (160 - time_surface.get_width() // 2, 82))
     date_surface = f_med.render(
-        current_time.strftime("%A").upper(), True, UI_BLUE
+        current_time.strftime("%A").upper(), True, ink_on(UI_BG_TOP, UI_BLUE)
     )
     screen.blit(date_surface, (160 - date_surface.get_width() // 2, 177))
     full_date = f_sm.render(
-        current_time.strftime("%d %B %Y"), True, UI_MUTED
+        current_time.strftime("%d %B %Y"), True, muted_ink_on(UI_BG_TOP)
     )
     screen.blit(full_date, (160 - full_date.get_width() // 2, 213))
 
     weather_card = pygame.Rect(28, 252, 264, 78)
-    draw_modern_button(screen, weather_card, UI_SURFACE_RAISED, UI_PURPLE, 18)
+    body = draw_info_card(screen, weather_card, UI_PURPLE, 18)
     draw_weather_icon(
-        screen, 76, weather_card.centery, weather_type, 22, dimmed=False
+        screen, 76, weather_card.centery, weather_type, 22,
+        dimmed=False, on_background=body
     )
-    temp = f_weather.render(f"{current_temp}°C", True, UI_TEXT)
+    temp = f_weather.render(f"{current_temp}°C", True, ink_on(body))
     screen.blit(temp, (112, weather_card.y + 11))
-    city = f_tiny.render("HOVE", True, UI_MUTED)
+    city = f_tiny.render(
+        fit_label(device_settings.weather_name.upper(), 18),
+        True, muted_ink_on(body)
+    )
     screen.blit(city, (116, weather_card.y + 53))
 
     station_card = pygame.Rect(28, 344, 264, 58)
-    draw_modern_button(screen, station_card, UI_SURFACE, (48, 54, 72), 15)
+    body = draw_info_card(screen, station_card, (72, 80, 98), 15)
     draw_centered_text(
         screen, f_sm, fit_label(stations[current_idx]['name'], 28),
-        UI_TEXT, station_card
+        ink_on(body), station_card
     )
     draw_pages_button()
 
 def draw_alarm_screen(now):
     draw_page_base("ALARM & SLEEP", now)
     alarm_card = pygame.Rect(18, 75, 284, 115)
-    draw_modern_button(
-        screen, alarm_card, UI_SURFACE_RAISED,
-        UI_AMBER if alarm_system.alarm_enabled else (55, 61, 77), 18
+    body = draw_info_card(
+        screen, alarm_card,
+        UI_AMBER if alarm_system.alarm_enabled else (72, 80, 98), 18
     )
-    alarm_label = f_weather.render(alarm_system.alarm_time, True, UI_TEXT)
+    alarm_label = f_weather.render(
+        alarm_system.alarm_time, True, ink_on(body)
+    )
     screen.blit(
         alarm_label,
         (alarm_card.centerx - alarm_label.get_width() // 2, 91)
     )
     state = "ALARM ON" if alarm_system.alarm_enabled else "ALARM OFF"
     state_surface = f_sm.render(
-        state, True, UI_AMBER if alarm_system.alarm_enabled else UI_MUTED
+        state, True, muted_ink_on(
+            body, UI_AMBER if alarm_system.alarm_enabled else None
+        )
     )
     screen.blit(
         state_surface,
@@ -4335,8 +5977,7 @@ def draw_alarm_screen(now):
         (btn_alarm_toggle_page, "ON / OFF"),
         (btn_alarm_plus, "+ 5 MIN")
     ):
-        draw_modern_button(screen, rect, UI_SURFACE, UI_BLUE, 13)
-        draw_centered_text(screen, f_tiny, label, UI_TEXT, rect)
+        labeled_button(screen, rect, UI_BLUE, f_tiny, label, 13)
 
     sleep_title = f_sm.render("SLEEP TIMER", True, UI_TEXT)
     screen.blit(sleep_title, (20, 261))
@@ -4345,22 +5986,20 @@ def draw_alarm_screen(now):
             alarm_system.sleep_timer_enabled
             and alarm_system.sleep_duration == minutes * 60
         )
-        draw_modern_button(
-            screen, rect, UI_SURFACE_RAISED,
-            UI_GREEN if active else (55, 61, 77), 13
+        labeled_button(
+            screen, rect,
+            UI_GREEN if active else (55, 61, 77),
+            f_sm, f"{minutes} MIN", 13
         )
-        draw_centered_text(screen, f_sm, f"{minutes} MIN", UI_TEXT, rect)
 
     sleep_status = (
         f"{alarm_system.get_sleep_remaining()} min remaining"
         if alarm_system.sleep_timer_enabled else "Timer off"
     )
-    draw_modern_button(
-        screen, btn_sleep_cancel, UI_SURFACE,
-        UI_PINK if alarm_system.sleep_timer_enabled else (55, 61, 77), 13
-    )
-    draw_centered_text(
-        screen, f_tiny, sleep_status.upper(), UI_TEXT, btn_sleep_cancel
+    labeled_button(
+        screen, btn_sleep_cancel,
+        UI_PINK if alarm_system.sleep_timer_enabled else (55, 61, 77),
+        f_tiny, sleep_status.upper(), 13
     )
     draw_pages_button()
 
@@ -4373,27 +6012,41 @@ def draw_system_screen(now):
         ("STORAGE", system_stats['disk_free'])
     ]
     for rect, (label, value) in zip(system_card_rects, values):
-        draw_modern_button(screen, rect, UI_SURFACE_RAISED, (48, 54, 72), 16)
-        label_surface = f_tiny.render(label, True, UI_MUTED)
+        body = draw_info_card(screen, rect, (72, 80, 98), 16)
+        label_surface = f_tiny.render(label, True, muted_ink_on(body))
         screen.blit(label_surface, (rect.x + 14, rect.y + 15))
-        value_surface = f_sm.render(fit_label(value, 18), True, UI_TEXT)
+        value_surface = f_sm.render(
+            fit_label(value, 18), True, ink_on(body)
+        )
         screen.blit(value_surface, (rect.x + 14, rect.y + 43))
 
-    bluetooth_card = pygame.Rect(18, 328, 284, 78)
-    draw_modern_button(screen, bluetooth_card, UI_SURFACE, UI_BLUE, 16)
-    bt_label = f_tiny.render("BLUETOOTH AUDIO", True, UI_MUTED)
-    screen.blit(bt_label, (34, bluetooth_card.y + 15))
+    bluetooth_card = pygame.Rect(18, 320, 284, 54)
+    body = draw_info_card(screen, bluetooth_card, UI_BLUE, 16)
+    bt_label = f_tiny.render("BLUETOOTH AUDIO", True, muted_ink_on(body))
+    screen.blit(bt_label, (34, bluetooth_card.y + 8))
     bt_value = f_sm.render(
-        fit_label(system_stats['bluetooth'], 28), True, UI_TEXT
+        fit_label(system_stats['bluetooth'], 28), True, ink_on(body)
     )
-    screen.blit(bt_value, (34, bluetooth_card.y + 43))
+    screen.blit(bt_value, (34, bluetooth_card.y + 28))
+
+    shutdown_armed = now <= shutdown_confirm_until
+    shutdown_label = (
+        "SHUTTING DOWN…"
+        if shutdown_in_progress
+        else ("TAP AGAIN TO SHUT DOWN" if shutdown_armed else "SAFE SHUTDOWN")
+    )
+    labeled_button(
+        screen, btn_safe_shutdown,
+        UI_PINK if shutdown_armed else (94, 49, 61),
+        f_tiny, shutdown_label, 13
+    )
     draw_pages_button()
 
 def draw_settings_screen(now):
     draw_page_base("SETTINGS", now)
 
     audio_title = f_sm.render("SOUND OUTPUT", True, UI_TEXT)
-    screen.blit(audio_title, (18, 73))
+    screen.blit(audio_title, (18, 67))
     audio_labels = ("AUTO", "JACK", "HDMI", "BLUETOOTH")
     audio_names = ("auto", "analog", "hdmi", "bluetooth")
     for rect, label, output_name in zip(
@@ -4408,53 +6061,50 @@ def draw_settings_screen(now):
         )
         border = UI_GREEN if active else (UI_BLUE if available else (55, 61, 77))
         fill = UI_SURFACE_RAISED if available else UI_SURFACE
-        draw_modern_button(screen, rect, fill, border, 12)
+        body = draw_modern_button(screen, rect, fill, border, 12)
         draw_centered_text(
-            screen, f_tiny, label, UI_TEXT if available else UI_MUTED, rect
+            screen, f_tiny, label,
+            contrasting_text(body) if available else contrasting_muted(body),
+            rect
         )
 
-    wifi_title = f_sm.render("WI-FI CONNECTION", True, UI_TEXT)
-    screen.blit(wifi_title, (18, 174))
-    wifi_card = pygame.Rect(18, 196, 284, 91)
-    draw_modern_button(screen, wifi_card, UI_SURFACE_RAISED, UI_PURPLE, 16)
-    wifi_value = f_sm.render(
-        f"Signal {system_stats['wifi']}", True, UI_TEXT
+    display_title = f_sm.render(
+        f"DISPLAY  •  {device_settings.brightness}%", True, UI_TEXT
     )
-    screen.blit(wifi_value, (34, 213))
-    ip_value = f_tiny.render(current_ip, True, UI_MUTED)
-    screen.blit(ip_value, (34, 241))
-    draw_modern_button(screen, btn_wifi_qr, UI_SURFACE, UI_BLUE, 12)
-    draw_centered_text(screen, f_tiny, "WEB / QR", UI_TEXT, btn_wifi_qr)
+    screen.blit(display_title, (18, 158))
+    labeled_button(screen, btn_brightness_minus, UI_BLUE, f_lg, "−", 13)
+    labeled_button(
+        screen, btn_auto_dim,
+        UI_GREEN if device_settings.auto_dim_enabled else (55, 61, 77),
+        f_tiny,
+        (
+            f"AUTO DIM {device_settings.auto_dim_minutes} MIN"
+            if device_settings.auto_dim_enabled else "AUTO DIM OFF"
+        ),
+        13
+    )
+    labeled_button(screen, btn_brightness_plus, UI_BLUE, f_lg, "+", 13)
 
     theme_title = f_sm.render("THEME", True, UI_TEXT)
-    screen.blit(theme_title, (18, 307))
-    current_theme_rect = pygame.Rect(78, 331, 164, 63)
-    draw_modern_button(
-        screen, current_theme_rect, UI_SURFACE_RAISED, UI_AMBER, 14
+    screen.blit(theme_title, (18, 248))
+    current_theme_rect = pygame.Rect(78, 274, 164, 58)
+    labeled_button(
+        screen, current_theme_rect, UI_AMBER, f_sm,
+        current_theme.name.upper(), 14
     )
-    draw_centered_text(
-        screen, f_sm, current_theme.name.upper(), UI_TEXT, current_theme_rect
-    )
-    draw_modern_button(
-        screen, btn_theme_previous, UI_SURFACE, UI_BLUE, 14
-    )
-    draw_centered_text(
-        screen, f_lg, "‹", UI_TEXT, btn_theme_previous
-    )
-    draw_modern_button(screen, btn_theme_next, UI_SURFACE, UI_BLUE, 14)
-    draw_centered_text(screen, f_lg, "›", UI_TEXT, btn_theme_next)
+    labeled_button(screen, btn_theme_previous, UI_BLUE, f_lg, "‹", 14)
+    labeled_button(screen, btn_theme_next, UI_BLUE, f_lg, "›", 14)
+    labeled_button(screen, btn_wifi_setup, UI_GREEN, f_tiny, "WI-FI", 14)
+    labeled_button(screen, btn_wifi_qr, UI_PURPLE, f_tiny, "WEB QR", 14)
     draw_pages_button()
 
 def draw_bluetooth_screen(now):
     draw_page_base("BLUETOOTH", now)
-    draw_modern_button(
-        screen, btn_bluetooth_search, UI_SURFACE_RAISED,
-        UI_PURPLE if touch_bluetooth_busy else UI_BLUE, 15
-    )
-    draw_centered_text(
-        screen, f_sm,
+    labeled_button(
+        screen, btn_bluetooth_search,
+        UI_PURPLE if touch_bluetooth_busy else UI_BLUE, f_sm,
         "SEARCHING…" if touch_bluetooth_busy else "SEARCH DEVICES",
-        UI_TEXT, btn_bluetooth_search
+        15
     )
 
     status_surface = f_tiny.render(
@@ -4471,11 +6121,11 @@ def draw_bluetooth_screen(now):
                 break
             device = touch_bluetooth_devices[index]
             connected = device.get('connected', False)
-            border = UI_GREEN if connected else (48, 54, 72)
-            draw_modern_button(screen, rect, UI_SURFACE, border, 13)
+            accent = UI_GREEN if connected else (72, 80, 98)
+            body = draw_info_card(screen, rect, accent, 13)
             name_surface = f_sm.render(
                 fit_label(device.get('name', 'Bluetooth device'), 23),
-                True, UI_TEXT
+                True, ink_on(body)
             )
             screen.blit(name_surface, (rect.x + 13, rect.y + 5))
             state = (
@@ -4484,22 +6134,102 @@ def draw_bluetooth_screen(now):
                       else "AVAILABLE • TAP TO PAIR")
             )
             state_surface = f_tiny.render(
-                state, True, UI_GREEN if connected else UI_MUTED
+                state, True, muted_ink_on(body, UI_GREEN if connected else None)
             )
             screen.blit(state_surface, (rect.x + 13, rect.y + 24))
     else:
         empty_rect = pygame.Rect(18, 142, 284, 272)
-        draw_modern_button(screen, empty_rect, UI_SURFACE, (45, 50, 65), 16)
+        body = draw_info_card(screen, empty_rect, (72, 80, 98), 16)
         draw_centered_text(
-            screen, f_sm, "No devices loaded", UI_MUTED, empty_rect
+            screen, f_sm, "No devices loaded", muted_ink_on(body), empty_rect
         )
 
-    draw_modern_button(
-        screen, btn_bluetooth_back, UI_SURFACE_RAISED, UI_BLUE, 16
+    labeled_button(
+        screen, btn_bluetooth_back, UI_BLUE, f_sm, "‹  SETTINGS", 16
     )
-    draw_centered_text(
-        screen, f_sm, "‹  SETTINGS", UI_TEXT, btn_bluetooth_back
+
+def wifi_key_label(value):
+    names = {
+        'shift': 'SHIFT',
+        'space': 'SPACE',
+        'backspace': '⌫',
+        'connect': 'JOIN',
+        'cancel': 'BACK',
+    }
+    if value in names:
+        return names[value]
+    if wifi_shift:
+        symbols = {
+            '1': '!', '2': '@', '3': '#', '4': '$', '5': '%',
+            '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
+            '-': '_', '.': ',', '/': '?',
+        }
+        return symbols.get(value, value.upper())
+    return value
+
+def draw_wifi_screen(now):
+    draw_page_base("WI-FI", now)
+    if wifi_password_open and wifi_target:
+        name = fit_label(wifi_target.get('ssid', 'Wi-Fi'), 28)
+        status = f_tiny.render(name, True, UI_MUTED)
+        screen.blit(status, (160 - status.get_width() // 2, 64))
+        body = draw_modern_button(
+            screen, btn_wifi_password_field, UI_PURPLE, UI_PURPLE, 14
+        )
+        secret = '•' * len(wifi_password_text) if wifi_password_text else "Password"
+        color = contrasting_text(body) if wifi_password_text else contrasting_muted(body)
+        draw_centered_text(
+            screen, f_sm, fit_tail(secret, 22), color, btn_wifi_password_field
+        )
+        for value, rect in wifi_key_rects:
+            if value == 'connect':
+                border = UI_GREEN
+            elif value == 'shift' and wifi_shift:
+                border = UI_AMBER
+            elif value in ('backspace', 'cancel'):
+                border = UI_PINK
+            else:
+                border = UI_BLUE
+            labeled_button(
+                screen, rect, border, f_tiny, wifi_key_label(value), 10
+            )
+        draw_pages_button()
+        return
+
+    status = f_tiny.render(fit_label(wifi_status_label(), 42), True, UI_MUTED)
+    screen.blit(status, (160 - status.get_width() // 2, 64))
+    labeled_button(
+        screen, btn_wifi_scan,
+        UI_PURPLE if wifi_busy else UI_BLUE, f_sm,
+        "SCANNING…" if wifi_busy else "SCAN NETWORKS",
+        15
     )
+    visible = wifi_networks[:4]
+    if visible:
+        for network, rect in zip(visible, wifi_network_rects):
+            border = UI_GREEN if network.get('connected') else UI_BLUE
+            body = draw_modern_button(screen, rect, border, border, 13)
+            lock = "LOCK " if network.get('secure') else ""
+            name = f_sm.render(
+                fit_label(f"{lock}{network['ssid']}", 22),
+                True, contrasting_text(body)
+            )
+            screen.blit(name, (rect.x + 12, rect.y + 6))
+            meta = f_tiny.render(
+                f"{network['signal']}%", True, contrasting_muted(body)
+            )
+            screen.blit(meta, (rect.x + 12, rect.y + 26))
+    else:
+        empty = pygame.Rect(16, 142, 288, 200)
+        body = draw_info_card(screen, empty, (72, 80, 98), 16)
+        draw_centered_text(
+            screen, f_sm, "Tap SCAN to find Wi-Fi", muted_ink_on(body), empty
+        )
+    if wifi_setup_required:
+        labeled_button(screen, btn_wifi_skip, UI_AMBER, f_sm, "SKIP", 14)
+    else:
+        labeled_button(screen, btn_wifi_skip, UI_PURPLE, f_sm, "‹ SETTINGS", 14)
+    draw_pages_button()
 
 def draw_languages_screen(now):
     draw_page_base("LANGUAGES", now)
@@ -4507,8 +6237,7 @@ def draw_languages_screen(now):
         zip(LANGUAGE_STREAMS, language_card_rects)
     ):
         border = (UI_BLUE, UI_PURPLE, UI_AMBER)[index % 3]
-        draw_modern_button(screen, rect, UI_SURFACE_RAISED, border, 15)
-        draw_centered_text(screen, f_sm, language.upper(), UI_TEXT, rect)
+        labeled_button(screen, rect, border, f_sm, language.upper(), 15)
     draw_pages_button()
 
 def draw_language_stations_screen(now):
@@ -4529,115 +6258,201 @@ def draw_language_stations_screen(now):
     ]
     if language_stream_busy:
         loading_rect = pygame.Rect(18, 89, 284, 257)
-        draw_modern_button(
-            screen, loading_rect, UI_SURFACE, (45, 50, 65), 16
-        )
+        body = draw_info_card(screen, loading_rect, (72, 80, 98), 16)
         draw_centered_text(
-            screen, f_sm, "Loading stations…", UI_MUTED, loading_rect
+            screen, f_sm, "Loading stations…", muted_ink_on(body), loading_rect
         )
     elif visible_streams:
         for stream, rect in zip(visible_streams, language_station_rects):
-            draw_modern_button(screen, rect, UI_SURFACE, (48, 54, 72), 13)
+            body = draw_info_card(screen, rect, (72, 80, 98), 13)
             name_surface = f_sm.render(
-                fit_label(stream['name'], 28), True, UI_TEXT
+                fit_label(stream['name'], 28), True, ink_on(body)
             )
             screen.blit(name_surface, (rect.x + 13, rect.y + 7))
             genre_surface = f_tiny.render(
                 fit_label(stream.get('genre', 'Radio'), 34),
-                True, UI_MUTED
+                True, muted_ink_on(body)
             )
             screen.blit(genre_surface, (rect.x + 13, rect.y + 29))
     elif selected_language:
         empty_rect = pygame.Rect(18, 89, 284, 257)
-        draw_modern_button(
-            screen, empty_rect, UI_SURFACE, (45, 50, 65), 16
-        )
+        body = draw_info_card(screen, empty_rect, (72, 80, 98), 16)
         draw_centered_text(
-            screen, f_sm, "No stations available", UI_MUTED, empty_rect
+            screen, f_sm, "No stations available", muted_ink_on(body), empty_rect
         )
 
     page_number = language_stream_offset // 5 + 1
     page_count = max(1, math.ceil(len(streams) / 5))
-    draw_modern_button(
-        screen, btn_language_previous, UI_SURFACE_RAISED,
-        UI_BLUE if language_stream_offset > 0 else (55, 61, 77), 13
-    )
-    draw_centered_text(
-        screen, f_tiny, "PREV", UI_TEXT, btn_language_previous
+    labeled_button(
+        screen, btn_language_previous,
+        UI_BLUE if language_stream_offset > 0 else (55, 61, 77),
+        f_tiny, "PREV", 13
     )
     page_rect = pygame.Rect(118, 360, 84, 44)
     draw_centered_text(
         screen, f_sm, f"{page_number} / {page_count}", UI_MUTED, page_rect
     )
     has_next = language_stream_offset + 5 < len(streams)
-    draw_modern_button(
-        screen, btn_language_next, UI_SURFACE_RAISED,
-        UI_BLUE if has_next else (55, 61, 77), 13
+    labeled_button(
+        screen, btn_language_next,
+        UI_BLUE if has_next else (55, 61, 77),
+        f_tiny, "NEXT", 13
     )
-    draw_centered_text(screen, f_tiny, "NEXT", UI_TEXT, btn_language_next)
+    labeled_button(
+        screen, btn_language_back, UI_BLUE, f_sm, "<  LANGUAGES", 16
+    )
 
-    draw_modern_button(
-        screen, btn_language_back, UI_SURFACE_RAISED, UI_BLUE, 16
+def draw_youtube_search_bar():
+    typed = youtube_keyboard_text.strip() or youtube_touch_query
+    body = draw_info_card(
+        screen, btn_youtube_search_field, UI_PURPLE, 14
     )
-    draw_centered_text(
-        screen, f_sm, "<  LANGUAGES", UI_TEXT, btn_language_back
+    label = fit_tail(typed, 20) if typed else "Search YouTube..."
+    color = ink_on(body) if typed else muted_ink_on(body)
+    text = f_sm.render(label, True, color)
+    screen.blit(
+        text,
+        (
+            btn_youtube_search_field.x + 12,
+            btn_youtube_search_field.centery - text.get_height() // 2,
+        ),
     )
+    labeled_button(screen, btn_youtube_search_go, UI_GREEN, f_sm, "GO", 14)
+
+def draw_youtube_screen(now):
+    draw_page_base("YOUTUBE", now)
+    draw_youtube_search_bar()
+    if youtube_keyboard_open:
+        for label, value, rect in youtube_key_rects:
+            if value == "search":
+                border = UI_GREEN
+            elif value == "backspace":
+                border = UI_AMBER
+            else:
+                border = UI_BLUE
+            labeled_button(screen, rect, border, f_tiny, label, 10)
+        labeled_button(
+            screen, btn_youtube_keyboard_close, UI_BLUE, f_sm, "RESULTS", 14
+        )
+        draw_pages_button()
+        return
+
+    status = "Searching…" if youtube_touch_busy else youtube_touch_status
+    status_surface = f_tiny.render(fit_label(status, 42), True, UI_MUTED)
+    screen.blit(
+        status_surface,
+        (160 - status_surface.get_width() // 2, 116)
+    )
+    for (label, query), rect in zip(YOUTUBE_PRESETS, youtube_preset_rects):
+        selected = youtube_touch_query == query and not youtube_touch_busy
+        labeled_button(
+            screen, rect, UI_PINK if selected else UI_BLUE, f_tiny, label, 12
+        )
+
+    total = len(youtube_results_cache)
+    has_prev = youtube_touch_offset > 0
+    has_next = youtube_touch_offset + 4 < total
+    labeled_button(
+        screen, btn_youtube_prev,
+        UI_BLUE if has_prev else (55, 61, 77), f_sm, "‹", 10
+    )
+    if total:
+        page_label = (
+            f"{youtube_touch_offset + 1}"
+            f"-{min(youtube_touch_offset + 4, total)} / {total}"
+        )
+    else:
+        page_label = "NO RESULTS"
+    draw_centered_text(screen, f_tiny, page_label, UI_MUTED, youtube_page_rect)
+    labeled_button(
+        screen, btn_youtube_next,
+        UI_BLUE if has_next else (55, 61, 77), f_sm, "›", 10
+    )
+
+    visible = youtube_results_cache[youtube_touch_offset:youtube_touch_offset + 4]
+    if youtube_touch_busy and not visible:
+        waiting = pygame.Rect(16, 232, 288, 184)
+        body = draw_info_card(screen, waiting, (72, 80, 98), 16)
+        draw_centered_text(
+            screen, f_sm, "Searching YouTube…", muted_ink_on(body), waiting
+        )
+    elif visible:
+        playing_id = current_youtube_id()
+        for video, rect in zip(visible, youtube_result_rects):
+            accent = (
+                UI_GREEN if video.get('id') == playing_id else (72, 80, 98)
+            )
+            body = draw_info_card(screen, rect, accent, 12)
+            now_prefix = "▶ " if video.get('id') == playing_id else ""
+            title = f_sm.render(
+                fit_label(now_prefix + (video.get('title') or 'YouTube'), 28),
+                True, ink_on(body)
+            )
+            screen.blit(title, (rect.x + 12, rect.y + 4))
+            meta = f_tiny.render(
+                fit_label(
+                    f"{video.get('uploader', '')} • {video.get('duration', '')}",
+                    40
+                ),
+                True, muted_ink_on(body)
+            )
+            screen.blit(meta, (rect.x + 12, rect.y + 22))
+    else:
+        empty = pygame.Rect(16, 232, 288, 184)
+        body = draw_info_card(screen, empty, (72, 80, 98), 16)
+        draw_centered_text(
+            screen, f_sm, "Type in the search bar", muted_ink_on(body), empty
+        )
+    draw_pages_button()
 
 def draw_screensaver():
-    global saver_scroll_x
-    # COMPLETELY BLACK BACKGROUND - no brightness
+    # Lantern clock: huge dim time and a weather icon only.
     screen.fill((0, 0, 0))
-    
-    # Dim the time display (not too bright)
-    time_now = datetime.now().strftime("%H:%M")
-    # Use darker gray for time (not pure white)
-    time_surf = f_xl.render(time_now, True, (68, 68, 68))
-    time_rect = time_surf.get_rect(center=(160, 75))
-    screen.blit(time_surf, time_rect)
-    
-    # Second line: extra-large weather icon and temperature
-    weather_icon_size = 42
-    weather_gap = 16
-    temp_surf = f_weather.render(f"{current_temp}°C", True, (70, 70, 70))
-    weather_width = weather_icon_size * 2 + weather_gap + temp_surf.get_width()
-    weather_left = (320 - weather_width) // 2
-    weather_center_y = 190
+    time_surf = f_xl.render(datetime.now().strftime("%H:%M"), True, (58, 58, 58))
+    screen.blit(time_surf, time_surf.get_rect(center=(160, 200)))
+    draw_weather_icon(screen, 160, 332, weather_type, 36)
+
+def greeting_phrases():
+    hour = datetime.now().hour
+    if hour < 12:
+        return "Good morning", "காலை வணக்கம்"
+    if hour < 17:
+        return "Good afternoon", "மதிய வணக்கம்"
+    return "Good evening", "மாலை வணக்கம்"
+
+def should_show_house_greeting(previous_interaction, now):
+    if greeting_shown_on == datetime.now().date():
+        return False
+    hour = datetime.now().hour
+    if not (5 <= hour <= 11):
+        return False
+    idle = now - previous_interaction
+    if idle >= 4 * 3600:
+        return True
+    if now - saver_started_at >= 20 * 60:
+        return True
+    previous_hour = datetime.fromtimestamp(previous_interaction).hour
+    return previous_hour >= 21 or previous_hour < 5
+
+def draw_house_greeting():
+    screen.fill((0, 0, 0))
+    english, tamil = greeting_phrases()
+    station = sanitize_text(stations[current_idx]['name'] if stations else "TCRADIOS")
+    temp = f"{current_temp}°C" if current_temp else "--°C"
+    time_surf = f_xl.render(datetime.now().strftime("%H:%M"), True, UI_TEXT)
+    screen.blit(time_surf, time_surf.get_rect(center=(160, 92)))
     draw_weather_icon(
-        screen,
-        weather_left + weather_icon_size,
-        weather_center_y,
-        weather_type,
-        weather_icon_size
+        screen, 118, 168, weather_type, 22, dimmed=False, on_background=(0, 0, 0)
     )
-    temp_y = weather_center_y - temp_surf.get_height() // 2
-    screen.blit(temp_surf, (weather_left + weather_icon_size * 2 + weather_gap, temp_y))
-    
-    # Third line: scrolling station name
-    station_name = f"RADIO: {sanitize_text(stations[current_idx]['name']).upper()}"
-    station_surf = f_med.render(station_name, True, (0, 62, 62))
-    saver_scroll_x -= 1
-    if saver_scroll_x < -station_surf.get_width():
-        saver_scroll_x = 320
-    screen.blit(station_surf, (saver_scroll_x, 290))
-
-    # Fourth line: alarm on the left and volume on the right
-    alarm_label = f"Alarm {alarm_system.alarm_time}" if alarm_system.alarm_enabled else "Alarm off"
-    alarm_color = (70, 55, 0) if alarm_system.alarm_enabled else (42, 42, 42)
-    alarm_text = f_sm.render(alarm_label, True, alarm_color)
-    screen.blit(alarm_text, (16, 385))
-
-    vol_surf = f_sm.render(f"Vol: {vol_level}%", True, (42, 42, 42))
-    screen.blit(vol_surf, (304 - vol_surf.get_width(), 385))
-
-    if alarm_system.sleep_timer_enabled:
-        remaining = alarm_system.get_sleep_remaining()
-        sleep_color = (0, 55, 0) if remaining > 10 else (55, 0, 0)
-        sleep_text = f_sm.render(f"Sleep: {remaining} min", True, sleep_color)
-        screen.blit(sleep_text, (160 - sleep_text.get_width()//2, 425))
-    
-    # Exit hint - very dim
-    hint_surf = f_tiny.render("Tap to exit", True, (28, 28, 28))
-    screen.blit(hint_surf, (160 - hint_surf.get_width()//2, 460))
+    temp_surf = f_weather.render(temp, True, UI_TEXT)
+    screen.blit(temp_surf, (148, 146))
+    tamil_line = f_sm.render(f"{tamil}. {station} தயார்.", True, UI_TEXT)
+    screen.blit(tamil_line, tamil_line.get_rect(center=(160, 250)))
+    english_line = f_tiny.render(
+        f"{english}. {temp}. {fit_label(station, 18)} is ready.",
+        True, UI_MUTED
+    )
+    screen.blit(english_line, english_line.get_rect(center=(160, 286)))
 
 adjusting_volume = False
 show_volume_bar = False
@@ -4647,14 +6462,239 @@ touch_start_time = 0
 active_page = "radio"
 PAGE_ORDER = [
     "radio", "favorites", "forecast", "clock",
-    "alarm", "system", "languages", "settings"
+    "alarm", "system", "languages", "settings", "youtube"
 ]
-btn_open_pages = pygame.Rect(90, 388, 140, 30)
+btn_open_pages = pygame.Rect(16, 422, 228, 46)
+fab_open = False
+btn_fab = pygame.Rect(256, 416, 54, 54)
+btn_sleep = pygame.Rect(16, 248, 140, 52)
+btn_saver = pygame.Rect(164, 248, 140, 52)
+btn_alarm = pygame.Rect(16, 308, 140, 52)
+btn_mute = pygame.Rect(164, 308, 140, 52)
+vol_rect = pygame.Rect(0, 0, 0, 0)
 btn_pages = pygame.Rect(70, 430, 180, 38)
 menu_card_rects = [
-    pygame.Rect(16 + (index % 2) * 152, 72 + (index // 2) * 84, 136, 75)
+    pygame.Rect(16 + (index % 2) * 152, 68 + (index // 2) * 70, 136, 62)
     for index in range(8)
 ]
+menu_card_rects.append(pygame.Rect(16, 348, 288, 62))
+YOUTUBE_PRESETS = (
+    ("LOFI", "lofi hip hop radio"),
+    ("JAZZ", "smooth jazz radio"),
+    ("NEWS", "live news"),
+    ("CHILL", "chillout music"),
+    ("POP", "pop hits radio"),
+    ("CLASSICAL", "classical music radio"),
+)
+btn_youtube_search_field = pygame.Rect(16, 68, 220, 42)
+btn_youtube_search_go = pygame.Rect(244, 68, 60, 42)
+youtube_preset_rects = [
+    pygame.Rect(16 + (index % 3) * 102, 134 + (index // 3) * 36, 92, 32)
+    for index in range(6)
+]
+btn_youtube_prev = pygame.Rect(16, 210, 52, 28)
+btn_youtube_next = pygame.Rect(252, 210, 52, 28)
+youtube_page_rect = pygame.Rect(74, 210, 172, 28)
+youtube_result_rects = [
+    pygame.Rect(16, 246 + index * 44, 288, 40)
+    for index in range(4)
+]
+btn_youtube_keyboard_close = pygame.Rect(70, 372, 180, 40)
+youtube_keyboard_open = False
+youtube_keyboard_text = ""
+youtube_touch_query = ""
+youtube_touch_status = "Choose a station or search"
+youtube_touch_busy = False
+youtube_touch_offset = 0
+youtube_touch_pending = None
+
+def build_youtube_keys():
+    keys = []
+    rows = ("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm")
+    y = 116
+    key_w, key_h, gap = 28, 36, 3
+    for row in rows:
+        row_w = len(row) * key_w + (len(row) - 1) * gap
+        extra = 0
+        if row == "zxcvbnm":
+            extra = 6 + 46
+            row_w += extra
+        x = (320 - row_w) // 2
+        for character in row:
+            keys.append((
+                character.upper(),
+                character,
+                pygame.Rect(x, y, key_w, key_h)
+            ))
+            x += key_w + gap
+        if row == "zxcvbnm":
+            keys.append(("⌫", "backspace", pygame.Rect(x + 3, y, 46, key_h)))
+        y += 42
+    keys.append(("SPACE", "space", pygame.Rect(16, y, 140, 40)))
+    keys.append(("SEARCH", "search", pygame.Rect(164, y, 140, 40)))
+    return keys
+
+youtube_key_rects = build_youtube_keys()
+
+def fetch_youtube_search(query):
+    global youtube_touch_pending
+    try:
+        videos, err = search_youtube(query)
+        youtube_touch_pending = ('results', videos, err)
+    except Exception as error:
+        youtube_touch_pending = ('results', [], str(error))
+
+def fetch_youtube_audio(video, auto=False):
+    global youtube_touch_pending
+    video_id = str(video.get('id', '')).strip()
+    title = video.get('title') or 'YouTube Audio'
+    try:
+        audio_url, err = youtube_audio_url(video_id)
+        if audio_url:
+            youtube_touch_pending = ('play', video_id, title, audio_url, auto)
+        else:
+            youtube_touch_pending = (
+                'error', err or 'Could not extract audio URL', auto, video_id
+            )
+    except Exception as error:
+        youtube_touch_pending = ('error', str(error), auto, video_id)
+
+def begin_youtube_search(query):
+    global youtube_touch_busy, youtube_touch_status, youtube_touch_query
+    global youtube_keyboard_open, youtube_keyboard_text
+    query = str(query or '').strip()
+    if youtube_touch_busy:
+        return
+    if not query:
+        youtube_touch_status = "Type a search"
+        return
+    youtube_touch_query = query
+    youtube_keyboard_text = query
+    youtube_keyboard_open = False
+    youtube_touch_busy = True
+    youtube_touch_status = "Searching…"
+    threading.Thread(
+        target=fetch_youtube_search, args=(query,), daemon=True
+    ).start()
+
+def begin_youtube_play(video, auto=False):
+    global youtube_touch_busy, youtube_touch_status
+    if youtube_touch_busy or not video.get('id'):
+        return False
+    if not auto:
+        youtube_skip_ids.clear()
+        remember_youtube_queue(video.get('id'), video.get('title') or '')
+    youtube_touch_busy = True
+    youtube_touch_status = "Opening next…" if auto else "Opening audio…"
+    threading.Thread(
+        target=fetch_youtube_audio, args=(video, auto), daemon=True
+    ).start()
+    return True
+
+def continue_youtube_queue(step=1, user=False):
+    global youtube_queue_index
+    if youtube_touch_busy:
+        return True
+    if len(youtube_queue) <= 1:
+        return False
+    n = len(youtube_queue)
+    for _attempt in range(n):
+        youtube_queue_index = (youtube_queue_index + step) % n
+        video = youtube_queue[youtube_queue_index]
+        video_id = str(video.get('id') or '').strip()
+        if video_id and video_id not in youtube_skip_ids:
+            return begin_youtube_play(video, auto=not user)
+    return False
+
+def youtube_queue_status():
+    if not youtube_queue or youtube_queue_index < 0:
+        return "Playing"
+    total = len(youtube_queue)
+    if total <= 1:
+        return "Playing"
+    nxt = youtube_queue[(youtube_queue_index + 1) % total]
+    next_title = fit_label(nxt.get('title') or 'YouTube', 16)
+    return f"{youtube_queue_index + 1}/{total} · next {next_title}"
+
+def maybe_advance_youtube_queue():
+    global _youtube_was_playing, _youtube_ended_handled
+    if not current_youtube_id() or len(youtube_queue) <= 1:
+        return
+    try:
+        state = player.get_state()
+    except Exception:
+        return
+    if state in (
+        vlc.State.Opening, vlc.State.Buffering, vlc.State.Playing, vlc.State.Paused
+    ):
+        if state == vlc.State.Playing:
+            _youtube_was_playing = True
+        _youtube_ended_handled = False
+        return
+    if state not in (vlc.State.Ended, vlc.State.Error):
+        return
+    if _youtube_ended_handled:
+        return
+    waited = time.time() - _youtube_play_started_at
+    if not _youtube_was_playing and waited < 8:
+        return
+    if waited < 2:
+        return
+    _youtube_ended_handled = True
+    _youtube_was_playing = False
+    continue_youtube_queue(1, user=False)
+
+def apply_youtube_touch_result():
+    global youtube_touch_pending, youtube_touch_busy, youtube_touch_status
+    global youtube_touch_offset, youtube_results_cache, active_page
+    pending = youtube_touch_pending
+    if not pending:
+        return
+    youtube_touch_pending = None
+    youtube_touch_busy = False
+    kind = pending[0]
+    if kind == 'results':
+        videos, err = pending[1], pending[2]
+        if err and not videos:
+            youtube_touch_status = err
+            youtube_results_cache = []
+        else:
+            youtube_results_cache = videos
+            youtube_touch_offset = 0
+            count = len(videos)
+            youtube_touch_status = (
+                f"{count} result" + ("s" if count != 1 else "")
+                if count else "No results"
+            )
+    elif kind == 'play':
+        _kind, video_id, title, audio_url, auto = (
+            pending[0], pending[1], pending[2], pending[3],
+            pending[4] if len(pending) > 4 else False
+        )
+        play_youtube_station(video_id, title, audio_url)
+        youtube_touch_status = youtube_queue_status()
+        if not auto:
+            active_page = "radio"
+    elif kind == 'error':
+        youtube_touch_status = str(pending[1])[:80]
+        auto = pending[2] if len(pending) > 2 else False
+        video_id = pending[3] if len(pending) > 3 else ''
+        if video_id:
+            youtube_skip_ids.add(video_id)
+        if auto:
+            continue_youtube_queue(1, user=False)
+
+def handle_youtube_key(value):
+    global youtube_keyboard_text
+    if value == "backspace":
+        youtube_keyboard_text = youtube_keyboard_text[:-1]
+    elif value == "space":
+        if len(youtube_keyboard_text) < 60:
+            youtube_keyboard_text += " "
+    elif value == "search":
+        begin_youtube_search(youtube_keyboard_text)
+    elif len(youtube_keyboard_text) < 60:
+        youtube_keyboard_text += value
 btn_favorite_toggle = pygame.Rect(90, 67, 140, 34)
 favorite_card_rects = [
     pygame.Rect(16 + (index % 2) * 152, 112 + (index // 2) * 96, 136, 86)
@@ -4667,16 +6707,54 @@ btn_sleep_presets = [
     pygame.Rect(18 + index * 98, 282, 88, 48) for index in range(3)
 ]
 btn_sleep_cancel = pygame.Rect(18, 344, 284, 54)
+btn_safe_shutdown = pygame.Rect(55, 383, 210, 36)
 system_card_rects = [
     pygame.Rect(18 + (index % 2) * 146, 76 + (index // 2) * 126, 138, 110)
     for index in range(4)
 ]
 btn_audio_outputs = [
-    pygame.Rect(14 + index * 76, 95, 70, 60) for index in range(4)
+    pygame.Rect(14 + index * 76, 88, 70, 56) for index in range(4)
 ]
-btn_wifi_qr = pygame.Rect(190, 216, 95, 50)
-btn_theme_previous = pygame.Rect(18, 331, 50, 63)
-btn_theme_next = pygame.Rect(252, 331, 50, 63)
+btn_brightness_minus = pygame.Rect(18, 184, 50, 48)
+btn_auto_dim = pygame.Rect(78, 184, 164, 48)
+btn_brightness_plus = pygame.Rect(252, 184, 50, 48)
+btn_theme_previous = pygame.Rect(18, 274, 50, 58)
+btn_theme_next = pygame.Rect(252, 274, 50, 58)
+btn_wifi_setup = pygame.Rect(16, 353, 140, 50)
+btn_wifi_qr = pygame.Rect(164, 353, 140, 50)
+btn_wifi_scan = pygame.Rect(16, 86, 288, 40)
+wifi_network_rects = [
+    pygame.Rect(16, 142 + index * 50, 288, 46) for index in range(4)
+]
+btn_wifi_skip = pygame.Rect(70, 352, 180, 42)
+btn_wifi_password_field = pygame.Rect(16, 86, 288, 40)
+
+def build_wifi_keys():
+    keys = []
+    rows = ("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm-./")
+    y = 136
+    key_w, key_h, gap = 28, 34, 3
+    for row in rows:
+        row_w = len(row) * key_w + (len(row) - 1) * gap
+        x = (320 - row_w) // 2
+        for character in row:
+            keys.append((character, pygame.Rect(x, y, key_w, key_h)))
+            x += key_w + gap
+        y += 38
+    keys.extend((
+        ('shift', pygame.Rect(16, y, 70, 38)),
+        ('space', pygame.Rect(92, y, 70, 38)),
+        ('backspace', pygame.Rect(168, y, 52, 38)),
+        ('connect', pygame.Rect(226, y, 78, 38)),
+        ('cancel', pygame.Rect(70, 372, 180, 40)),
+    ))
+    return keys
+
+wifi_key_rects = build_wifi_keys()
+if not has_network_connection():
+    wifi_setup_required = True
+    active_page = "wifi"
+    begin_wifi_scan()
 btn_bluetooth_search = pygame.Rect(70, 75, 180, 42)
 bluetooth_device_rects = [
     pygame.Rect(18, 142 + index * 46, 284, 42) for index in range(6)
@@ -4693,6 +6771,43 @@ btn_language_previous = pygame.Rect(18, 360, 88, 44)
 btn_language_next = pygame.Rect(214, 360, 88, 44)
 btn_language_back = pygame.Rect(70, 430, 180, 38)
 
+def adjust_volume(delta):
+    global show_volume_bar, volume_bar_timer, last_interaction_time
+    apply_live_volume(vol_level + delta)
+    show_volume_bar = True
+    volume_bar_timer = time.time()
+    last_interaction_time = time.time()
+
+def toggle_output_mute():
+    global show_volume_bar, volume_bar_timer, last_interaction_time
+    apply_live_volume(0 if vol_level > 0 else last_unmuted_volume)
+    show_volume_bar = True
+    volume_bar_timer = time.time()
+    last_interaction_time = time.time()
+
+def start_rotary_encoder():
+    # CLK=GPIO5 (pin 29), DT=GPIO6 (pin 31), SW=GPIO13 (pin 33), GND=pin 30.
+    global rotary_controls
+    try:
+        from gpiozero import DigitalInputDevice
+        clock = DigitalInputDevice(5, pull_up=True, bounce_time=0.004)
+        direction = DigitalInputDevice(6, pull_up=True)
+        switch = DigitalInputDevice(13, pull_up=True, bounce_time=0.08)
+
+        def rotated():
+            adjust_volume(2 if direction.is_active else -2)
+
+        clock.when_activated = rotated
+        switch.when_activated = toggle_output_mute
+        rotary_controls = [clock, direction, switch]
+        print("Rotary encoder ready: GPIO 5, GPIO 6, switch GPIO 13")
+    except Exception as error:
+        rotary_controls = []
+        print(f"Rotary encoder disabled: {error}")
+
+rotary_controls = []
+start_rotary_encoder()
+
 while True:
     now = time.time()
     update_qr_code()
@@ -4703,10 +6818,13 @@ while True:
     
     handle_alarm_fade()
     handle_sleep_timer()
+    apply_youtube_touch_result()
+    maybe_advance_youtube_queue()
+    apply_wifi_result()
     
     if now - last_weather_update > 1200:
         try:
-            r = requests.get(WEATHER_URL, timeout=5)
+            r = requests.get(device_settings.weather_url(), timeout=5)
             if r.status_code == 200:
                 weather_data = r.json()
                 data = weather_data['current_weather']
@@ -4749,23 +6867,24 @@ while True:
             try:
                 m = media.get_meta(vlc.Meta.NowPlaying)
                 if m:
-                    meta_text = sanitize_text(m).upper()
+                    meta_text = style_now_playing(m)
                 else:
-                    meta_text = sanitize_text(stations[current_idx]['name']).upper()
+                    meta_text = style_now_playing(stations[current_idx]['name'])
             except: 
-                meta_text = sanitize_text(stations[current_idx]['name']).upper()
+                meta_text = style_now_playing(stations[current_idx]['name'])
     except: 
-        meta_text = sanitize_text(stations[current_idx]['name']).upper()
+        meta_text = style_now_playing(stations[current_idx]['name'])
     
     if show_volume_bar and now - volume_bar_timer > 3:
         show_volume_bar = False
         adjusting_volume = False
     
+    hide_mouse_pointer()
     if saver_active:
-        pygame.mouse.set_visible(False)
         draw_screensaver()
+    elif now < greeting_until:
+        draw_house_greeting()
     else:
-        pygame.mouse.set_visible(True)
         if ui_palette_theme != current_theme.name:
             refresh_ui_palette()
         screen.blit(ui_background, (0, 0))
@@ -4779,8 +6898,8 @@ while True:
         pygame.draw.line(screen, UI_PURPLE, (175, 58), (292, 58), 2)
 
         btn_qr = pygame.Rect(15, 13, 42, 40)
-        draw_modern_button(screen, btn_qr, (25, 48, 73), UI_BLUE, 12)
-        draw_centered_text(screen, f_sm, "QR", UI_BLUE, btn_qr)
+        qr_body = draw_modern_button(screen, btn_qr, UI_BLUE, UI_BLUE, 12)
+        draw_centered_text(screen, f_sm, "QR", contrasting_text(qr_body), btn_qr)
 
         title_rect = pygame.Rect(65, 10, 190, 38)
         draw_centered_text(screen, f_lg, "TC RADIOS", UI_TEXT, title_rect)
@@ -4813,20 +6932,43 @@ while True:
         else:
             pygame.draw.circle(screen, UI_MUTED, (160, 128), 58, 1)
 
-        # Now-playing title has a dedicated row without a heavy container
-        name_area = pygame.Rect(16, 198, 288, 34)
+        # Now-playing: Tamil on top, English transliteration under it
         display_text = sanitize_text(meta_text)
-        name_render = f_lg.render(display_text, True, UI_TEXT)
-        screen.set_clip(name_area.inflate(-12, 0))
-        if name_render.get_width() <= name_area.width - 24:
-            name_x = name_area.centerx - name_render.get_width() // 2
+        roman_text = transliterate_tamil(display_text)
+        if roman_text:
+            name_area = pygame.Rect(16, 192, 288, 28)
+            roman_area = pygame.Rect(16, 220, 288, 20)
+            name_render = f_sm.render(display_text, True, UI_TEXT)
+            roman_render = f_tiny.render(
+                fit_label(roman_text, 34), True, UI_MUTED
+            )
+            screen.set_clip(name_area.inflate(-12, 0))
+            if name_render.get_width() <= name_area.width - 24:
+                name_x = name_area.centerx - name_render.get_width() // 2
+            else:
+                scroll_x -= 2
+                if scroll_x < -name_render.get_width():
+                    scroll_x = name_area.right
+                name_x = scroll_x
+            screen.blit(name_render, (name_x, name_area.y + 4))
+            screen.set_clip(None)
+            screen.blit(
+                roman_render,
+                (roman_area.centerx - roman_render.get_width() // 2, roman_area.y)
+            )
         else:
-            scroll_x -= 2
-            if scroll_x < -name_render.get_width():
-                scroll_x = name_area.right
-            name_x = scroll_x
-        screen.blit(name_render, (name_x, name_area.y + 5))
-        screen.set_clip(None)
+            name_area = pygame.Rect(16, 198, 288, 34)
+            name_render = f_lg.render(display_text, True, UI_TEXT)
+            screen.set_clip(name_area.inflate(-12, 0))
+            if name_render.get_width() <= name_area.width - 24:
+                name_x = name_area.centerx - name_render.get_width() // 2
+            else:
+                scroll_x -= 2
+                if scroll_x < -name_render.get_width():
+                    scroll_x = name_area.right
+                name_x = scroll_x
+            screen.blit(name_render, (name_x, name_area.y + 5))
+            screen.set_clip(None)
 
         # Status chips appear only when active; controls remain in the dock
         alarm_chip = pygame.Rect(18, 242, 128, 22)
@@ -4844,33 +6986,25 @@ while True:
             draw_modern_button(screen, sleep_chip, (35, 40, 67), (75, 61, 126), 10)
             draw_centered_text(screen, f_tiny, sleep_label, sleep_color, sleep_chip)
 
-        # Volume strip
-        vol_minus_rect = pygame.Rect(12, 277, 42, 36)
-        vol_plus_rect = pygame.Rect(266, 277, 42, 36)
-        vol_bar_rect = pygame.Rect(67, 285, 186, 18)
-        draw_modern_button(screen, vol_minus_rect, UI_SURFACE_RAISED, UI_AMBER, 12)
-        mc = vol_minus_rect.center
-        pygame.draw.line(screen, UI_AMBER, (mc[0] - 9, mc[1]), (mc[0] + 9, mc[1]), 3)
-
-        pygame.draw.rect(screen, (37, 48, 72), vol_bar_rect, border_radius=10)
+        # Volume strip: circular vector − / + so glyphs never become boxes
+        vol_minus_rect = pygame.Rect(10, 270, 46, 46)
+        vol_plus_rect = pygame.Rect(264, 270, 46, 46)
+        vol_bar_rect = pygame.Rect(64, 284, 192, 14)
+        draw_circle_icon_button(screen, vol_minus_rect, UI_AMBER, "minus")
+        pygame.draw.rect(screen, (37, 48, 72), vol_bar_rect, border_radius=8)
         fill_width = int(vol_bar_rect.width * vol_level / 100)
         if fill_width > 0:
-            pygame.draw.rect(
-                screen, UI_BLUE,
-                (vol_bar_rect.x, vol_bar_rect.y, fill_width, vol_bar_rect.height),
-                border_radius=10
+            fill_rect = pygame.Rect(
+                vol_bar_rect.x, vol_bar_rect.y, max(14, fill_width), vol_bar_rect.height
             )
+            pygame.draw.rect(screen, UI_BLUE, fill_rect, border_radius=8)
         knob_x = vol_bar_rect.x + int(vol_bar_rect.width * vol_level / 100)
         knob_x = max(vol_bar_rect.x + 8, min(vol_bar_rect.right - 8, knob_x))
-        pygame.draw.circle(screen, UI_TEXT, (knob_x, vol_bar_rect.centery), 7)
-        if show_volume_bar or adjusting_volume:
-            vol_pct_surf = f_tiny.render(f"{vol_level}%", True, UI_TEXT)
-            screen.blit(vol_pct_surf, (160 - vol_pct_surf.get_width() // 2, 307))
-
-        draw_modern_button(screen, vol_plus_rect, UI_SURFACE_RAISED, UI_GREEN, 12)
-        pc = vol_plus_rect.center
-        pygame.draw.line(screen, UI_GREEN, (pc[0], pc[1] - 9), (pc[0], pc[1] + 9), 3)
-        pygame.draw.line(screen, UI_GREEN, (pc[0] - 9, pc[1]), (pc[0] + 9, pc[1]), 3)
+        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), 9, UI_TEXT)
+        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), 4, UI_BLUE)
+        vol_pct_surf = f_tiny.render(f"{vol_level}%", True, UI_TEXT)
+        screen.blit(vol_pct_surf, (160 - vol_pct_surf.get_width() // 2, 302))
+        draw_circle_icon_button(screen, vol_plus_rect, UI_GREEN, "plus")
 
         # Primary transport controls
         btn_prev = pygame.Rect(12, 329, 92, 53)
@@ -4882,65 +7016,85 @@ while True:
             UI_AMBER if is_playing else UI_GREEN,
             now
         )
-        draw_modern_button(screen, btn_prev, UI_SURFACE_RAISED, UI_BLUE, 16)
-        draw_modern_button(
-            screen, btn_toggle,
-            (66, 52, 42) if is_playing else (33, 73, 65),
-            UI_AMBER if is_playing else UI_GREEN,
-            18, 2
+        prev_body = draw_modern_button(screen, btn_prev, UI_BLUE, UI_BLUE, 16)
+        toggle_color = UI_AMBER if is_playing else UI_GREEN
+        toggle_body = draw_modern_button(
+            screen, btn_toggle, toggle_color, toggle_color, 18
         )
-        draw_modern_button(screen, btn_next, UI_SURFACE_RAISED, UI_PURPLE, 16)
-        draw_centered_text(screen, f_sm, "PREV", UI_TEXT, btn_prev)
+        next_body = draw_modern_button(screen, btn_next, UI_PURPLE, UI_PURPLE, 16)
+        draw_centered_text(screen, f_sm, "PREV", contrasting_text(prev_body), btn_prev)
         draw_centered_text(
             screen, f_sm, "PAUSE" if is_playing else "PLAY",
-            UI_AMBER if is_playing else UI_GREEN,
+            contrasting_text(toggle_body),
             btn_toggle
         )
-        draw_centered_text(screen, f_sm, "NEXT", UI_TEXT, btn_next)
+        draw_centered_text(screen, f_sm, "NEXT", contrasting_text(next_body), btn_next)
 
-        # Airy bottom dock: inactive actions are intentionally borderless
-        dock_rect = pygame.Rect(8, 420, 304, 54)
-        pygame.draw.rect(screen, UI_SURFACE, dock_rect, border_radius=18)
-        pygame.draw.rect(screen, (54, 64, 91), dock_rect, 1, border_radius=18)
-
-        btn_sleep = pygame.Rect(13, 423, 56, 46)
-        btn_saver = pygame.Rect(73, 423, 56, 46)
-        btn_alarm = pygame.Rect(133, 423, 68, 46)
-        vol_rect = pygame.Rect(205, 423, 51, 46)
-        btn_mute = pygame.Rect(260, 423, 47, 46)
-
-        if alarm_system.sleep_timer_enabled:
-            pygame.draw.rect(screen, (55, 43, 87), btn_sleep, border_radius=12)
-        if alarm_system.alarm_enabled:
-            pygame.draw.rect(screen, (76, 60, 31), btn_alarm, border_radius=12)
-        if vol_level == 0:
-            pygame.draw.rect(screen, (68, 31, 50), btn_mute, border_radius=12)
-        draw_centered_text(screen, f_tiny, "SLEEP", UI_TEXT, btn_sleep)
-        draw_centered_text(screen, f_tiny, "MOON", UI_TEXT, btn_saver)
-        draw_centered_text(
-            screen, f_tiny, "ALARM",
-            UI_AMBER if alarm_system.alarm_enabled else UI_TEXT,
-            btn_alarm
-        )
-        draw_centered_text(screen, f_tiny, f"{vol_level}%", UI_TEXT, vol_rect)
-        draw_centered_text(
-            screen, f_tiny, "MUTE",
-            UI_PINK if vol_level == 0 else UI_MUTED,
-            btn_mute
-        )
-
-        draw_modern_button(
-            screen, btn_open_pages, UI_SURFACE, UI_BLUE, 11
+        pages_body = draw_modern_button(
+            screen, btn_open_pages, UI_BLUE, UI_BLUE, 16
         )
         draw_centered_text(
-            screen, f_sm, "PAGES", UI_TEXT, btn_open_pages
+            screen, f_sm, "PAGES", contrasting_text(pages_body), btn_open_pages
         )
+
+        if fab_open:
+            dim = pygame.Surface((320, 480), pygame.SRCALPHA)
+            dim.fill((0, 0, 0, 150))
+            screen.blit(dim, (0, 0))
+            panel = pygame.Rect(8, 236, 304, 136)
+            pygame.draw.rect(screen, UI_SURFACE, panel, border_radius=18)
+            pygame.draw.rect(screen, (54, 64, 91), panel, 1, border_radius=18)
+            sleep_fill = UI_PURPLE if alarm_system.sleep_timer_enabled else UI_SURFACE_RAISED
+            moon_fill = UI_BLUE if saver_active else UI_SURFACE_RAISED
+            alarm_fill = UI_AMBER if alarm_system.alarm_enabled else UI_SURFACE_RAISED
+            mute_fill = UI_PINK if vol_level == 0 else UI_SURFACE_RAISED
+            labeled_button(screen, btn_sleep, sleep_fill, f_sm, "SLEEP", 14)
+            labeled_button(screen, btn_saver, moon_fill, f_sm, "MOON", 14)
+            labeled_button(screen, btn_alarm, alarm_fill, f_sm, "ALARM", 14)
+            labeled_button(
+                screen, btn_mute, mute_fill, f_sm,
+                "MUTE" if vol_level else "UNMUTE", 14
+            )
+
+        fab_fill = UI_PINK if fab_open else UI_PURPLE
+        draw_smooth_circle(screen, btn_fab.center, 26, fab_fill)
+        draw_vector_icon(
+            screen, btn_fab.center,
+            "close" if fab_open else "gear",
+            ink_on(fab_fill),
+            radius=11,
+            width=3,
+        )
+        if (
+            not fab_open
+            and (
+                vol_level == 0
+                or alarm_system.alarm_enabled
+                or alarm_system.sleep_timer_enabled
+            )
+        ):
+            pygame.draw.circle(
+                screen,
+                UI_PINK if vol_level == 0 else UI_AMBER,
+                (btn_fab.centerx + 16, btn_fab.centery - 16),
+                5,
+            )
 
         if show_qr:
-            qr_panel = pygame.Rect(31, 87, 258, 258)
-            pygame.draw.rect(screen, UI_SURFACE, qr_panel, border_radius=18)
-            pygame.draw.rect(screen, UI_BLUE, qr_panel, 2, border_radius=18)
-            screen.blit(qr_surface, (40, 96))
+            qr_panel = pygame.Rect(31, 78, 258, 278)
+            body = draw_info_card(screen, qr_panel, UI_BLUE, 18)
+            screen.blit(qr_surface, (40, 88))
+            draw_centered_text(
+                screen, f_tiny, "LISTEN ALONG", ink_on(body),
+                pygame.Rect(40, 328, 240, 16)
+            )
+            station_label = fit_label(
+                stations[current_idx]['name'] if stations else "TCRADIOS", 22
+            )
+            draw_centered_text(
+                screen, f_sm, station_label, muted_ink_on(body),
+                pygame.Rect(40, 344, 240, 18)
+            )
 
         if not show_qr:
             if active_page == "menu":
@@ -4963,13 +7117,44 @@ while True:
                 draw_languages_screen(now)
             elif active_page == "language_stations":
                 draw_language_stations_screen(now)
+            elif active_page == "youtube":
+                draw_youtube_screen(now)
+            elif active_page == "wifi":
+                draw_wifi_screen(now)
     
     for event in pygame.event.get():
         if event.type == pygame.MOUSEBUTTONDOWN:
+            was_auto_dimmed = (
+                target_display_brightness(now) < device_settings.brightness
+            )
+            previous_interaction = last_interaction_time
+            last_interaction_time = now
+            morning_greeting = (
+                not wifi_setup_required
+                and should_show_house_greeting(previous_interaction, now)
+            )
+            if was_auto_dimmed:
+                device_settings.set_hardware_brightness(
+                    device_settings.brightness
+                )
+                if morning_greeting:
+                    greeting_until = now + 6
+                    greeting_shown_on = datetime.now().date()
+                continue
             touch_start_pos = event.pos
             touch_start_time = time.time()
             if saver_active:
                 saver_active = False
+                if morning_greeting:
+                    greeting_until = now + 6
+                    greeting_shown_on = datetime.now().date()
+                continue
+            if now < greeting_until:
+                greeting_until = 0
+                continue
+            if morning_greeting:
+                greeting_until = now + 6
+                greeting_shown_on = datetime.now().date()
                 continue
             if show_qr:
                 show_qr = False
@@ -4979,6 +7164,32 @@ while True:
                     if card.collidepoint(event.pos):
                         active_page = PAGE_ORDER[page_index]
                         break
+                continue
+
+            if active_page == "wifi":
+                if btn_pages.collidepoint(event.pos):
+                    wifi_password_open = False
+                    wifi_setup_required = False
+                    active_page = "menu"
+                elif wifi_password_open:
+                    for value, rect in wifi_key_rects:
+                        if rect.collidepoint(event.pos):
+                            handle_wifi_key(value)
+                            break
+                elif btn_wifi_scan.collidepoint(event.pos):
+                    begin_wifi_scan()
+                elif btn_wifi_skip.collidepoint(event.pos):
+                    wifi_password_open = False
+                    if wifi_setup_required:
+                        wifi_setup_required = False
+                        active_page = "radio"
+                    else:
+                        active_page = "settings"
+                elif not wifi_busy:
+                    for network, rect in zip(wifi_networks[:4], wifi_network_rects):
+                        if rect.collidepoint(event.pos):
+                            begin_wifi_connect(network)
+                            break
                 continue
 
             if active_page == "bluetooth":
@@ -5074,7 +7285,56 @@ while True:
 
             if active_page != "radio":
                 if btn_pages.collidepoint(event.pos):
+                    youtube_keyboard_open = False
                     active_page = "menu"
+                elif active_page == "youtube":
+                    if btn_youtube_search_go.collidepoint(event.pos):
+                        query = youtube_keyboard_text.strip() or youtube_touch_query
+                        if query:
+                            begin_youtube_search(query)
+                        else:
+                            youtube_keyboard_open = True
+                    elif btn_youtube_search_field.collidepoint(event.pos):
+                        youtube_keyboard_open = True
+                    elif youtube_keyboard_open:
+                        if btn_youtube_keyboard_close.collidepoint(event.pos):
+                            youtube_keyboard_open = False
+                        else:
+                            for _label, value, rect in youtube_key_rects:
+                                if rect.collidepoint(event.pos):
+                                    handle_youtube_key(value)
+                                    break
+                    elif not youtube_touch_busy:
+                            for (_label, query), rect in zip(
+                                YOUTUBE_PRESETS, youtube_preset_rects
+                            ):
+                                if rect.collidepoint(event.pos):
+                                    youtube_keyboard_text = query
+                                    begin_youtube_search(query)
+                                    break
+                            total = len(youtube_results_cache)
+                            if (
+                                btn_youtube_prev.collidepoint(event.pos)
+                                and youtube_touch_offset > 0
+                            ):
+                                youtube_touch_offset = max(
+                                    0, youtube_touch_offset - 4
+                                )
+                            elif (
+                                btn_youtube_next.collidepoint(event.pos)
+                                and youtube_touch_offset + 4 < total
+                            ):
+                                youtube_touch_offset += 4
+                            else:
+                                visible = youtube_results_cache[
+                                    youtube_touch_offset:youtube_touch_offset + 4
+                                ]
+                                for video, rect in zip(
+                                    visible, youtube_result_rects
+                                ):
+                                    if rect.collidepoint(event.pos):
+                                        begin_youtube_play(video)
+                                        break
                 elif active_page == "favorites":
                     if btn_favorite_toggle.collidepoint(event.pos):
                         toggle_current_favorite()
@@ -5118,6 +7378,12 @@ while True:
                                 break
                         if btn_sleep_cancel.collidepoint(event.pos):
                             alarm_system.stop_sleep_timer()
+                elif active_page == "system":
+                    if btn_safe_shutdown.collidepoint(event.pos):
+                        if now <= shutdown_confirm_until:
+                            request_touch_shutdown()
+                        else:
+                            shutdown_confirm_until = now + 5
                 elif active_page == "settings":
                     for rect, output_name in zip(
                         btn_audio_outputs,
@@ -5135,7 +7401,36 @@ while True:
                             else:
                                 audio_manager.set_output(output_name)
                             break
-                    if btn_wifi_qr.collidepoint(event.pos):
+                    if (
+                        btn_brightness_minus.collidepoint(event.pos)
+                        or btn_brightness_plus.collidepoint(event.pos)
+                    ):
+                        change = (
+                            -10
+                            if btn_brightness_minus.collidepoint(event.pos)
+                            else 10
+                        )
+                        device_settings.brightness = max(
+                            10,
+                            min(100, device_settings.brightness + change)
+                        )
+                        device_settings.save()
+                        device_settings.set_hardware_brightness(
+                            device_settings.brightness
+                        )
+                    elif btn_auto_dim.collidepoint(event.pos):
+                        device_settings.auto_dim_enabled = (
+                            not device_settings.auto_dim_enabled
+                        )
+                        device_settings.save()
+                    elif btn_wifi_setup.collidepoint(event.pos):
+                        wifi_from_settings = True
+                        wifi_setup_required = False
+                        wifi_password_open = False
+                        active_page = "wifi"
+                        if not wifi_networks and not wifi_busy:
+                            begin_wifi_scan()
+                    elif btn_wifi_qr.collidepoint(event.pos):
                         show_qr = True
                     elif (
                         btn_theme_previous.collidepoint(event.pos)
@@ -5162,59 +7457,56 @@ while True:
                         )
                 continue
 
+            if btn_fab.collidepoint(event.pos):
+                fab_open = not fab_open
+                continue
+            if fab_open:
+                if btn_sleep.collidepoint(event.pos):
+                    if alarm_system.sleep_timer_enabled:
+                        alarm_system.stop_sleep_timer()
+                    else:
+                        alarm_system.start_sleep_timer(30)
+                elif btn_saver.collidepoint(event.pos):
+                    saver_active = not saver_active
+                    if saver_active:
+                        saver_started_at = time.time()
+                elif btn_alarm.collidepoint(event.pos):
+                    alarm_system.alarm_enabled = not alarm_system.alarm_enabled
+                    alarm_system.save_alarm_settings()
+                elif btn_mute.collidepoint(event.pos):
+                    apply_live_volume(0 if vol_level > 0 else last_unmuted_volume)
+                fab_open = False
+                continue
             if btn_open_pages.collidepoint(event.pos):
+                fab_open = False
                 active_page = "menu"
                 continue
             if btn_exit.collidepoint(event.pos):
+                save_playback_state(force=True)
                 pygame.quit()
                 sys.exit()
             if btn_qr.collidepoint(event.pos):
                 show_qr = True
             if btn_prev.collidepoint(event.pos):
-                current_idx = (current_idx - 1) % len(stations)
-                play()
+                skip_playback(-1)
             if btn_next.collidepoint(event.pos):
-                current_idx = (current_idx + 1) % len(stations)
-                play()
+                skip_playback(1)
             if btn_toggle.collidepoint(event.pos):
                 player.pause()
-            if btn_mute.collidepoint(event.pos):
-                vol_level = 0 if vol_level > 0 else 80
-                player.audio_set_volume(vol_level)
-                audio_manager.set_volume(vol_level)
-            if btn_sleep.collidepoint(event.pos):
-                if alarm_system.sleep_timer_enabled:
-                    alarm_system.stop_sleep_timer()
-                else:
-                    alarm_system.start_sleep_timer(30)
-            if btn_saver.collidepoint(event.pos):
-                saver_active = not saver_active
-            if btn_alarm.collidepoint(event.pos):
-                alarm_system.alarm_enabled = not alarm_system.alarm_enabled
-                alarm_system.save_alarm_settings()
             if vol_minus_rect.collidepoint(event.pos):
-                vol_level = max(0, vol_level - 5)
-                player.audio_set_volume(vol_level)
-                audio_manager.set_volume(vol_level)
+                apply_live_volume(vol_level - 5)
                 show_volume_bar = True
                 volume_bar_timer = time.time()
             if vol_plus_rect.collidepoint(event.pos):
-                vol_level = min(100, vol_level + 5)
-                player.audio_set_volume(vol_level)
-                audio_manager.set_volume(vol_level)
+                apply_live_volume(vol_level + 5)
                 show_volume_bar = True
                 volume_bar_timer = time.time()
             if vol_bar_rect.collidepoint(event.pos):
                 adjusting_volume = True
-                vol_level = int((event.pos[0] - vol_bar_rect.x) * 100 / vol_bar_rect.width)
-                vol_level = max(0, min(100, vol_level))
-                player.audio_set_volume(vol_level)
-                audio_manager.set_volume(vol_level)
+                apply_live_volume(
+                    int((event.pos[0] - vol_bar_rect.x) * 100 / vol_bar_rect.width)
+                )
                 show_volume_bar = True
-                volume_bar_timer = time.time()
-            if vol_rect.collidepoint(event.pos):
-                show_volume_bar = True
-                adjusting_volume = True
                 volume_bar_timer = time.time()
         
         elif event.type == pygame.MOUSEBUTTONUP:
@@ -5227,6 +7519,8 @@ while True:
                 and abs(dx) > abs(dy)
                 and dt < 2.5
             ):
+                youtube_keyboard_open = False
+                fab_open = False
                 page_index = PAGE_ORDER.index(active_page)
                 direction = 1 if dx < 0 else -1
                 active_page = PAGE_ORDER[
@@ -5243,23 +7537,20 @@ while True:
                     else:
                         alarm_system.start_sleep_timer(30)
                 elif abs(dy) > 30:
-                    if dy > 0:
-                        vol_level = min(100, vol_level + 5)
-                    else:
-                        vol_level = max(0, vol_level - 5)
-                    player.audio_set_volume(vol_level)
-                    audio_manager.set_volume(vol_level)
+                    apply_live_volume(vol_level + (5 if dy > 0 else -5))
                     show_volume_bar = True
                     volume_bar_timer = time.time()
+            if adjusting_volume:
+                save_playback_state(force=True)
             adjusting_volume = False
         
         elif event.type == pygame.MOUSEMOTION and adjusting_volume:
             if event.pos[0] >= vol_bar_rect.x and event.pos[0] <= vol_bar_rect.right:
-                vol_level = int((event.pos[0] - vol_bar_rect.x) * 100 / vol_bar_rect.width)
-                vol_level = max(0, min(100, vol_level))
-                player.audio_set_volume(vol_level)
-                audio_manager.set_volume(vol_level)
+                apply_live_volume(
+                    int((event.pos[0] - vol_bar_rect.x) * 100 / vol_bar_rect.width)
+                )
                 volume_bar_timer = time.time()
     
+    apply_display_brightness(now)
     pygame.display.flip()
     time.sleep(0.05)
