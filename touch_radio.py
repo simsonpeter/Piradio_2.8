@@ -949,6 +949,7 @@ def add_cors_headers(response):
     return response
 
 youtube_results_cache = []
+YOUTUBE_SEARCH_COUNT = 24
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -3914,13 +3915,15 @@ def search_youtube(query):
         if not stdout:
             return [], err or 'Could not open that YouTube link'
         return parse_youtube_payload(stdout), None
-    # Metadata only. --extract-audio downloads and converts every hit.
+    # Metadata only. --extract-audio used to download every hit, so search
+    # was capped at 8. Flat metadata can return a longer list safely.
     stdout, err = run_ytdlp([
         '--dump-single-json',
         '--flat-playlist',
         '--skip-download',
-        f'ytsearch8:{query}',
-    ], timeout=25)
+        '--no-warnings',
+        f'ytsearch{YOUTUBE_SEARCH_COUNT}:{query}',
+    ], timeout=40)
     if not stdout:
         return [], err or 'YouTube search failed'
     return parse_youtube_payload(stdout), None
