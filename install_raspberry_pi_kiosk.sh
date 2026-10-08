@@ -169,40 +169,30 @@ if command -v update-initramfs >/dev/null 2>&1; then
 fi
 
 echo "Installing automatic TCRADIOS launch..."
+# Undo the radio-only kiosk session that left LightDM stuck on the splash.
+rm -f /usr/local/bin/tcradios-session
+rm -f /usr/share/wayland-sessions/tcradios.desktop
+rm -f /usr/share/xsessions/tcradios.desktop
+rm -f /etc/lightdm/lightdm.conf.d/91-tcradios-session.conf
+rm -f "${INSTALL_HOME}/.dmrc"
+if [[ -f "/var/lib/AccountsService/users/${INSTALL_USER}" ]]; then
+    sed -i '/^XSession=tcradios/d;/^Session=tcradios/d' \
+        "/var/lib/AccountsService/users/${INSTALL_USER}" || true
+fi
+for sys_autostart in \
+    /etc/xdg/labwc/autostart \
+    /usr/share/labwc/autostart \
+    /etc/xdg/labwc-pi/autostart
+do
+    if [[ -f "${sys_autostart}.tcradios-backup" ]]; then
+        mv -f "${sys_autostart}.tcradios-backup" "${sys_autostart}"
+    fi
+done
+
+# Point /usr/local/bin at the repo launcher so git updates take effect.
 cat > /usr/local/bin/tcradios-start <<EOF
 #!/usr/bin/env bash
-set -e
-# Both XDG and compositor launchers must contend for the same lock.
-exec 9>"/tmp/tcradios-\${UID}.lock"
-flock -n 9 || exit 0
-
-if [[ ! -t 1 ]]; then
-    exec >>"\${HOME}/.tcradios-start.log" 2>&1
-fi
-
-export DISPLAY="\${DISPLAY:-:0}"
-export XDG_CURRENT_DESKTOP="\${XDG_CURRENT_DESKTOP:-labwc}"
-DISPLAY_NUMBER="\${DISPLAY#:}"
-for _ in {1..20}; do
-    if [[ -S "/tmp/.X11-unix/X\${DISPLAY_NUMBER}" ]] || [[ -n "\${WAYLAND_DISPLAY:-}" ]]; then
-        break
-    fi
-    sleep 0.25
-done
-# Do not reveal the desktop: keep Plymouth up until the radio window is drawn.
-if command -v xset >/dev/null 2>&1; then
-    xset s off >/dev/null 2>&1 || true
-    xset -dpms >/dev/null 2>&1 || true
-    xset s noblank >/dev/null 2>&1 || true
-fi
-if command -v xsetroot >/dev/null 2>&1; then
-    xsetroot -cursor_name none >/dev/null 2>&1 || true
-fi
-if command -v unclutter >/dev/null 2>&1; then
-    unclutter -idle 0 -root >/dev/null 2>&1 &
-fi
-cd $(printf '%q' "${SCRIPT_DIR}")
-exec /usr/bin/python3 $(printf '%q' "${SCRIPT_DIR}/touch_radio.py")
+exec $(printf '%q' "${SCRIPT_DIR}/boot/tcradios-start") "\$@"
 EOF
 chmod 0755 /usr/local/bin/tcradios-start
 
@@ -214,84 +204,49 @@ install -m 0644 -o "${INSTALL_USER}" -g "${INSTALL_USER}" \
     "${SCRIPT_DIR}/boot/tcradios-autostart.desktop" \
     "${AUTOSTART_DIR}/tcradios.desktop"
 
+# Remove Hidden=true stubs from the kiosk attempt so the desktop panel returns.
+if [[ -d "${AUTOSTART_DIR}" ]]; then
+    while IFS= read -r desktop_file; do
+        [[ "$(basename "${desktop_file}")" == "tcradios.desktop" ]] && continue
+        if python3 - "${desktop_file}" <<'PY'
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text(errors="replace")
+lines = [line.strip() for line in text.splitlines() if line.strip()]
+raise SystemExit(0 if lines == ["[Desktop Entry]", "Hidden=true"] else 1)
+PY
+        then
+            rm -f "${desktop_file}"
+        fi
+    done < <(find "${AUTOSTART_DIR}" -maxdepth 1 -name '*.desktop' | sort)
+fi
+
 LABWC_DIR="${INSTALL_HOME}/.config/labwc"
 LABWC_AUTOSTART="${LABWC_DIR}/autostart"
 install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${LABWC_DIR}"
 cat > "${LABWC_AUTOSTART}" <<'EOF'
 #!/bin/sh
-# TCRADIOS kiosk: radio only. No panel, desktop, or notification popups.
+if [ -x /etc/xdg/labwc/autostart ]; then
+    /etc/xdg/labwc/autostart &
+elif [ -x /usr/share/labwc/autostart ]; then
+    /usr/share/labwc/autostart &
+fi
 /usr/local/bin/tcradios-start &
 EOF
 chown "${INSTALL_USER}:${INSTALL_USER}" "${LABWC_AUTOSTART}"
 chmod 0755 "${LABWC_AUTOSTART}"
-for sys_autostart in /etc/xdg/labwc/autostart /usr/share/labwc/autostart; do
-    if [[ -f "${sys_autostart}" ]]; then
-        cp -an "${sys_autostart}" "${sys_autostart}.tcradios-backup"
-        cat > "${sys_autostart}" <<'EOF'
-#!/bin/sh
-/usr/local/bin/tcradios-start &
-EOF
-        chmod 0755 "${sys_autostart}"
-    fi
-done
-
-# Hide the Raspberry Pi desktop chrome so boot is splash then radio.
-hide_xdg_autostart() {
-    local name="$1"
-    printf '%s\n' "[Desktop Entry]" "Hidden=true" \
-        > "${AUTOSTART_DIR}/${name}.desktop"
-    chown "${INSTALL_USER}:${INSTALL_USER}" "${AUTOSTART_DIR}/${name}.desktop"
-}
-
-keep_autostart='pulseaudio|pipewire|wireplumber|gnome-keyring|polkit|at-spi|xdg-permission|xdg-desktop-portal'
-if [[ -d /etc/xdg/autostart ]]; then
-    while IFS= read -r desktop_file; do
-        base="$(basename "${desktop_file}" .desktop)"
-        if echo "${base}" | grep -Eiq "${keep_autostart}"; then
-            continue
-        fi
-        hide_xdg_autostart "${base}"
-    done < <(find /etc/xdg/autostart -maxdepth 1 -name '*.desktop' | sort)
-fi
-for extra in \
-    wf-panel-pi \
-    lxpanel \
-    lxpanel-pi \
-    pcmanfm \
-    pcmanfm-desktop \
-    pcmanfm-pi \
-    nm-applet \
-    nm-tray \
-    notification-daemon \
-    xfce4-notifyd \
-    mako \
-    dunst \
-    fnott \
-    lxqt-notificationd \
-    update-notifier \
-    gnome-software-service \
-    piwiz \
-    pprompt \
-    print-applet \
-    light-locker \
-    xscreensaver \
-    pi-packages \
-    rp-prefapps \
-    geoclue-demo-agent \
-    user-dirs-update-gtk \
-    xdg-user-dirs
-do
-    hide_xdg_autostart "${extra}"
-done
 
 LXSESSION_DIR="${INSTALL_HOME}/.config/lxsession/LXDE-pi"
-if [[ -d /etc/xdg/lxsession/LXDE-pi || -d "${LXSESSION_DIR}" ]]; then
-    install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${LXSESSION_DIR}"
-    cat > "${LXSESSION_DIR}/autostart" <<'EOF'
-@/usr/local/bin/tcradios-start
-EOF
-    chown "${INSTALL_USER}:${INSTALL_USER}" "${LXSESSION_DIR}/autostart"
+install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${LXSESSION_DIR}"
+SYS_LX_AUTOSTART="/etc/xdg/lxsession/LXDE-pi/autostart"
+if [[ -f "${SYS_LX_AUTOSTART}" ]]; then
+    grep -v 'tcradios-start' "${SYS_LX_AUTOSTART}" > "${LXSESSION_DIR}/autostart" || true
 fi
+touch "${LXSESSION_DIR}/autostart"
+if ! grep -q 'tcradios-start' "${LXSESSION_DIR}/autostart"; then
+    printf '%s\n' '@/usr/local/bin/tcradios-start' >> "${LXSESSION_DIR}/autostart"
+fi
+chown "${INSTALL_USER}:${INSTALL_USER}" "${LXSESSION_DIR}/autostart"
 
 WAYFIRE_INI="${INSTALL_HOME}/.config/wayfire.ini"
 if [[ -f "${WAYFIRE_INI}" ]]; then
@@ -301,25 +256,21 @@ import sys
 path = Path(sys.argv[1])
 text = path.read_text()
 lines = []
-skip_keys = {"panel", "background", "autostart_wf_shell", "xdg_autostart"}
 in_autostart = False
+seen_tcradios = False
 for line in text.splitlines():
     stripped = line.strip()
     if stripped.startswith("[") and stripped.endswith("]"):
         in_autostart = stripped.lower() == "[autostart]"
         lines.append(line)
         continue
-    if in_autostart:
-        key = stripped.split("=", 1)[0].strip().lower()
-        if key in skip_keys or key.endswith("panel") or "wf-panel" in stripped or "pcmanfm" in stripped:
-            continue
-        if "tcradios-start" in stripped:
-            continue
+    if in_autostart and "tcradios-start" in stripped:
+        seen_tcradios = True
     lines.append(line)
 if "[autostart]" not in text.lower():
     lines.append("[autostart]")
-lines.append("autostart_wf_shell = false")
-lines.append("tcradios = /usr/local/bin/tcradios-start")
+if not seen_tcradios:
+    lines.append("tcradios = /usr/local/bin/tcradios-start")
 path.write_text("\n".join(lines) + "\n")
 PY
     chown "${INSTALL_USER}:${INSTALL_USER}" "${WAYFIRE_INI}"
@@ -342,7 +293,9 @@ if systemctl list-unit-files tcradio.service --no-legend 2>/dev/null | grep -q '
 fi
 
 if command -v raspi-config >/dev/null 2>&1; then
-    echo "Enabling desktop auto-login..."
+    echo "Enabling X11 desktop auto-login..."
+    raspi-config nonint do_wayland W1 || \
+        echo "Warning: X11 could not be selected automatically." >&2
     raspi-config nonint do_boot_behaviour B4 || \
         echo "Warning: desktop auto-login could not be enabled automatically." >&2
 fi
@@ -378,10 +331,24 @@ xserver-command=X -nocursor
 EOF
 fi
 
-# Keep Plymouth covering the desktop until the radio window is on screen.
-systemctl disable --now tcradios-release-display.service >/dev/null 2>&1 || true
-rm -f /etc/systemd/system/tcradios-release-display.service
+cat > /etc/systemd/system/tcradios-release-display.service <<'EOF'
+[Unit]
+Description=Release the TCRADIOS boot splash
+DefaultDependencies=no
+After=plymouth-start.service
+Before=graphical.target display-manager.service
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'timeout 2 /usr/bin/plymouth quit || true'
+TimeoutStartSec=5
+
+[Install]
+WantedBy=graphical.target
+EOF
 systemctl daemon-reload || true
+systemctl enable tcradios-release-display.service
 
 usermod -aG netdev,plugdev "${INSTALL_USER}" || true
 

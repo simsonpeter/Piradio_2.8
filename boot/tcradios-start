@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Launch TCRADIOS. Safe to copy to /usr/local/bin or run from this repo.
+set -u
+
+REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ ! -f "${REPO_DIR}/touch_radio.py" ]]; then
+    REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+fi
+
+quit_splash() {
+    timeout 2 plymouth quit >/dev/null 2>&1 || true
+}
+
+quit_splash
+
+LOCK="/tmp/tcradios-${UID:-0}.lock"
+exec 9>"${LOCK}"
+if ! flock -n 9; then
+    if pgrep -f "${REPO_DIR}/touch_radio.py" >/dev/null 2>&1 \
+        || pgrep -f '/touch_radio.py' >/dev/null 2>&1; then
+        exit 0
+    fi
+    flock -w 2 9 || exit 0
+fi
+
+if [[ ! -t 1 ]]; then
+    exec >>"${HOME}/.tcradios-start.log" 2>&1
+fi
+echo "tcradios-start $(date -Is) display=${DISPLAY:-:0} repo=${REPO_DIR}"
+
+export DISPLAY="${DISPLAY:-:0}"
+export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-x11}"
+DISPLAY_NUMBER="${DISPLAY#:}"
+for _ in {1..40}; do
+    if [[ -S "/tmp/.X11-unix/X${DISPLAY_NUMBER}" ]] || [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+        break
+    fi
+    sleep 0.25
+done
+
+quit_splash
+
+if command -v xset >/dev/null 2>&1; then
+    xset s off >/dev/null 2>&1 || true
+    xset -dpms >/dev/null 2>&1 || true
+    xset s noblank >/dev/null 2>&1 || true
+fi
+if command -v xsetroot >/dev/null 2>&1; then
+    xsetroot -cursor_name none >/dev/null 2>&1 || true
+fi
+if command -v unclutter >/dev/null 2>&1; then
+    unclutter -idle 0 -root >/dev/null 2>&1 &
+fi
+
+cd "${REPO_DIR}"
+exec /usr/bin/python3 "${REPO_DIR}/touch_radio.py"
