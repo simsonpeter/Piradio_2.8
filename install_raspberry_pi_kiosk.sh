@@ -78,6 +78,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     yt-dlp \
     util-linux \
     x11-xserver-utils \
+    unclutter \
     plymouth \
     plymouth-themes \
     bluez \
@@ -179,6 +180,12 @@ if command -v xset >/dev/null 2>&1; then
     xset s off >/dev/null 2>&1 || true
     xset -dpms >/dev/null 2>&1 || true
     xset s noblank >/dev/null 2>&1 || true
+fi
+if command -v xsetroot >/dev/null 2>&1; then
+    xsetroot -cursor_name none >/dev/null 2>&1 || true
+fi
+if command -v unclutter >/dev/null 2>&1; then
+    unclutter -idle 0 -root >/dev/null 2>&1 &
 fi
 cd $(printf '%q' "${SCRIPT_DIR}")
 exec /usr/bin/python3 $(printf '%q' "${SCRIPT_DIR}/touch_radio.py")
@@ -348,6 +355,14 @@ cat > /etc/systemd/logind.conf.d/tcradios.conf <<EOF
 KillUserProcesses=yes
 UserStopDelaySec=5
 EOF
+
+if [[ -d /etc/lightdm ]]; then
+    install -d /etc/lightdm/lightdm.conf.d
+    cat > /etc/lightdm/lightdm.conf.d/90-tcradios-nocursor.conf <<'EOF'
+[Seat:*]
+xserver-command=X -nocursor
+EOF
+fi
 
 # Keep Plymouth covering the desktop until the radio window is on screen.
 systemctl disable --now tcradios-release-display.service >/dev/null 2>&1 || true

@@ -4047,6 +4047,11 @@ threading.Thread(target=run_flask, daemon=True).start()
 # --- PYGAME SETUP ---
 os.environ['DISPLAY'] = ':0'
 pygame.init()
+pygame.mouse.set_visible(False)
+try:
+    pygame.mouse.set_cursor((8, 8), (0, 0), (0,) * 8, (0,) * 8)
+except Exception:
+    pass
 
 # --- UNICODE FONT SETUP (Tamil Support) ---
 TAMIL_RANGE = range(0x0B80, 0x0BFF + 1)
@@ -4652,6 +4657,26 @@ def draw_vector_icon(surface, center, kind, color, radius=10, width=4):
         draw_round_cap_line(
             surface, (x - inset, y + inset), (x + inset, y - inset), color, width
         )
+    elif kind == "gear":
+        teeth = 6
+        tooth = max(3, int(radius * 0.38))
+        hub = max(4, int(radius * 0.55))
+        for index in range(teeth):
+            angle = math.radians(index * 60)
+            inner = (
+                x + math.cos(angle) * hub,
+                y + math.sin(angle) * hub,
+            )
+            outer = (
+                x + math.cos(angle) * (hub + tooth),
+                y + math.sin(angle) * (hub + tooth),
+            )
+            draw_round_cap_line(surface, inner, outer, color, width + 1)
+        pygame.draw.circle(surface, color, (int(x), int(y)), hub, max(2, width - 1))
+        draw_smooth_circle(surface, (x, y), max(2, hub // 3), color)
+
+def hide_mouse_pointer():
+    pygame.mouse.set_visible(False)
 
 def draw_circle_icon_button(surface, rect, fill, kind):
     radius = min(rect.width, rect.height) // 2
@@ -6851,14 +6876,12 @@ while True:
         show_volume_bar = False
         adjusting_volume = False
     
+    hide_mouse_pointer()
     if saver_active:
-        pygame.mouse.set_visible(False)
         draw_screensaver()
     elif now < greeting_until:
-        pygame.mouse.set_visible(True)
         draw_house_greeting()
     else:
-        pygame.mouse.set_visible(True)
         if ui_palette_theme != current_theme.name:
             refresh_ui_palette()
         screen.blit(ui_background, (0, 0))
@@ -7034,10 +7057,10 @@ while True:
         draw_smooth_circle(screen, btn_fab.center, 26, fab_fill)
         draw_vector_icon(
             screen, btn_fab.center,
-            "close" if fab_open else "plus",
+            "close" if fab_open else "gear",
             ink_on(fab_fill),
-            radius=10,
-            width=4,
+            radius=11,
+            width=3,
         )
         if (
             not fab_open
