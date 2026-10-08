@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=TCRADIOS
+Comment=TCRADIOS kiosk radio
+Exec=/usr/local/bin/tcradios-session
+TryExec=/usr/local/bin/tcradios-session
+Type=Application
+DesktopNames=TCRADIOS

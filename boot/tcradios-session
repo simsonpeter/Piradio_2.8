@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# TCRADIOS kiosk session: compositor + radio only, no Pi desktop.
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-TCRADIOS}"
+export XDG_SESSION_DESKTOP=TCRADIOS
+unset GTK_MODULES
+
+if [[ "${XDG_SESSION_TYPE:-}" == "x11" ]]; then
+    if command -v openbox >/dev/null 2>&1; then
+        exec openbox --startup /usr/local/bin/tcradios-start
+    fi
+    exec /usr/local/bin/tcradios-start
+fi
+
+if command -v labwc >/dev/null 2>&1; then
+    exec labwc -s /usr/local/bin/tcradios-start
+fi
+if command -v openbox >/dev/null 2>&1; then
+    exec openbox --startup /usr/local/bin/tcradios-start
+fi
+exec /usr/local/bin/tcradios-start
