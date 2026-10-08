@@ -4,9 +4,61 @@ Window.SetBackgroundBottomColor(0.0, 0.0, 0.0);
 title_image = Image.Text("TCRADIOS", 0.92, 0.95, 1.0);
 title_sprite = Sprite(title_image);
 title_sprite.SetX(Window.GetWidth() / 2 - title_image.GetWidth() / 2);
-title_sprite.SetY(Window.GetHeight() / 2 - title_image.GetHeight());
+title_sprite.SetY(Window.GetHeight() / 2 - title_image.GetHeight() - 8);
 
 subtitle_image = Image.Text("by JayathaSoft", 0.38, 0.48, 0.64);
 subtitle_sprite = Sprite(subtitle_image);
 subtitle_sprite.SetX(Window.GetWidth() / 2 - subtitle_image.GetWidth() / 2);
-subtitle_sprite.SetY(Window.GetHeight() / 2 + 18);
+subtitle_sprite.SetY(Window.GetHeight() / 2 + 10);
+
+line_image = Image.FilledRectangle(120, 2, 0.15, 0.59, 0.82);
+line_sprite = Sprite(line_image);
+line_sprite.SetX(Window.GetWidth() / 2 - 60);
+line_sprite.SetY(Window.GetHeight() / 2 + 36);
+
+dot_image = Image.Text("o", 0.15, 0.59, 0.82);
+dot_sprites = [];
+for (i = 0; i < 3; i++) {
+    dot_sprites[i] = Sprite(dot_image);
+    dot_sprites[i].SetX(Window.GetWidth() / 2 - 22 + i * 18);
+    dot_sprites[i].SetY(Window.GetHeight() / 2 + 50);
+}
+
+bar_w = 160;
+bar_h = 4;
+track_image = Image.FilledRectangle(bar_w, bar_h, 0.12, 0.16, 0.22);
+track_sprite = Sprite(track_image);
+track_sprite.SetX(Window.GetWidth() / 2 - bar_w / 2);
+track_sprite.SetY(Window.GetHeight() / 2 + 76);
+
+fill_sprite = Sprite();
+
+fun set_bar (p) {
+    if (p < 0.04) {
+        p = 0.04;
+    }
+    if (p > 1) {
+        p = 1;
+    }
+    fill_image = Image.FilledRectangle(bar_w * p, bar_h, 0.15, 0.59, 0.82);
+    fill_sprite.SetImage(fill_image);
+    fill_sprite.SetX(Window.GetWidth() / 2 - bar_w / 2);
+    fill_sprite.SetY(Window.GetHeight() / 2 + 76);
+}
+
+set_bar(0.08);
+
+fun boot_callback (p) {
+    set_bar(p);
+}
+
+fun refresh_callback () {
+    t = Plymouth.GetTime();
+    for (i = 0; i < 3; i++) {
+        fade = 0.22 + 0.78 * (0.5 + 0.5 * Math.Cos(t * 5 - i * 1.15));
+        dot_sprites[i].SetOpacity(fade);
+    }
+}
+
+Plymouth.SetBootProgressFunction(boot_callback);
+Plymouth.SetRefreshFunction(refresh_callback);
