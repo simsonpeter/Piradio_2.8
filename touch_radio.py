@@ -2111,6 +2111,463 @@ HTML_TEMPLATE = """
             color: var(--primary);
             margin-bottom: 8px;
         }
+
+        /* piradio_ui_redesign.css — visual overrides only. Keep existing
+           selectors and theme variables. Do not change .view / .qr-container
+           display; JS and the rules above own show/hide behavior. */
+        html, body {
+            background: var(--bg);
+            color: var(--text);
+        }
+
+        .app-container {
+            background:
+                radial-gradient(circle at 12% -10%, color-mix(in srgb, var(--primary) 22%, transparent), transparent 42%),
+                radial-gradient(circle at 110% 18%, color-mix(in srgb, var(--secondary) 16%, transparent), transparent 46%),
+                var(--bg);
+        }
+
+        .app-header {
+            background: color-mix(in srgb, var(--bg) 72%, transparent);
+            border-bottom: 1px solid color-mix(in srgb, var(--primary) 16%, transparent);
+            padding: 14px 18px;
+        }
+
+        .app-title {
+            font-size: 22px;
+            letter-spacing: 0.2px;
+        }
+
+        .icon-btn {
+            width: 44px;
+            height: 44px;
+            border-radius: 14px;
+            background: color-mix(in srgb, var(--primary) 16%, #08080c);
+            box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 28%, transparent);
+        }
+
+        .icon-btn:hover,
+        .icon-btn.active {
+            background: color-mix(in srgb, var(--button-hover) 28%, #08080c);
+            box-shadow: 0 0 18px color-mix(in srgb, var(--primary) 28%, transparent);
+        }
+
+        .now-playing-bar {
+            background: color-mix(in srgb, var(--card) 88%, #000);
+            border-top: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
+            box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.28);
+        }
+
+        .np-artwork {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            box-shadow: 0 8px 20px color-mix(in srgb, var(--primary) 28%, transparent);
+        }
+
+        .np-title {
+            color: var(--text);
+        }
+
+        .np-subtitle {
+            color: var(--muted);
+        }
+
+        .np-btn {
+            background: var(--primary);
+            color: #000;
+            box-shadow: 0 8px 18px color-mix(in srgb, var(--primary) 32%, transparent);
+        }
+
+        .content {
+            padding: 0 16px 18px;
+        }
+
+        .section-header {
+            margin: 18px 0 12px;
+        }
+
+        .section-title {
+            font-size: 20px;
+            letter-spacing: 0.2px;
+        }
+
+        .section-action {
+            color: var(--primary);
+        }
+
+        .card {
+            background: color-mix(in srgb, var(--card) 92%, #05070b);
+            color: var(--text);
+            border: 1px solid color-mix(in srgb, var(--primary) 28%, transparent);
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+            border-radius: 18px;
+            padding: 18px;
+        }
+
+        .player-card {
+            background:
+                linear-gradient(180deg, color-mix(in srgb, var(--primary) 10%, var(--card)) 0%, var(--card) 42%),
+                var(--card);
+            border: 1px solid color-mix(in srgb, var(--primary) 26%, transparent);
+            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.28);
+            padding: 26px 18px 22px;
+        }
+
+        .big-artwork {
+            width: 188px;
+            height: 188px;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            box-shadow:
+                0 0 0 4px color-mix(in srgb, var(--primary) 22%, transparent),
+                0 22px 40px color-mix(in srgb, var(--primary) 24%, transparent);
+        }
+
+        .big-title {
+            color: var(--text);
+        }
+
+        .big-subtitle {
+            color: var(--muted);
+        }
+
+        .controls-grid {
+            gap: 12px;
+            margin-top: 22px;
+        }
+
+        .control-btn {
+            min-height: 88px;
+            background: color-mix(in srgb, var(--button) 18%, #08080c);
+            border: 2px solid color-mix(in srgb, var(--primary) 70%, transparent);
+            color: var(--text);
+            border-radius: 18px;
+        }
+
+        .control-btn:active {
+            background: var(--button-hover);
+        }
+
+        .control-btn.primary {
+            background: var(--primary);
+            color: #000;
+            box-shadow: 0 10px 24px color-mix(in srgb, var(--primary) 34%, transparent);
+        }
+
+        .volume-slider {
+            height: 10px;
+            border-radius: 999px;
+            background: color-mix(in srgb, var(--text) 12%, #141820);
+        }
+
+        .volume-fill {
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            box-shadow: 0 0 12px color-mix(in srgb, var(--primary) 40%, transparent);
+        }
+
+        .volume-handle {
+            width: 22px;
+            height: 22px;
+            background: var(--text);
+            box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 22%, transparent);
+        }
+
+        .station-grid {
+            gap: 14px;
+        }
+
+        .station-card {
+            background: var(--card);
+            border: 2px solid color-mix(in srgb, var(--primary) 12%, transparent);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.18);
+        }
+
+        .station-card.active {
+            border-color: var(--primary);
+            background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 14%, var(--card)), var(--card));
+            box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent);
+        }
+
+        .station-card.playing::after {
+            background: var(--primary);
+            color: #000;
+        }
+
+        .station-logo {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-color: color-mix(in srgb, var(--text) 14%, transparent);
+        }
+
+        .station-name {
+            color: var(--text);
+        }
+
+        .station-genre {
+            color: var(--muted);
+        }
+
+        .input-label {
+            color: color-mix(in srgb, var(--text) 82%, var(--muted));
+        }
+
+        .text-input, .select-input {
+            background: color-mix(in srgb, var(--bg) 55%, #000);
+            color: var(--text);
+            border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
+        }
+
+        .text-input:focus, .select-input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent);
+            background: color-mix(in srgb, var(--bg) 35%, #000);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: #000;
+            box-shadow: 0 10px 22px color-mix(in srgb, var(--primary) 28%, transparent);
+        }
+
+        .quick-btn {
+            background: color-mix(in srgb, var(--button) 22%, #0a0c10);
+            border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
+            color: var(--text);
+            min-height: 48px;
+        }
+
+        .quick-btn:active {
+            background: var(--button-hover);
+        }
+
+        .quick-btn.danger {
+            background: color-mix(in srgb, #ff5050 18%, #0a0c10);
+            border-color: color-mix(in srgb, #ff5050 34%, transparent);
+            color: #ff6b6b;
+        }
+
+        .day-btn {
+            min-height: 44px;
+            background: color-mix(in srgb, var(--bg) 55%, #000);
+            color: var(--text);
+            border: 1px solid color-mix(in srgb, var(--primary) 16%, transparent);
+        }
+
+        .day-btn.active {
+            background: var(--primary);
+            color: #000;
+            border-color: var(--primary);
+        }
+
+        .setting-row {
+            border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+        }
+
+        .setting-label {
+            color: var(--text);
+        }
+
+        .setting-value {
+            color: var(--primary);
+        }
+
+        .link-item {
+            background: var(--card);
+            border: 1px solid color-mix(in srgb, var(--primary) 16%, transparent);
+        }
+
+        .link-icon {
+            background: linear-gradient(135deg, var(--accent), var(--secondary));
+        }
+
+        .link-title {
+            color: var(--text);
+        }
+
+        .link-url {
+            color: var(--muted);
+        }
+
+        .bottom-nav {
+            background: color-mix(in srgb, var(--bg) 88%, #000);
+            border-top: 1px solid color-mix(in srgb, var(--primary) 18%, transparent);
+            padding: 8px 6px calc(10px + var(--safe-bottom));
+        }
+
+        .nav-item {
+            color: var(--muted);
+            border-radius: 14px;
+            min-height: 52px;
+        }
+
+        .nav-item.active {
+            color: var(--primary);
+            background: color-mix(in srgb, var(--primary) 14%, transparent);
+        }
+
+        .view {
+            padding: 0 4px 16px;
+        }
+
+        .connection-screen {
+            background:
+                radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--primary) 22%, transparent), transparent 46%),
+                var(--bg);
+            color: var(--text);
+        }
+
+        .connection-logo {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            box-shadow: 0 20px 40px color-mix(in srgb, var(--primary) 32%, transparent);
+        }
+
+        .connection-title {
+            color: var(--text);
+        }
+
+        .connection-subtitle {
+            color: var(--muted);
+        }
+
+        .connection-btn {
+            background: var(--card);
+            color: var(--text);
+            border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent);
+            min-height: 54px;
+        }
+
+        .connection-btn.primary {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: #000;
+            border: none;
+        }
+
+        .qr-header {
+            background: color-mix(in srgb, var(--bg) 80%, transparent);
+        }
+
+        .qr-back {
+            background: color-mix(in srgb, var(--primary) 16%, #111);
+            color: var(--text);
+        }
+
+        .toast {
+            background: color-mix(in srgb, var(--card) 92%, #000);
+            color: var(--text);
+            border: 1px solid color-mix(in srgb, var(--primary) 28%, transparent);
+        }
+
+        .empty-state,
+        .empty-text {
+            color: var(--muted);
+        }
+
+        .spinner {
+            border-color: color-mix(in srgb, var(--text) 12%, transparent);
+            border-top-color: var(--primary);
+        }
+
+        .theme-card {
+            background: var(--card);
+            border: 2px solid color-mix(in srgb, var(--primary) 10%, transparent);
+        }
+
+        .theme-card.active {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent);
+        }
+
+        .theme-preview {
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+        }
+
+        .theme-name {
+            color: var(--text);
+        }
+
+        .output-btn {
+            background: color-mix(in srgb, var(--button) 18%, #0a0c10);
+            color: var(--text);
+            border: 2px solid color-mix(in srgb, var(--primary) 12%, transparent);
+            min-height: 92px;
+        }
+
+        .output-btn.active {
+            border-color: var(--primary);
+            background: color-mix(in srgb, var(--primary) 14%, #0a0c10);
+        }
+
+        .output-sub {
+            color: var(--muted);
+        }
+
+        .bluetooth-status,
+        .bluetooth-device-meta {
+            color: var(--muted);
+        }
+
+        .bluetooth-device {
+            border-top-color: color-mix(in srgb, var(--text) 10%, transparent);
+        }
+
+        .bluetooth-device-icon {
+            background: color-mix(in srgb, var(--primary) 16%, transparent);
+        }
+
+        .bluetooth-device-name {
+            color: var(--text);
+        }
+
+        .bluetooth-connect {
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            background: color-mix(in srgb, var(--primary) 8%, transparent);
+            min-height: 36px;
+        }
+
+        .toggle-switch.active {
+            background: var(--primary);
+        }
+
+        .youtube-item {
+            background: var(--card);
+            border: 1px solid color-mix(in srgb, var(--primary) 14%, transparent);
+        }
+
+        .youtube-thumb {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+        }
+
+        .youtube-title {
+            color: var(--text);
+        }
+
+        .youtube-meta {
+            color: var(--muted);
+        }
+
+        .search-btn {
+            width: 52px;
+            height: 52px;
+            background: var(--primary);
+            color: #000;
+            box-shadow: 0 8px 18px color-mix(in srgb, var(--primary) 28%, transparent);
+        }
+
+        .remote-info {
+            background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 14%, transparent), color-mix(in srgb, var(--secondary) 12%, transparent));
+            border: 1px solid color-mix(in srgb, var(--primary) 32%, transparent);
+        }
+
+        .remote-info-title {
+            color: var(--primary);
+        }
+
+        @media (min-width: 720px) {
+            .app-container {
+                max-width: 430px;
+                margin: 0 auto;
+                border-left: 1px solid color-mix(in srgb, var(--primary) 18%, transparent);
+                border-right: 1px solid color-mix(in srgb, var(--primary) 18%, transparent);
+            }
+        }
     </style>
 </head>
 <body>
