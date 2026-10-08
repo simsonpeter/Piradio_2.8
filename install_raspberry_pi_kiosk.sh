@@ -156,32 +156,38 @@ fi
 
 echo "Installing automatic TCRADIOS launch..."
 install -m 0755 "${SCRIPT_DIR}/boot/tcradios-session" /usr/local/bin/tcradios-session
-install -d /usr/share/wayland-sessions /usr/share/xsessions
-install -m 0644 "${SCRIPT_DIR}/boot/tcradios-session.desktop" \
-    /usr/share/wayland-sessions/tcradios.desktop
+install -d /usr/share/xsessions
 install -m 0644 "${SCRIPT_DIR}/boot/tcradios-session.desktop" \
     /usr/share/xsessions/tcradios.desktop
+rm -f /usr/share/wayland-sessions/tcradios.desktop
 
 cat > /usr/local/bin/tcradios-start <<EOF
 #!/usr/bin/env bash
 set -e
 # Both XDG and compositor launchers must contend for the same lock.
 exec 9>"/tmp/tcradios-\${UID}.lock"
-flock -n 9 || exit 0
+if ! flock -n 9; then
+    if pgrep -f touch_radio.py >/dev/null 2>&1; then
+        exit 0
+    fi
+fi
 
 if [[ ! -t 1 ]]; then
     exec >>"\${HOME}/.tcradios-start.log" 2>&1
 fi
+echo "tcradios-start \$(date -Is) display=\${DISPLAY:-:0}"
 
 export DISPLAY="\${DISPLAY:-:0}"
 export XDG_CURRENT_DESKTOP="\${XDG_CURRENT_DESKTOP:-TCRADIOS}"
 DISPLAY_NUMBER="\${DISPLAY#:}"
-for _ in {1..20}; do
+for _ in {1..40}; do
     if [[ -S "/tmp/.X11-unix/X\${DISPLAY_NUMBER}" ]] || [[ -n "\${WAYLAND_DISPLAY:-}" ]]; then
         break
     fi
     sleep 0.25
 done
+# Never leave the boot splash up if the radio cannot start.
+plymouth quit >/dev/null 2>&1 || true
 # Strip Raspberry Pi desktop chrome so Wi-Fi/update toasts cannot appear.
 for pattern in \
     wf-panel-pi \
@@ -375,54 +381,12 @@ if command -v raspi-config >/dev/null 2>&1; then
         echo "Warning: graphical auto-login could not be enabled automatically." >&2
 fi
 
-printf '%s\n' "[Desktop]" "Session=tcradios" > "${INSTALL_HOME}/.dmrc"
-chown "${INSTALL_USER}:${INSTALL_USER}" "${INSTALL_HOME}/.dmrc"
-if [[ -d /var/lib/AccountsService/users ]]; then
-    cat > "/var/lib/AccountsService/users/${INSTALL_USER}" <<EOF
-[User]
-Language=
-XSession=tcradios
-Session=tcradios
-SystemAccount=false
-EOF
-fi
-if [[ -d /etc/lightdm ]]; then
-    install -d /etc/lightdm/lightdm.conf.d
-    cat > /etc/lightdm/lightdm.conf.d/91-tcradios-session.conf <<EOF
-[Seat:*]
-user-session=tcradios
-autologin-session=tcradios
-autologin-user=${INSTALL_USER}
-xserver-command=X -nocursor
-EOF
-fi
-if [[ -f /etc/greetd/config.toml ]]; then
-    python3 - "${INSTALL_USER}" <<'PY'
-from pathlib import Path
-import sys
-user = sys.argv[1]
-path = Path("/etc/greetd/config.toml")
-text = path.read_text()
-block = (
-    "\n[initial_session]\n"
-    f'command = "/usr/local/bin/tcradios-session"\n'
-    f'user = "{user}"\n'
-)
-if "[initial_session]" in text:
-    lines = []
-    skip = False
-    for line in text.splitlines():
-        if line.strip() == "[initial_session]":
-            skip = True
-            continue
-        if skip and line.startswith("["):
-            skip = False
-        if skip:
-            continue
-        lines.append(line)
-    text = "\n".join(lines)
-path.write_text(text.rstrip() + "\n" + block)
-PY
+rm -f "${INSTALL_HOME}/.dmrc"
+rm -f /etc/lightdm/lightdm.conf.d/91-tcradios-session.conf
+rm -f /etc/lightdm/lightdm.conf.d/90-tcradios-nocursor.conf
+if [[ -f /var/lib/AccountsService/users/${INSTALL_USER} ]]; then
+    sed -i '/^XSession=tcradios/d;/^Session=tcradios/d' \
+        "/var/lib/AccountsService/users/${INSTALL_USER}" || true
 fi
 
 systemctl set-default graphical.target

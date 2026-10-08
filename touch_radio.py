@@ -4489,43 +4489,46 @@ splash_subtitle = splash_subtitle_font.render("by JayathaSoft", True, (214, 224,
 SPLASH_SECONDS = 5.0
 
 def draw_boot_splash(now=None, progress=None):
-    now = time.time() if now is None else now
-    screen.fill((0, 0, 0))
-    screen.blit(splash_title, splash_title.get_rect(center=(160, 200)))
-    screen.blit(splash_subtitle, splash_subtitle.get_rect(center=(160, 242)))
-    pygame.draw.line(screen, (38, 150, 210), (100, 268), (220, 268), 2)
-    for index in range(3):
-        pulse = 0.35 + 0.65 * (0.5 + 0.5 * math.sin(now * 5.2 - index * 0.95))
-        radius = 3 + int(pulse * 2)
-        color = (
-            int(48 + 90 * pulse),
-            int(150 + 60 * pulse),
-            int(210),
-        )
-        pygame.draw.circle(screen, color, (148 + index * 12, 298), radius)
-    track = pygame.Rect(70, 326, 180, 8)
-    pygame.draw.rect(screen, (28, 36, 52), track, border_radius=4)
-    if progress is None:
-        span = 54
-        x = track.x + int((math.sin(now * 3.2) * 0.5 + 0.5) * (track.width - span))
-        pygame.draw.rect(
-            screen, (38, 150, 210),
-            pygame.Rect(x, track.y, span, track.height),
-            border_radius=4,
-        )
-    else:
-        width = max(10, int(track.width * max(0.0, min(1.0, progress))))
-        pygame.draw.rect(
-            screen, (38, 150, 210),
-            pygame.Rect(track.x, track.y, width, track.height),
-            border_radius=4,
-        )
-    pygame.display.flip()
-    pygame.event.pump()
-    pygame.mouse.set_visible(False)
+    try:
+        now = time.time() if now is None else now
+        screen.fill((0, 0, 0))
+        screen.blit(splash_title, splash_title.get_rect(center=(160, 200)))
+        screen.blit(splash_subtitle, splash_subtitle.get_rect(center=(160, 242)))
+        pygame.draw.line(screen, (38, 150, 210), (100, 268), (220, 268), 2)
+        for index in range(3):
+            pulse = 0.35 + 0.65 * (0.5 + 0.5 * math.sin(now * 5.2 - index * 0.95))
+            radius = 3 + int(pulse * 2)
+            color = (
+                int(48 + 90 * pulse),
+                int(150 + 60 * pulse),
+                int(210),
+            )
+            pygame.draw.circle(screen, color, (148 + index * 12, 298), radius)
+        track = pygame.Rect(70, 326, 180, 8)
+        pygame.draw.rect(screen, (28, 36, 52), track, border_radius=4)
+        if progress is None:
+            span = 54
+            x = track.x + int((math.sin(now * 3.2) * 0.5 + 0.5) * (track.width - span))
+            pygame.draw.rect(
+                screen, (38, 150, 210),
+                pygame.Rect(x, track.y, span, track.height),
+                border_radius=4,
+            )
+        else:
+            width = max(10, int(track.width * max(0.0, min(1.0, progress))))
+            pygame.draw.rect(
+                screen, (38, 150, 210),
+                pygame.Rect(track.x, track.y, width, track.height),
+                border_radius=4,
+            )
+        pygame.display.flip()
+        pygame.event.pump()
+        pygame.mouse.set_visible(False)
+    except Exception as error:
+        print(f"Splash draw error: {error}")
 
 def animate_boot_splash(seconds, progress_from=0.12, progress_to=1.0):
-    duration = max(0.05, float(seconds))
+    duration = max(0.05, min(8.0, float(seconds)))
     started = time.time()
     deadline = started + duration
     while time.time() < deadline:
@@ -4986,6 +4989,7 @@ except Exception as error:
 
 base_stations = [station.copy() for station in stations if station.get("url")]
 current_idx = choose_station_index(stations) if stations and stations[0].get("url") else 0
+draw_boot_splash(progress=0.4)
 
 FAVORITES_FILE = os.path.expanduser("~/.radio_favorites")
 favorite_indices = []
