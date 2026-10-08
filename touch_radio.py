@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import pygame, vlc, requests, time, os, io, math, socket, sys, threading, qrcode, json, base64, random, re, shutil, signal
+import pygame, vlc, requests, time, os, io, math, socket, sys, threading, qrcode, json, base64, random, re, shutil, signal, tempfile
 from urllib.request import urlopen
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
@@ -5003,6 +5003,10 @@ alarm_fade_active = False
 alarm_fade_data = {}
 saver_active = False
 saver_started_at = time.time()
+saver_press_pending = False
+talking_clock_busy = False
+talking_clock_until = 0
+previous_interaction = time.time()
 greeting_until = 0
 greeting_shown_on = None
 shutdown_confirm_until = 0
@@ -6413,7 +6417,8 @@ def draw_youtube_screen(now):
 def draw_screensaver():
     # Lantern clock: huge dim time and a weather icon only.
     screen.fill((0, 0, 0))
-    time_surf = f_xl.render(datetime.now().strftime("%H:%M"), True, (58, 58, 58))
+    clock_color = (118, 118, 118) if time.time() < talking_clock_until else (58, 58, 58)
+    time_surf = f_xl.render(datetime.now().strftime("%H:%M"), True, clock_color)
     screen.blit(time_surf, time_surf.get_rect(center=(160, 200)))
     draw_weather_icon(screen, 160, 332, weather_type, 36)
 
@@ -6424,6 +6429,161 @@ def greeting_phrases():
     if hour < 17:
         return "Good afternoon", "மதிய வணக்கம்"
     return "Good evening", "மாலை வணக்கம்"
+
+_EN_ONES = [
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+    "seventeen", "eighteen", "nineteen",
+]
+_EN_TENS = [
+    "", "", "twenty", "thirty", "forty", "fifty",
+    "sixty", "seventy", "eighty", "ninety",
+]
+
+def spoken_number_en(value):
+    value = int(round(float(value)))
+    if value < 0:
+        return "zero"
+    if value < 20:
+        return _EN_ONES[value]
+    if value < 100:
+        tens, ones = divmod(value, 10)
+        if ones == 0:
+            return _EN_TENS[tens]
+        return f"{_EN_TENS[tens]} {_EN_ONES[ones]}"
+    return str(value)
+
+def talking_clock_period(hour):
+    if 5 <= hour < 12:
+        return "in the morning"
+    if 12 <= hour < 17:
+        return "in the afternoon"
+    if 17 <= hour < 21:
+        return "in the evening"
+    return "at night"
+
+def talking_clock_weather_phrase():
+    kind = str(weather_type or "clear")
+    return {
+        "clear": "clear",
+        "cloud": "cloudy",
+        "rain": "rainy",
+    }.get(kind, "mixed")
+
+def talking_clock_station_name():
+    if not stations:
+        return "T C Radios"
+    name = sanitize_text(stations[current_idx].get("name") or "T C Radios")
+    if name.startswith("YT: "):
+        name = name[4:]
+    return name[:80]
+
+def talking_clock_line():
+    now = datetime.now()
+    hour_12 = now.hour % 12 or 12
+    period = talking_clock_period(now.hour)
+    if now.minute == 0:
+        spoken = f"It's {spoken_number_en(hour_12)} o'clock {period}."
+    else:
+        spoken = (
+            f"It's {spoken_number_en(hour_12)} "
+            f"{spoken_number_en(now.minute)} {period}."
+        )
+    weather = talking_clock_weather_phrase()
+    if current_temp:
+        spoken += (
+            f" It's {spoken_number_en(current_temp)} degrees, and {weather}."
+        )
+    else:
+        spoken += f" It's {weather}."
+    spoken += f" You're listening to {talking_clock_station_name()}."
+    return spoken
+
+def _tts_safe_text(text):
+    text = re.sub(r"[^\w\s'.,:-]", " ", str(text or ""), flags=re.UNICODE)
+    return re.sub(r"\s+", " ", text).strip()[:220]
+
+def _play_wav(wav_path):
+    for command in (
+        ["paplay", wav_path],
+        ["pw-play", wav_path],
+        ["aplay", "-q", wav_path],
+    ):
+        if not shutil.which(command[0]):
+            continue
+        try:
+            result = subprocess.run(
+                command, timeout=20, capture_output=True, check=False
+            )
+            if result.returncode == 0:
+                return True
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    return False
+
+def _speak_english(text):
+    spoken = _tts_safe_text(text)
+    if not spoken:
+        return
+    if shutil.which("pico2wave"):
+        wav_path = ""
+        try:
+            handle, wav_path = tempfile.mkstemp(prefix="tcradios-clock-", suffix=".wav")
+            os.close(handle)
+            subprocess.run(
+                ["pico2wave", "-l", "en-US", "-w", wav_path, spoken],
+                timeout=12,
+                capture_output=True,
+                check=False,
+            )
+            if os.path.getsize(wav_path) > 44:
+                _play_wav(wav_path)
+                return
+        except (OSError, subprocess.TimeoutExpired) as error:
+            print(f"Talking clock pico error: {error}")
+        finally:
+            if wav_path:
+                try:
+                    os.remove(wav_path)
+                except OSError:
+                    pass
+    for binary, voice in (
+        ("espeak-ng", "en+f3"),
+        ("espeak-ng", "en-us+f3"),
+        ("espeak", "en+f3"),
+        ("espeak-ng", "en"),
+        ("espeak", "en"),
+    ):
+        if not shutil.which(binary):
+            continue
+        try:
+            subprocess.run(
+                [binary, "-v", voice, "-s", "130", "-a", "200", spoken],
+                timeout=20,
+                capture_output=True,
+                check=False,
+            )
+            return
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+
+def _run_talking_clock():
+    global talking_clock_busy, talking_clock_until
+    try:
+        _speak_english(talking_clock_line())
+    except Exception as error:
+        print(f"Talking clock error: {error}")
+    finally:
+        talking_clock_busy = False
+        talking_clock_until = time.time()
+
+def speak_talking_clock():
+    global talking_clock_busy, talking_clock_until
+    if talking_clock_busy:
+        return
+    talking_clock_busy = True
+    talking_clock_until = time.time() + 12
+    threading.Thread(target=_run_talking_clock, daemon=True).start()
 
 def should_show_house_greeting(previous_interaction, now):
     if greeting_shown_on == datetime.now().date():
@@ -7138,18 +7298,15 @@ while True:
                 not wifi_setup_required
                 and should_show_house_greeting(previous_interaction, now)
             )
+            touch_start_pos = event.pos
+            touch_start_time = time.time()
+            if saver_active:
+                saver_press_pending = True
+                continue
             if was_auto_dimmed:
                 device_settings.set_hardware_brightness(
                     device_settings.brightness
                 )
-                if morning_greeting:
-                    greeting_until = now + 6
-                    greeting_shown_on = datetime.now().date()
-                continue
-            touch_start_pos = event.pos
-            touch_start_time = time.time()
-            if saver_active:
-                saver_active = False
                 if morning_greeting:
                     greeting_until = now + 6
                     greeting_shown_on = datetime.now().date()
@@ -7518,6 +7675,16 @@ while True:
             dx = event.pos[0] - touch_start_pos[0]
             dy = event.pos[1] - touch_start_pos[1]
             dt = time.time() - touch_start_time
+            if saver_press_pending:
+                saver_press_pending = False
+                if dt >= 0.75 and abs(dx) < 28 and abs(dy) < 28:
+                    speak_talking_clock()
+                else:
+                    saver_active = False
+                    if should_show_house_greeting(previous_interaction, now):
+                        greeting_until = now + 6
+                        greeting_shown_on = datetime.now().date()
+                continue
             if (
                 active_page in PAGE_ORDER
                 and abs(dx) > 45
