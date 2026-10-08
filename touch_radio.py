@@ -504,6 +504,20 @@ def apply_live_volume(level):
     except NameError:
         pass
 
+def skip_playback(step):
+    global current_idx
+    try:
+        if current_youtube_id() and continue_youtube_queue(step, user=True):
+            return
+    except NameError:
+        pass
+    try:
+        if stations:
+            current_idx = (current_idx + step) % len(stations)
+            play()
+    except (NameError, ZeroDivisionError):
+        pass
+
 # --- ALARM & SLEEP TIMER SYSTEM ---
 class SmartAlarm:
     def __init__(self):
@@ -969,6 +983,13 @@ def add_cors_headers(response):
     return response
 
 youtube_results_cache = []
+youtube_queue = []
+youtube_queue_index = -1
+youtube_skip_ids = set()
+youtube_touch_offset = 0
+_youtube_was_playing = False
+_youtube_ended_handled = False
+_youtube_play_started_at = 0
 YOUTUBE_SEARCH_COUNT = 24
 
 HTML_TEMPLATE = """
@@ -3308,11 +3329,9 @@ def remote_action(action):
     global current_idx, vol_level
     try:
         if action == 'next':
-            current_idx = (current_idx + 1) % len(stations)
-            play()
+            skip_playback(1)
         elif action == 'prev':
-            current_idx = (current_idx - 1) % len(stations)
-            play()
+            skip_playback(-1)
         elif action == 'volup':
             apply_live_volume(min(vol_level + 10, 100))
         elif action == 'voldown':
@@ -3981,6 +4000,7 @@ def youtube_play():
         audio_url, err = youtube_audio_url(video_id)
         if not audio_url:
             return jsonify({'success': False, 'error': err}), 502
+        remember_youtube_queue(video_id, title)
         play_youtube_station(video_id, title, audio_url)
         return jsonify({'success': True, 'message': f'Playing: {title}'})
     except Exception as e:
@@ -5086,8 +5106,39 @@ def retry_github_stations():
         return
     print("TCRADIOS station list could not be loaded")
 
+def current_youtube_id():
+    if stations and 0 <= current_idx < len(stations):
+        return str(stations[current_idx].get("youtube_id") or "").strip()
+    return ""
+
+def remember_youtube_queue(video_id, title=""):
+    global youtube_queue, youtube_queue_index, youtube_touch_offset
+    video_id = str(video_id or "").strip()
+    if not video_id:
+        return
+    if youtube_results_cache:
+        youtube_queue = [
+            dict(item) for item in youtube_results_cache if item.get("id")
+        ]
+    if not any(item.get("id") == video_id for item in youtube_queue):
+        youtube_queue.append({
+            "id": video_id,
+            "title": title or "YouTube",
+            "uploader": "",
+            "duration": "",
+        })
+    youtube_queue_index = next(
+        (
+            index for index, item in enumerate(youtube_queue)
+            if item.get("id") == video_id
+        ),
+        0,
+    )
+    youtube_touch_offset = (max(0, youtube_queue_index) // 4) * 4
+
 def play_youtube_station(video_id, title, audio_url):
-    global current_idx
+    global current_idx, _youtube_play_started_at, _youtube_ended_handled
+    global _youtube_was_playing
     station = {
         'name': f"YT: {str(title)[:40]}",
         'url': audio_url,
@@ -5108,6 +5159,11 @@ def play_youtube_station(video_id, title, audio_url):
     else:
         stations[existing] = station
         current_idx = existing
+    remember_youtube_queue(video_id, title)
+    youtube_skip_ids.discard(video_id)
+    _youtube_play_started_at = time.time()
+    _youtube_ended_handled = False
+    _youtube_was_playing = False
     play()
 
 def save_favorites():
@@ -6228,10 +6284,16 @@ def draw_youtube_screen(now):
             screen, f_sm, "Searching YouTube…", muted_ink_on(body), waiting
         )
     elif visible:
+        playing_id = current_youtube_id()
         for video, rect in zip(visible, youtube_result_rects):
-            body = draw_info_card(screen, rect, (72, 80, 98), 12)
+            accent = (
+                UI_GREEN if video.get('id') == playing_id else (72, 80, 98)
+            )
+            body = draw_info_card(screen, rect, accent, 12)
+            now_prefix = "▶ " if video.get('id') == playing_id else ""
             title = f_sm.render(
-                fit_label(video.get('title', 'YouTube'), 28), True, ink_on(body)
+                fit_label(now_prefix + (video.get('title') or 'YouTube'), 28),
+                True, ink_on(body)
             )
             screen.blit(title, (rect.x + 12, rect.y + 4))
             meta = f_tiny.render(
@@ -6309,7 +6371,14 @@ PAGE_ORDER = [
     "radio", "favorites", "forecast", "clock",
     "alarm", "system", "languages", "settings", "youtube"
 ]
-btn_open_pages = pygame.Rect(90, 388, 140, 30)
+btn_open_pages = pygame.Rect(16, 422, 228, 46)
+fab_open = False
+btn_fab = pygame.Rect(256, 416, 54, 54)
+btn_sleep = pygame.Rect(16, 248, 140, 52)
+btn_saver = pygame.Rect(164, 248, 140, 52)
+btn_alarm = pygame.Rect(16, 308, 140, 52)
+btn_mute = pygame.Rect(164, 308, 140, 52)
+vol_rect = pygame.Rect(0, 0, 0, 0)
 btn_pages = pygame.Rect(70, 430, 180, 38)
 menu_card_rects = [
     pygame.Rect(16 + (index % 2) * 152, 68 + (index // 2) * 70, 136, 62)
@@ -6382,18 +6451,20 @@ def fetch_youtube_search(query):
     except Exception as error:
         youtube_touch_pending = ('results', [], str(error))
 
-def fetch_youtube_audio(video):
+def fetch_youtube_audio(video, auto=False):
     global youtube_touch_pending
+    video_id = str(video.get('id', '')).strip()
+    title = video.get('title') or 'YouTube Audio'
     try:
-        video_id = str(video.get('id', '')).strip()
-        title = video.get('title') or 'YouTube Audio'
         audio_url, err = youtube_audio_url(video_id)
         if audio_url:
-            youtube_touch_pending = ('play', video_id, title, audio_url)
+            youtube_touch_pending = ('play', video_id, title, audio_url, auto)
         else:
-            youtube_touch_pending = ('error', err or 'Could not extract audio URL')
+            youtube_touch_pending = (
+                'error', err or 'Could not extract audio URL', auto, video_id
+            )
     except Exception as error:
-        youtube_touch_pending = ('error', str(error))
+        youtube_touch_pending = ('error', str(error), auto, video_id)
 
 def begin_youtube_search(query):
     global youtube_touch_busy, youtube_touch_status, youtube_touch_query
@@ -6413,15 +6484,72 @@ def begin_youtube_search(query):
         target=fetch_youtube_search, args=(query,), daemon=True
     ).start()
 
-def begin_youtube_play(video):
+def begin_youtube_play(video, auto=False):
     global youtube_touch_busy, youtube_touch_status
     if youtube_touch_busy or not video.get('id'):
-        return
+        return False
+    if not auto:
+        youtube_skip_ids.clear()
+        remember_youtube_queue(video.get('id'), video.get('title') or '')
     youtube_touch_busy = True
-    youtube_touch_status = "Opening audio…"
+    youtube_touch_status = "Opening next…" if auto else "Opening audio…"
     threading.Thread(
-        target=fetch_youtube_audio, args=(video,), daemon=True
+        target=fetch_youtube_audio, args=(video, auto), daemon=True
     ).start()
+    return True
+
+def continue_youtube_queue(step=1, user=False):
+    global youtube_queue_index
+    if youtube_touch_busy:
+        return True
+    if len(youtube_queue) <= 1:
+        return False
+    n = len(youtube_queue)
+    for _attempt in range(n):
+        youtube_queue_index = (youtube_queue_index + step) % n
+        video = youtube_queue[youtube_queue_index]
+        video_id = str(video.get('id') or '').strip()
+        if video_id and video_id not in youtube_skip_ids:
+            return begin_youtube_play(video, auto=not user)
+    return False
+
+def youtube_queue_status():
+    if not youtube_queue or youtube_queue_index < 0:
+        return "Playing"
+    total = len(youtube_queue)
+    if total <= 1:
+        return "Playing"
+    nxt = youtube_queue[(youtube_queue_index + 1) % total]
+    next_title = fit_label(nxt.get('title') or 'YouTube', 16)
+    return f"{youtube_queue_index + 1}/{total} · next {next_title}"
+
+def maybe_advance_youtube_queue():
+    global _youtube_was_playing, _youtube_ended_handled
+    if not current_youtube_id() or len(youtube_queue) <= 1:
+        return
+    try:
+        state = player.get_state()
+    except Exception:
+        return
+    if state in (
+        vlc.State.Opening, vlc.State.Buffering, vlc.State.Playing, vlc.State.Paused
+    ):
+        if state == vlc.State.Playing:
+            _youtube_was_playing = True
+        _youtube_ended_handled = False
+        return
+    if state not in (vlc.State.Ended, vlc.State.Error):
+        return
+    if _youtube_ended_handled:
+        return
+    waited = time.time() - _youtube_play_started_at
+    if not _youtube_was_playing and waited < 8:
+        return
+    if waited < 2:
+        return
+    _youtube_ended_handled = True
+    _youtube_was_playing = False
+    continue_youtube_queue(1, user=False)
 
 def apply_youtube_touch_result():
     global youtube_touch_pending, youtube_touch_busy, youtube_touch_status
@@ -6446,12 +6574,22 @@ def apply_youtube_touch_result():
                 if count else "No results"
             )
     elif kind == 'play':
-        _kind, video_id, title, audio_url = pending
+        _kind, video_id, title, audio_url, auto = (
+            pending[0], pending[1], pending[2], pending[3],
+            pending[4] if len(pending) > 4 else False
+        )
         play_youtube_station(video_id, title, audio_url)
-        youtube_touch_status = "Playing"
-        active_page = "radio"
+        youtube_touch_status = youtube_queue_status()
+        if not auto:
+            active_page = "radio"
     elif kind == 'error':
         youtube_touch_status = str(pending[1])[:80]
+        auto = pending[2] if len(pending) > 2 else False
+        video_id = pending[3] if len(pending) > 3 else ''
+        if video_id:
+            youtube_skip_ids.add(video_id)
+        if auto:
+            continue_youtube_queue(1, user=False)
 
 def handle_youtube_key(value):
     global youtube_keyboard_text
@@ -6588,6 +6726,7 @@ while True:
     handle_alarm_fade()
     handle_sleep_timer()
     apply_youtube_touch_result()
+    maybe_advance_youtube_queue()
     apply_wifi_result()
     
     if now - last_weather_update > 1200:
@@ -6808,43 +6947,52 @@ while True:
         )
         draw_centered_text(screen, f_sm, "NEXT", contrasting_text(next_body), btn_next)
 
-        # Airy bottom dock: inactive actions are intentionally borderless
-        dock_rect = pygame.Rect(8, 420, 304, 54)
-        pygame.draw.rect(screen, UI_SURFACE, dock_rect, border_radius=18)
-        pygame.draw.rect(screen, (54, 64, 91), dock_rect, 1, border_radius=18)
-
-        btn_sleep = pygame.Rect(13, 423, 56, 46)
-        btn_saver = pygame.Rect(73, 423, 56, 46)
-        btn_alarm = pygame.Rect(133, 423, 68, 46)
-        vol_rect = pygame.Rect(205, 423, 51, 46)
-        btn_mute = pygame.Rect(260, 423, 47, 46)
-
-        if alarm_system.sleep_timer_enabled:
-            pygame.draw.rect(screen, (55, 43, 87), btn_sleep, border_radius=12)
-        if alarm_system.alarm_enabled:
-            pygame.draw.rect(screen, (76, 60, 31), btn_alarm, border_radius=12)
-        if vol_level == 0:
-            pygame.draw.rect(screen, (68, 31, 50), btn_mute, border_radius=12)
-        draw_centered_text(screen, f_tiny, "SLEEP", UI_TEXT, btn_sleep)
-        draw_centered_text(screen, f_tiny, "MOON", UI_TEXT, btn_saver)
-        draw_centered_text(
-            screen, f_tiny, "ALARM",
-            UI_AMBER if alarm_system.alarm_enabled else UI_TEXT,
-            btn_alarm
-        )
-        draw_centered_text(screen, f_tiny, f"{vol_level}%", UI_TEXT, vol_rect)
-        draw_centered_text(
-            screen, f_tiny, "MUTE",
-            UI_PINK if vol_level == 0 else UI_TEXT,
-            btn_mute
-        )
-
         pages_body = draw_modern_button(
-            screen, btn_open_pages, UI_BLUE, UI_BLUE, 11
+            screen, btn_open_pages, UI_BLUE, UI_BLUE, 16
         )
         draw_centered_text(
             screen, f_sm, "PAGES", contrasting_text(pages_body), btn_open_pages
         )
+
+        if fab_open:
+            dim = pygame.Surface((320, 480), pygame.SRCALPHA)
+            dim.fill((0, 0, 0, 150))
+            screen.blit(dim, (0, 0))
+            panel = pygame.Rect(8, 236, 304, 136)
+            pygame.draw.rect(screen, UI_SURFACE, panel, border_radius=18)
+            pygame.draw.rect(screen, (54, 64, 91), panel, 1, border_radius=18)
+            sleep_fill = UI_PURPLE if alarm_system.sleep_timer_enabled else UI_SURFACE_RAISED
+            moon_fill = UI_BLUE if saver_active else UI_SURFACE_RAISED
+            alarm_fill = UI_AMBER if alarm_system.alarm_enabled else UI_SURFACE_RAISED
+            mute_fill = UI_PINK if vol_level == 0 else UI_SURFACE_RAISED
+            labeled_button(screen, btn_sleep, sleep_fill, f_sm, "SLEEP", 14)
+            labeled_button(screen, btn_saver, moon_fill, f_sm, "MOON", 14)
+            labeled_button(screen, btn_alarm, alarm_fill, f_sm, "ALARM", 14)
+            labeled_button(
+                screen, btn_mute, mute_fill, f_sm,
+                "MUTE" if vol_level else "UNMUTE", 14
+            )
+
+        fab_fill = UI_PINK if fab_open else UI_PURPLE
+        pygame.draw.circle(screen, fab_fill, btn_fab.center, 26)
+        pygame.draw.circle(screen, UI_TEXT, btn_fab.center, 26, 1)
+        draw_centered_text(
+            screen, f_sm, "X" if fab_open else "+", UI_TEXT, btn_fab
+        )
+        if (
+            not fab_open
+            and (
+                vol_level == 0
+                or alarm_system.alarm_enabled
+                or alarm_system.sleep_timer_enabled
+            )
+        ):
+            pygame.draw.circle(
+                screen,
+                UI_PINK if vol_level == 0 else UI_AMBER,
+                (btn_fab.centerx + 16, btn_fab.centery - 16),
+                5,
+            )
 
         if show_qr:
             qr_panel = pygame.Rect(31, 78, 258, 278)
@@ -7223,7 +7371,28 @@ while True:
                         )
                 continue
 
+            if btn_fab.collidepoint(event.pos):
+                fab_open = not fab_open
+                continue
+            if fab_open:
+                if btn_sleep.collidepoint(event.pos):
+                    if alarm_system.sleep_timer_enabled:
+                        alarm_system.stop_sleep_timer()
+                    else:
+                        alarm_system.start_sleep_timer(30)
+                elif btn_saver.collidepoint(event.pos):
+                    saver_active = not saver_active
+                    if saver_active:
+                        saver_started_at = time.time()
+                elif btn_alarm.collidepoint(event.pos):
+                    alarm_system.alarm_enabled = not alarm_system.alarm_enabled
+                    alarm_system.save_alarm_settings()
+                elif btn_mute.collidepoint(event.pos):
+                    apply_live_volume(0 if vol_level > 0 else last_unmuted_volume)
+                fab_open = False
+                continue
             if btn_open_pages.collidepoint(event.pos):
+                fab_open = False
                 active_page = "menu"
                 continue
             if btn_exit.collidepoint(event.pos):
@@ -7233,27 +7402,11 @@ while True:
             if btn_qr.collidepoint(event.pos):
                 show_qr = True
             if btn_prev.collidepoint(event.pos):
-                current_idx = (current_idx - 1) % len(stations)
-                play()
+                skip_playback(-1)
             if btn_next.collidepoint(event.pos):
-                current_idx = (current_idx + 1) % len(stations)
-                play()
+                skip_playback(1)
             if btn_toggle.collidepoint(event.pos):
                 player.pause()
-            if btn_mute.collidepoint(event.pos):
-                apply_live_volume(0 if vol_level > 0 else last_unmuted_volume)
-            if btn_sleep.collidepoint(event.pos):
-                if alarm_system.sleep_timer_enabled:
-                    alarm_system.stop_sleep_timer()
-                else:
-                    alarm_system.start_sleep_timer(30)
-            if btn_saver.collidepoint(event.pos):
-                saver_active = not saver_active
-                if saver_active:
-                    saver_started_at = time.time()
-            if btn_alarm.collidepoint(event.pos):
-                alarm_system.alarm_enabled = not alarm_system.alarm_enabled
-                alarm_system.save_alarm_settings()
             if vol_minus_rect.collidepoint(event.pos):
                 apply_live_volume(vol_level - 5)
                 show_volume_bar = True
@@ -7269,10 +7422,6 @@ while True:
                 )
                 show_volume_bar = True
                 volume_bar_timer = time.time()
-            if vol_rect.collidepoint(event.pos):
-                show_volume_bar = True
-                adjusting_volume = True
-                volume_bar_timer = time.time()
         
         elif event.type == pygame.MOUSEBUTTONUP:
             dx = event.pos[0] - touch_start_pos[0]
@@ -7285,6 +7434,7 @@ while True:
                 and dt < 2.5
             ):
                 youtube_keyboard_open = False
+                fab_open = False
                 page_index = PAGE_ORDER.index(active_page)
                 direction = 1 if dx < 0 else -1
                 active_page = PAGE_ORDER[
