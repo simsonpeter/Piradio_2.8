@@ -1162,6 +1162,7 @@ HTML_TEMPLATE = """
         
         .card {
             background: #0a0c10;
+            color: var(--text);
             border-radius: 16px;
             padding: 16px;
             margin-bottom: 12px;
@@ -2385,7 +2386,7 @@ HTML_TEMPLATE = """
                         <label class="input-label">Town, city, or postcode</label>
                         <input type="text" id="weather-location" class="text-input" value="{{ device_settings.weather_name }}" placeholder="Hove">
                     </div>
-                    <div id="weather-location-current" style="font-size: 13px; color: var(--primary); margin-bottom: 12px;">
+                    <div id="weather-location-current" style="font-size: 13px; color: var(--muted); margin-bottom: 12px;">
                         {{ device_settings.weather_name }}{% if device_settings.weather_country %}, {{ device_settings.weather_country }}{% endif %}
                     </div>
                     <button class="btn-primary" onclick="saveWeatherLocation()">📍 Update Weather</button>
@@ -4265,16 +4266,41 @@ def refresh_ui_palette():
     ui_background = create_ui_background()
     ui_palette_theme = current_theme.name
 
+def _srgb_channel(value):
+    scaled = value / 255.0
+    if scaled <= 0.04045:
+        return scaled / 12.92
+    return ((scaled + 0.055) / 1.055) ** 2.4
+
+def relative_luminance(color):
+    red, green, blue = (_srgb_channel(channel) for channel in color[:3])
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
 def color_luminance(color):
-    return color[0] * 0.2126 + color[1] * 0.7152 + color[2] * 0.0722
+    return relative_luminance(color) * 255
+
+def contrast_ratio(first, second):
+    light = max(relative_luminance(first), relative_luminance(second))
+    dark = min(relative_luminance(first), relative_luminance(second))
+    return (light + 0.05) / (dark + 0.05)
 
 def contrasting_text(background):
-    return (16, 18, 24) if color_luminance(background) > 128 else (255, 255, 255)
+    return (16, 18, 24) if relative_luminance(background) > 0.32 else (255, 255, 255)
 
 def contrasting_muted(background):
-    if color_luminance(background) > 128:
-        return (36, 40, 52)
+    if relative_luminance(background) > 0.32:
+        return (42, 46, 58)
     return (230, 234, 244)
+
+def ink_on(background, preferred=None, minimum=4.5):
+    if preferred is not None and contrast_ratio(preferred, background) >= minimum:
+        return preferred
+    return contrasting_text(background)
+
+def muted_ink_on(background, preferred=None, minimum=3.5):
+    if preferred is not None and contrast_ratio(preferred, background) >= minimum:
+        return preferred
+    return contrasting_muted(background)
 
 def draw_centered_text(surface, font, text, color, rect):
     rendered = font.render(text, True, color)
@@ -4288,7 +4314,13 @@ def draw_modern_button(surface, rect, fill, border, radius=14, border_width=0):
 
 def labeled_button(surface, rect, fill, font, text, radius=14, border=None):
     body = draw_modern_button(surface, rect, fill, border or fill, radius)
-    draw_centered_text(surface, font, text, contrasting_text(body), rect)
+    draw_centered_text(surface, font, text, ink_on(body), rect)
+    return body
+
+def draw_info_card(surface, rect, accent, radius=16):
+    body = UI_SURFACE_RAISED
+    pygame.draw.rect(surface, body, rect, border_radius=radius)
+    pygame.draw.rect(surface, accent, rect, 2, border_radius=radius)
     return body
 
 def draw_animated_ui_glow(surface, now):
@@ -5122,7 +5154,7 @@ def request_touch_shutdown():
     shutdown_in_progress = True
     threading.Thread(target=perform_safe_shutdown, daemon=True).start()
 
-def draw_weather_icon(surface, x, y, type, size=30, dimmed=True):
+def draw_weather_icon(surface, x, y, type, size=30, dimmed=True, on_background=None):
     line_width = max(2, size // 8)
     if dimmed:
         sun_color = tuple(int(channel * 0.3) for channel in GOLD)
@@ -5130,10 +5162,11 @@ def draw_weather_icon(surface, x, y, type, size=30, dimmed=True):
         cloud_dark = (38, 38, 38)
         cloud_light = (58, 58, 58)
     else:
-        sun_color = UI_AMBER
-        rain_color = UI_BLUE
-        cloud_dark = mix_colors(UI_SURFACE, UI_MUTED, 0.75)
-        cloud_light = mix_colors(UI_MUTED, UI_TEXT, 0.4)
+        background = on_background or UI_SURFACE_RAISED
+        sun_color = ink_on(background, UI_AMBER)
+        rain_color = ink_on(background, UI_BLUE)
+        cloud_dark = muted_ink_on(background)
+        cloud_light = ink_on(background)
     if type == "clear":
         sun_radius = size * 3 // 5
         pygame.draw.circle(surface, sun_color, (x, y), sun_radius)
@@ -5195,43 +5228,50 @@ def draw_forecast_screen(now):
     draw_centered_text(screen, f_lg, "5-DAY FORECAST", UI_TEXT, header_rect)
 
     current_rect = pygame.Rect(14, 72, 292, 84)
-    draw_modern_button(screen, current_rect, UI_SURFACE_RAISED, UI_BLUE, 18)
-    draw_weather_icon(screen, 65, 111, weather_type, 25, dimmed=False)
-    current_surface = f_weather.render(f"{current_temp}°C", True, UI_TEXT)
+    body = draw_info_card(screen, current_rect, UI_BLUE, 18)
+    draw_weather_icon(
+        screen, 65, 111, weather_type, 25, dimmed=False, on_background=body
+    )
+    current_surface = f_weather.render(
+        f"{current_temp}°C", True, ink_on(body)
+    )
     screen.blit(current_surface, (103, 82))
     location_label = fit_label(device_settings.weather_name.upper(), 18)
     now_surface = f_tiny.render(
-        f"{location_label}  •  NOW", True, UI_BLUE
+        f"{location_label}  •  NOW", True, muted_ink_on(body)
     )
     screen.blit(now_surface, (106, 127))
 
     if weather_forecast:
         for index, forecast in enumerate(weather_forecast[:5]):
             row = pygame.Rect(14, 166 + index * 52, 292, 45)
-            fill = UI_SURFACE_RAISED if index == 0 else UI_SURFACE
-            border = UI_PURPLE if index == 0 else (48, 54, 72)
-            draw_modern_button(screen, row, fill, border, 13)
+            accent = UI_PURPLE if index == 0 else (72, 80, 98)
+            body = draw_info_card(screen, row, accent, 13)
 
-            day_surface = f_sm.render(forecast['day'].upper(), True, UI_TEXT)
+            day_surface = f_sm.render(
+                forecast['day'].upper(), True, ink_on(body)
+            )
             screen.blit(day_surface, (29, row.y + 7))
-            label_surface = f_tiny.render(forecast['label'], True, UI_MUTED)
+            label_surface = f_tiny.render(
+                forecast['label'], True, muted_ink_on(body)
+            )
             screen.blit(label_surface, (29, row.y + 25))
 
             draw_weather_icon(
                 screen, 196, row.centery - 2,
-                forecast['type'], 12, dimmed=False
+                forecast['type'], 12, dimmed=False, on_background=body
             )
             temperature = f"{forecast['high']}° / {forecast['low']}°"
-            temperature_surface = f_sm.render(temperature, True, UI_TEXT)
+            temperature_surface = f_sm.render(temperature, True, ink_on(body))
             screen.blit(
                 temperature_surface,
                 (292 - temperature_surface.get_width(), row.y + 14)
             )
     else:
         loading_rect = pygame.Rect(14, 166, 292, 253)
-        draw_modern_button(screen, loading_rect, UI_SURFACE, (48, 54, 72), 16)
+        body = draw_info_card(screen, loading_rect, (72, 80, 98), 16)
         draw_centered_text(
-            screen, f_sm, "Forecast unavailable", UI_MUTED, loading_rect
+            screen, f_sm, "Forecast unavailable", muted_ink_on(body), loading_rect
         )
 
     labeled_button(screen, btn_pages, UI_BLUE, f_sm, "PAGES", 16)
@@ -5299,20 +5339,24 @@ def draw_favorites_screen(now):
         if index < len(favorite_indices):
             station_index = favorite_indices[index]
             station = stations[station_index]
-            border = UI_BLUE if station_index == current_idx else (48, 54, 72)
-            draw_modern_button(screen, rect, UI_SURFACE, border, 14)
-            number = f_tiny.render(f"{index + 1}", True, UI_BLUE)
+            accent = UI_BLUE if station_index == current_idx else (72, 80, 98)
+            body = draw_info_card(screen, rect, accent, 14)
+            number = f_tiny.render(
+                f"{index + 1}", True, ink_on(body, UI_BLUE)
+            )
             screen.blit(number, (rect.x + 10, rect.y + 9))
-            name = f_sm.render(fit_label(station['name'], 15), True, UI_TEXT)
+            name = f_sm.render(
+                fit_label(station['name'], 15), True, ink_on(body)
+            )
             screen.blit(name, (rect.x + 10, rect.y + 31))
             genre = f_tiny.render(
                 fit_label(station.get('genre', 'Radio'), 18),
-                True, UI_MUTED
+                True, muted_ink_on(body)
             )
             screen.blit(genre, (rect.x + 10, rect.y + 54))
         else:
-            draw_modern_button(screen, rect, UI_SURFACE, (42, 47, 61), 14)
-            draw_centered_text(screen, f_tiny, "EMPTY", UI_MUTED, rect)
+            body = draw_info_card(screen, rect, (72, 80, 98), 14)
+            draw_centered_text(screen, f_tiny, "EMPTY", muted_ink_on(body), rect)
     draw_pages_button()
 
 def draw_clock_screen(now):
@@ -5321,49 +5365,55 @@ def draw_clock_screen(now):
     time_surface = f_xl.render(current_time.strftime("%H:%M"), True, UI_TEXT)
     screen.blit(time_surface, (160 - time_surface.get_width() // 2, 82))
     date_surface = f_med.render(
-        current_time.strftime("%A").upper(), True, UI_BLUE
+        current_time.strftime("%A").upper(), True, ink_on(UI_BG_TOP, UI_BLUE)
     )
     screen.blit(date_surface, (160 - date_surface.get_width() // 2, 177))
     full_date = f_sm.render(
-        current_time.strftime("%d %B %Y"), True, UI_MUTED
+        current_time.strftime("%d %B %Y"), True, muted_ink_on(UI_BG_TOP)
     )
     screen.blit(full_date, (160 - full_date.get_width() // 2, 213))
 
     weather_card = pygame.Rect(28, 252, 264, 78)
-    draw_modern_button(screen, weather_card, UI_SURFACE_RAISED, UI_PURPLE, 18)
+    body = draw_info_card(screen, weather_card, UI_PURPLE, 18)
     draw_weather_icon(
-        screen, 76, weather_card.centery, weather_type, 22, dimmed=False
+        screen, 76, weather_card.centery, weather_type, 22,
+        dimmed=False, on_background=body
     )
-    temp = f_weather.render(f"{current_temp}°C", True, UI_TEXT)
+    temp = f_weather.render(f"{current_temp}°C", True, ink_on(body))
     screen.blit(temp, (112, weather_card.y + 11))
     city = f_tiny.render(
-        fit_label(device_settings.weather_name.upper(), 18), True, UI_MUTED
+        fit_label(device_settings.weather_name.upper(), 18),
+        True, muted_ink_on(body)
     )
     screen.blit(city, (116, weather_card.y + 53))
 
     station_card = pygame.Rect(28, 344, 264, 58)
-    draw_modern_button(screen, station_card, UI_SURFACE, (48, 54, 72), 15)
+    body = draw_info_card(screen, station_card, (72, 80, 98), 15)
     draw_centered_text(
         screen, f_sm, fit_label(stations[current_idx]['name'], 28),
-        UI_TEXT, station_card
+        ink_on(body), station_card
     )
     draw_pages_button()
 
 def draw_alarm_screen(now):
     draw_page_base("ALARM & SLEEP", now)
     alarm_card = pygame.Rect(18, 75, 284, 115)
-    draw_modern_button(
-        screen, alarm_card, UI_SURFACE_RAISED,
-        UI_AMBER if alarm_system.alarm_enabled else (55, 61, 77), 18
+    body = draw_info_card(
+        screen, alarm_card,
+        UI_AMBER if alarm_system.alarm_enabled else (72, 80, 98), 18
     )
-    alarm_label = f_weather.render(alarm_system.alarm_time, True, UI_TEXT)
+    alarm_label = f_weather.render(
+        alarm_system.alarm_time, True, ink_on(body)
+    )
     screen.blit(
         alarm_label,
         (alarm_card.centerx - alarm_label.get_width() // 2, 91)
     )
     state = "ALARM ON" if alarm_system.alarm_enabled else "ALARM OFF"
     state_surface = f_sm.render(
-        state, True, UI_AMBER if alarm_system.alarm_enabled else UI_MUTED
+        state, True, muted_ink_on(
+            body, UI_AMBER if alarm_system.alarm_enabled else None
+        )
     )
     screen.blit(
         state_surface,
@@ -5410,18 +5460,20 @@ def draw_system_screen(now):
         ("STORAGE", system_stats['disk_free'])
     ]
     for rect, (label, value) in zip(system_card_rects, values):
-        draw_modern_button(screen, rect, UI_SURFACE_RAISED, (48, 54, 72), 16)
-        label_surface = f_tiny.render(label, True, UI_MUTED)
+        body = draw_info_card(screen, rect, (72, 80, 98), 16)
+        label_surface = f_tiny.render(label, True, muted_ink_on(body))
         screen.blit(label_surface, (rect.x + 14, rect.y + 15))
-        value_surface = f_sm.render(fit_label(value, 18), True, UI_TEXT)
+        value_surface = f_sm.render(
+            fit_label(value, 18), True, ink_on(body)
+        )
         screen.blit(value_surface, (rect.x + 14, rect.y + 43))
 
     bluetooth_card = pygame.Rect(18, 320, 284, 54)
-    draw_modern_button(screen, bluetooth_card, UI_SURFACE, UI_BLUE, 16)
-    bt_label = f_tiny.render("BLUETOOTH AUDIO", True, UI_MUTED)
+    body = draw_info_card(screen, bluetooth_card, UI_BLUE, 16)
+    bt_label = f_tiny.render("BLUETOOTH AUDIO", True, muted_ink_on(body))
     screen.blit(bt_label, (34, bluetooth_card.y + 8))
     bt_value = f_sm.render(
-        fit_label(system_stats['bluetooth'], 28), True, UI_TEXT
+        fit_label(system_stats['bluetooth'], 28), True, ink_on(body)
     )
     screen.blit(bt_value, (34, bluetooth_card.y + 28))
 
@@ -5517,11 +5569,11 @@ def draw_bluetooth_screen(now):
                 break
             device = touch_bluetooth_devices[index]
             connected = device.get('connected', False)
-            border = UI_GREEN if connected else (48, 54, 72)
-            draw_modern_button(screen, rect, UI_SURFACE, border, 13)
+            accent = UI_GREEN if connected else (72, 80, 98)
+            body = draw_info_card(screen, rect, accent, 13)
             name_surface = f_sm.render(
                 fit_label(device.get('name', 'Bluetooth device'), 23),
-                True, UI_TEXT
+                True, ink_on(body)
             )
             screen.blit(name_surface, (rect.x + 13, rect.y + 5))
             state = (
@@ -5530,14 +5582,14 @@ def draw_bluetooth_screen(now):
                       else "AVAILABLE • TAP TO PAIR")
             )
             state_surface = f_tiny.render(
-                state, True, UI_GREEN if connected else UI_MUTED
+                state, True, muted_ink_on(body, UI_GREEN if connected else None)
             )
             screen.blit(state_surface, (rect.x + 13, rect.y + 24))
     else:
         empty_rect = pygame.Rect(18, 142, 284, 272)
-        draw_modern_button(screen, empty_rect, UI_SURFACE, (45, 50, 65), 16)
+        body = draw_info_card(screen, empty_rect, (72, 80, 98), 16)
         draw_centered_text(
-            screen, f_sm, "No devices loaded", UI_MUTED, empty_rect
+            screen, f_sm, "No devices loaded", muted_ink_on(body), empty_rect
         )
 
     labeled_button(
@@ -5617,9 +5669,9 @@ def draw_wifi_screen(now):
             screen.blit(meta, (rect.x + 12, rect.y + 26))
     else:
         empty = pygame.Rect(16, 142, 288, 200)
-        draw_modern_button(screen, empty, UI_SURFACE, (55, 61, 77), 16)
+        body = draw_info_card(screen, empty, (72, 80, 98), 16)
         draw_centered_text(
-            screen, f_sm, "Tap SCAN to find Wi-Fi", UI_MUTED, empty
+            screen, f_sm, "Tap SCAN to find Wi-Fi", muted_ink_on(body), empty
         )
     if wifi_setup_required:
         labeled_button(screen, btn_wifi_skip, UI_AMBER, f_sm, "SKIP", 14)
@@ -5654,31 +5706,27 @@ def draw_language_stations_screen(now):
     ]
     if language_stream_busy:
         loading_rect = pygame.Rect(18, 89, 284, 257)
-        draw_modern_button(
-            screen, loading_rect, UI_SURFACE, (45, 50, 65), 16
-        )
+        body = draw_info_card(screen, loading_rect, (72, 80, 98), 16)
         draw_centered_text(
-            screen, f_sm, "Loading stations…", UI_MUTED, loading_rect
+            screen, f_sm, "Loading stations…", muted_ink_on(body), loading_rect
         )
     elif visible_streams:
         for stream, rect in zip(visible_streams, language_station_rects):
-            draw_modern_button(screen, rect, UI_SURFACE, (48, 54, 72), 13)
+            body = draw_info_card(screen, rect, (72, 80, 98), 13)
             name_surface = f_sm.render(
-                fit_label(stream['name'], 28), True, UI_TEXT
+                fit_label(stream['name'], 28), True, ink_on(body)
             )
             screen.blit(name_surface, (rect.x + 13, rect.y + 7))
             genre_surface = f_tiny.render(
                 fit_label(stream.get('genre', 'Radio'), 34),
-                True, UI_MUTED
+                True, muted_ink_on(body)
             )
             screen.blit(genre_surface, (rect.x + 13, rect.y + 29))
     elif selected_language:
         empty_rect = pygame.Rect(18, 89, 284, 257)
-        draw_modern_button(
-            screen, empty_rect, UI_SURFACE, (45, 50, 65), 16
-        )
+        body = draw_info_card(screen, empty_rect, (72, 80, 98), 16)
         draw_centered_text(
-            screen, f_sm, "No stations available", UI_MUTED, empty_rect
+            screen, f_sm, "No stations available", muted_ink_on(body), empty_rect
         )
 
     page_number = language_stream_offset // 5 + 1
@@ -5704,11 +5752,11 @@ def draw_language_stations_screen(now):
 
 def draw_youtube_search_bar():
     typed = youtube_keyboard_text.strip() or youtube_touch_query
-    body = draw_modern_button(
-        screen, btn_youtube_search_field, UI_SURFACE_RAISED, UI_PURPLE, 14
+    body = draw_info_card(
+        screen, btn_youtube_search_field, UI_PURPLE, 14
     )
     label = fit_tail(typed, 20) if typed else "Search YouTube..."
-    color = contrasting_text(body) if typed else contrasting_muted(body)
+    color = ink_on(body) if typed else muted_ink_on(body)
     text = f_sm.render(label, True, color)
     screen.blit(
         text,
@@ -5772,26 +5820,30 @@ def draw_youtube_screen(now):
     visible = youtube_results_cache[youtube_touch_offset:youtube_touch_offset + 4]
     if youtube_touch_busy and not visible:
         waiting = pygame.Rect(16, 232, 288, 184)
-        draw_modern_button(screen, waiting, UI_SURFACE, (45, 50, 65), 16)
-        draw_centered_text(screen, f_sm, "Searching YouTube…", UI_MUTED, waiting)
+        body = draw_info_card(screen, waiting, (72, 80, 98), 16)
+        draw_centered_text(
+            screen, f_sm, "Searching YouTube…", muted_ink_on(body), waiting
+        )
     elif visible:
         for video, rect in zip(visible, youtube_result_rects):
-            draw_modern_button(screen, rect, UI_SURFACE, (48, 54, 72), 12)
-            title = f_sm.render(fit_label(video.get('title', 'YouTube'), 28), True, UI_TEXT)
+            body = draw_info_card(screen, rect, (72, 80, 98), 12)
+            title = f_sm.render(
+                fit_label(video.get('title', 'YouTube'), 28), True, ink_on(body)
+            )
             screen.blit(title, (rect.x + 12, rect.y + 4))
             meta = f_tiny.render(
                 fit_label(
                     f"{video.get('uploader', '')} • {video.get('duration', '')}",
                     40
                 ),
-                True, UI_MUTED
+                True, muted_ink_on(body)
             )
             screen.blit(meta, (rect.x + 12, rect.y + 22))
     else:
         empty = pygame.Rect(16, 232, 288, 184)
-        draw_modern_button(screen, empty, UI_SURFACE, (45, 50, 65), 16)
+        body = draw_info_card(screen, empty, (72, 80, 98), 16)
         draw_centered_text(
-            screen, f_sm, "Type in the search bar", UI_MUTED, empty
+            screen, f_sm, "Type in the search bar", muted_ink_on(body), empty
         )
     draw_pages_button()
 
