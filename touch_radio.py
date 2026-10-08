@@ -3353,6 +3353,81 @@ def get_volume():
 def get_now_playing():
     return jsonify({"text": meta_text if meta_text else stations[current_idx]['name']})
 
+LISTEN_ALONG_PAGE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Listen along • TCRADIOS</title>
+<style>
+body { margin:0; min-height:100vh; background:#000; color:#fff;
+  font-family:'TCRTamil','Noto Sans Tamil',system-ui,sans-serif;
+  display:flex; align-items:center; justify-content:center; text-align:center;
+  padding:24px; }
+.card { width:min(420px,100%); }
+.kicker { letter-spacing:.18em; font-size:12px; color:#e6ebf6; margin-bottom:12px; }
+h1 { font-size:28px; margin:0 0 8px; }
+.now { color:#e6ebf6; min-height:24px; margin-bottom:22px; }
+audio { width:100%; margin:18px 0; }
+a { color:#7ed4ff; }
+.err { color:#ffb347; font-size:14px; margin-top:12px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="kicker">LISTEN ALONG</div>
+  <h1 id="name">TCRADIOS</h1>
+  <div class="now" id="now"></div>
+  <audio id="player" controls autoplay></audio>
+  <div class="err" id="err"></div>
+  <p><a id="stream" href="#">Open this station</a> · <a href="/">Full remote</a></p>
+</div>
+<script>
+async function loadListen() {
+  const res = await fetch('/api/listen');
+  const data = await res.json();
+  document.getElementById('name').textContent = data.name || 'TCRADIOS';
+  document.getElementById('now').textContent = data.now_playing || '';
+  const player = document.getElementById('player');
+  const err = document.getElementById('err');
+  const stream = document.getElementById('stream');
+  if (data.url) stream.href = data.url;
+  if (data.url && player.dataset.src !== data.url) {
+    player.dataset.src = data.url;
+    player.src = data.url;
+    player.play().catch(() => {
+      err.textContent = 'This station is playing on TCRADIOS. Tap play, or open the stream.';
+    });
+  }
+  if (!data.url) err.textContent = 'No stream is ready yet.';
+}
+loadListen();
+setInterval(loadListen, 8000);
+</script>
+</body>
+</html>
+"""
+
+@app.route('/listen')
+def listen_along():
+    return Response(LISTEN_ALONG_PAGE, mimetype='text/html')
+
+@app.route('/api/listen')
+def api_listen():
+    try:
+        station = stations[current_idx]
+        playing = meta_text or station.get('name', '')
+    except Exception:
+        station = {}
+        playing = ''
+    return jsonify({
+        'name': station.get('name', 'TCRADIOS'),
+        'url': station.get('url', ''),
+        'now_playing': playing,
+        'genre': station.get('genre', ''),
+        'youtube': bool(station.get('youtube_id')),
+    })
+
 @app.route('/api/status')
 def get_status():
     try:
@@ -3995,7 +4070,13 @@ def font_supports_tamil(path):
     except Exception:
         return False
 
+_TAMIL_FONT_UNSET = object()
+_TAMIL_FONT_CACHE = _TAMIL_FONT_UNSET
+
 def tamil_font_path():
+    global _TAMIL_FONT_CACHE
+    if _TAMIL_FONT_CACHE is not _TAMIL_FONT_UNSET:
+        return _TAMIL_FONT_CACHE
     found = []
     for path in TAMIL_FONT_CANDIDATES:
         if path and os.path.isfile(path) and path not in found:
@@ -4007,10 +4088,15 @@ def tamil_font_path():
                 found.append(path)
     except Exception:
         pass
+    chosen = None
     for path in found:
         if font_supports_tamil(path):
-            return path
-    return found[0] if found else None
+            chosen = path
+            break
+    if chosen is None and found:
+        chosen = found[0]
+    _TAMIL_FONT_CACHE = chosen
+    return chosen
 
 def load_pygame_font(path, size):
     if path:
@@ -4090,6 +4176,67 @@ def style_now_playing(text):
     if contains_tamil(text):
         return text
     return text.upper()
+
+_TAMIL_INDEPENDENT = {
+    '\u0b85': 'a', '\u0b86': 'aa', '\u0b87': 'i', '\u0b88': 'ii',
+    '\u0b89': 'u', '\u0b8a': 'uu', '\u0b8e': 'e', '\u0b8f': 'ee',
+    '\u0b90': 'ai', '\u0b92': 'o', '\u0b93': 'oo', '\u0b94': 'au',
+}
+_TAMIL_CONSONANT = {
+    '\u0b95': 'k', '\u0b99': 'ng', '\u0b9a': 'c', '\u0b9c': 'j',
+    '\u0b9e': 'nj', '\u0b9f': 't', '\u0ba3': 'n', '\u0ba4': 'th',
+    '\u0ba8': 'n', '\u0ba9': 'n', '\u0baa': 'p', '\u0bae': 'm',
+    '\u0baf': 'y', '\u0bb0': 'r', '\u0bb1': 'r', '\u0bb2': 'l',
+    '\u0bb3': 'l', '\u0bb4': 'zh', '\u0bb5': 'v', '\u0bb6': 'sh',
+    '\u0bb7': 'sh', '\u0bb8': 's', '\u0bb9': 'h',
+}
+_TAMIL_VOWEL_SIGN = {
+    '\u0bbe': 'aa', '\u0bbf': 'i', '\u0bc0': 'ii', '\u0bc1': 'u',
+    '\u0bc2': 'uu', '\u0bc6': 'e', '\u0bc7': 'ee', '\u0bc8': 'ai',
+    '\u0bca': 'o', '\u0bcb': 'oo', '\u0bcc': 'au',
+}
+
+def transliterate_tamil(text):
+    """Latin letters under a Tamil now-playing line."""
+    text = str(text or '')
+    if not contains_tamil(text):
+        return ''
+    out = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        nxt = text[index + 1] if index + 1 < len(text) else ''
+        if char in _TAMIL_INDEPENDENT:
+            out.append(_TAMIL_INDEPENDENT[char])
+            index += 1
+            continue
+        if char in _TAMIL_CONSONANT:
+            root = _TAMIL_CONSONANT[char]
+            if nxt == '\u0bcd':
+                out.append(root)
+                index += 2
+                continue
+            if nxt in _TAMIL_VOWEL_SIGN:
+                out.append(root + _TAMIL_VOWEL_SIGN[nxt])
+                index += 2
+                continue
+            out.append(root + 'a')
+            index += 1
+            continue
+        if char in _TAMIL_VOWEL_SIGN or char == '\u0bcd':
+            index += 1
+            continue
+        if char == '\u0b82':
+            out.append('m')
+            index += 1
+            continue
+        if char == '\u0b83':
+            out.append('h')
+            index += 1
+            continue
+        out.append(char)
+        index += 1
+    return re.sub(r'\s+', ' ', ''.join(out)).strip()
 
 def station_initials(name):
     name = sanitize_text(name)
@@ -4636,6 +4783,9 @@ saver_scroll_x = 320
 alarm_fade_active = False
 alarm_fade_data = {}
 saver_active = False
+saver_started_at = time.time()
+greeting_until = 0
+greeting_shown_on = None
 shutdown_confirm_until = 0
 shutdown_in_progress = False
 system_stats = {
@@ -4676,30 +4826,38 @@ text = f_lg.render(initials, True, CYAN)
 text_rect = text.get_rect(center=(LOGO_CENTER, LOGO_CENTER))
 logo.blit(text, text_rect)
 
-try:
-    qr_img = qrcode.make(f"http://{current_ip}:8080").convert('RGB')
-    qr_surface = pygame.image.fromstring(qr_img.tobytes(), qr_img.size, 'RGB')
-    qr_surface = pygame.transform.scale(qr_surface, (240, 240))
-except:
-    qr_surface = pygame.Surface((240, 240))
-    qr_surface.fill((0, 0, 0))
-
+qr_target = ""
+qr_surface = pygame.Surface((240, 240))
+qr_surface.fill((0, 0, 0))
 last_ip_check = time.time()
 
+def listen_along_url():
+    return f"http://{current_ip}:8080/listen"
+
+def rebuild_qr_surface():
+    global qr_surface, qr_target
+    target = listen_along_url()
+    if target == qr_target and qr_target:
+        return
+    try:
+        qr_img = qrcode.make(target).convert('RGB')
+        qr_surface = pygame.image.fromstring(qr_img.tobytes(), qr_img.size, 'RGB')
+        qr_surface = pygame.transform.scale(qr_surface, (240, 240))
+        qr_target = target
+    except Exception:
+        pass
+
+rebuild_qr_surface()
+
 def update_qr_code():
-    global qr_surface, current_ip, last_ip_check
+    global current_ip, last_ip_check
     now = time.time()
     if now - last_ip_check > 30:
         new_ip = get_local_ip()
         if new_ip != current_ip:
             current_ip = new_ip
-            try:
-                qr_img = qrcode.make(f"http://{current_ip}:8080").convert('RGB')
-                qr_surface = pygame.image.fromstring(qr_img.tobytes(), qr_img.size, 'RGB')
-                qr_surface = pygame.transform.scale(qr_surface, (240, 240))
-            except:
-                pass
         last_ip_check = now
+    rebuild_qr_surface()
 
 def update_logo(url):
     global logo
@@ -4774,6 +4932,7 @@ def play():
                 {"index": current_idx, "url": saved_station_url},
                 last_station_file,
             )
+        rebuild_qr_surface()
     except:
         pass
 
@@ -5954,60 +6113,53 @@ def draw_youtube_screen(now):
     draw_pages_button()
 
 def draw_screensaver():
-    global saver_scroll_x
-    # COMPLETELY BLACK BACKGROUND - no brightness
+    # Lantern clock: huge dim time and a weather icon only.
     screen.fill((0, 0, 0))
-    
-    # Dim the time display (not too bright)
-    time_now = datetime.now().strftime("%H:%M")
-    # Use darker gray for time (not pure white)
-    time_surf = f_xl.render(time_now, True, (68, 68, 68))
-    time_rect = time_surf.get_rect(center=(160, 75))
-    screen.blit(time_surf, time_rect)
-    
-    # Second line: extra-large weather icon and temperature
-    weather_icon_size = 42
-    weather_gap = 16
-    temp_surf = f_weather.render(f"{current_temp}°C", True, (70, 70, 70))
-    weather_width = weather_icon_size * 2 + weather_gap + temp_surf.get_width()
-    weather_left = (320 - weather_width) // 2
-    weather_center_y = 190
+    time_surf = f_xl.render(datetime.now().strftime("%H:%M"), True, (58, 58, 58))
+    screen.blit(time_surf, time_surf.get_rect(center=(160, 200)))
+    draw_weather_icon(screen, 160, 332, weather_type, 36)
+
+def greeting_phrases():
+    hour = datetime.now().hour
+    if hour < 12:
+        return "Good morning", "காலை வணக்கம்"
+    if hour < 17:
+        return "Good afternoon", "மதிய வணக்கம்"
+    return "Good evening", "மாலை வணக்கம்"
+
+def should_show_house_greeting(previous_interaction, now):
+    if greeting_shown_on == datetime.now().date():
+        return False
+    hour = datetime.now().hour
+    if not (5 <= hour <= 11):
+        return False
+    idle = now - previous_interaction
+    if idle >= 4 * 3600:
+        return True
+    if now - saver_started_at >= 20 * 60:
+        return True
+    previous_hour = datetime.fromtimestamp(previous_interaction).hour
+    return previous_hour >= 21 or previous_hour < 5
+
+def draw_house_greeting():
+    screen.fill((0, 0, 0))
+    english, tamil = greeting_phrases()
+    station = sanitize_text(stations[current_idx]['name'] if stations else "TCRADIOS")
+    temp = f"{current_temp}°C" if current_temp else "--°C"
+    time_surf = f_xl.render(datetime.now().strftime("%H:%M"), True, UI_TEXT)
+    screen.blit(time_surf, time_surf.get_rect(center=(160, 92)))
     draw_weather_icon(
-        screen,
-        weather_left + weather_icon_size,
-        weather_center_y,
-        weather_type,
-        weather_icon_size
+        screen, 118, 168, weather_type, 22, dimmed=False, on_background=(0, 0, 0)
     )
-    temp_y = weather_center_y - temp_surf.get_height() // 2
-    screen.blit(temp_surf, (weather_left + weather_icon_size * 2 + weather_gap, temp_y))
-    
-    # Third line: scrolling station name
-    station_name = f"RADIO: {style_now_playing(stations[current_idx]['name'])}"
-    station_surf = f_med.render(station_name, True, (0, 62, 62))
-    saver_scroll_x -= 1
-    if saver_scroll_x < -station_surf.get_width():
-        saver_scroll_x = 320
-    screen.blit(station_surf, (saver_scroll_x, 290))
-
-    # Fourth line: alarm on the left and volume on the right
-    alarm_label = f"Alarm {alarm_system.alarm_time}" if alarm_system.alarm_enabled else "Alarm off"
-    alarm_color = (70, 55, 0) if alarm_system.alarm_enabled else (42, 42, 42)
-    alarm_text = f_sm.render(alarm_label, True, alarm_color)
-    screen.blit(alarm_text, (16, 385))
-
-    vol_surf = f_sm.render(f"Vol: {vol_level}%", True, (42, 42, 42))
-    screen.blit(vol_surf, (304 - vol_surf.get_width(), 385))
-
-    if alarm_system.sleep_timer_enabled:
-        remaining = alarm_system.get_sleep_remaining()
-        sleep_color = (0, 55, 0) if remaining > 10 else (55, 0, 0)
-        sleep_text = f_sm.render(f"Sleep: {remaining} min", True, sleep_color)
-        screen.blit(sleep_text, (160 - sleep_text.get_width()//2, 425))
-    
-    # Exit hint - very dim
-    hint_surf = f_tiny.render("Tap to exit", True, (28, 28, 28))
-    screen.blit(hint_surf, (160 - hint_surf.get_width()//2, 460))
+    temp_surf = f_weather.render(temp, True, UI_TEXT)
+    screen.blit(temp_surf, (148, 146))
+    tamil_line = f_sm.render(f"{tamil}. {station} தயார்.", True, UI_TEXT)
+    screen.blit(tamil_line, tamil_line.get_rect(center=(160, 250)))
+    english_line = f_tiny.render(
+        f"{english}. {temp}. {fit_label(station, 18)} is ready.",
+        True, UI_MUTED
+    )
+    screen.blit(english_line, english_line.get_rect(center=(160, 286)))
 
 adjusting_volume = False
 show_volume_bar = False
@@ -6370,6 +6522,9 @@ while True:
     if saver_active:
         pygame.mouse.set_visible(False)
         draw_screensaver()
+    elif now < greeting_until:
+        pygame.mouse.set_visible(True)
+        draw_house_greeting()
     else:
         pygame.mouse.set_visible(True)
         if ui_palette_theme != current_theme.name:
@@ -6419,20 +6574,43 @@ while True:
         else:
             pygame.draw.circle(screen, UI_MUTED, (160, 128), 58, 1)
 
-        # Now-playing title has a dedicated row without a heavy container
-        name_area = pygame.Rect(16, 198, 288, 34)
+        # Now-playing: Tamil on top, English transliteration under it
         display_text = sanitize_text(meta_text)
-        name_render = f_lg.render(display_text, True, UI_TEXT)
-        screen.set_clip(name_area.inflate(-12, 0))
-        if name_render.get_width() <= name_area.width - 24:
-            name_x = name_area.centerx - name_render.get_width() // 2
+        roman_text = transliterate_tamil(display_text)
+        if roman_text:
+            name_area = pygame.Rect(16, 192, 288, 28)
+            roman_area = pygame.Rect(16, 220, 288, 20)
+            name_render = f_sm.render(display_text, True, UI_TEXT)
+            roman_render = f_tiny.render(
+                fit_label(roman_text, 34), True, UI_MUTED
+            )
+            screen.set_clip(name_area.inflate(-12, 0))
+            if name_render.get_width() <= name_area.width - 24:
+                name_x = name_area.centerx - name_render.get_width() // 2
+            else:
+                scroll_x -= 2
+                if scroll_x < -name_render.get_width():
+                    scroll_x = name_area.right
+                name_x = scroll_x
+            screen.blit(name_render, (name_x, name_area.y + 4))
+            screen.set_clip(None)
+            screen.blit(
+                roman_render,
+                (roman_area.centerx - roman_render.get_width() // 2, roman_area.y)
+            )
         else:
-            scroll_x -= 2
-            if scroll_x < -name_render.get_width():
-                scroll_x = name_area.right
-            name_x = scroll_x
-        screen.blit(name_render, (name_x, name_area.y + 5))
-        screen.set_clip(None)
+            name_area = pygame.Rect(16, 198, 288, 34)
+            name_render = f_lg.render(display_text, True, UI_TEXT)
+            screen.set_clip(name_area.inflate(-12, 0))
+            if name_render.get_width() <= name_area.width - 24:
+                name_x = name_area.centerx - name_render.get_width() // 2
+            else:
+                scroll_x -= 2
+                if scroll_x < -name_render.get_width():
+                    scroll_x = name_area.right
+                name_x = scroll_x
+            screen.blit(name_render, (name_x, name_area.y + 5))
+            screen.set_clip(None)
 
         # Status chips appear only when active; controls remain in the dock
         alarm_chip = pygame.Rect(18, 242, 128, 22)
@@ -6541,10 +6719,20 @@ while True:
         )
 
         if show_qr:
-            qr_panel = pygame.Rect(31, 87, 258, 258)
-            pygame.draw.rect(screen, UI_SURFACE, qr_panel, border_radius=18)
-            pygame.draw.rect(screen, UI_BLUE, qr_panel, 2, border_radius=18)
-            screen.blit(qr_surface, (40, 96))
+            qr_panel = pygame.Rect(31, 78, 258, 278)
+            body = draw_info_card(screen, qr_panel, UI_BLUE, 18)
+            screen.blit(qr_surface, (40, 88))
+            draw_centered_text(
+                screen, f_tiny, "LISTEN ALONG", ink_on(body),
+                pygame.Rect(40, 328, 240, 16)
+            )
+            station_label = fit_label(
+                stations[current_idx]['name'] if stations else "TCRADIOS", 22
+            )
+            draw_centered_text(
+                screen, f_sm, station_label, muted_ink_on(body),
+                pygame.Rect(40, 344, 240, 18)
+            )
 
         if not show_qr:
             if active_page == "menu":
@@ -6577,16 +6765,34 @@ while True:
             was_auto_dimmed = (
                 target_display_brightness(now) < device_settings.brightness
             )
+            previous_interaction = last_interaction_time
             last_interaction_time = now
+            morning_greeting = (
+                not wifi_setup_required
+                and should_show_house_greeting(previous_interaction, now)
+            )
             if was_auto_dimmed:
                 device_settings.set_hardware_brightness(
                     device_settings.brightness
                 )
+                if morning_greeting:
+                    greeting_until = now + 6
+                    greeting_shown_on = datetime.now().date()
                 continue
             touch_start_pos = event.pos
             touch_start_time = time.time()
             if saver_active:
                 saver_active = False
+                if morning_greeting:
+                    greeting_until = now + 6
+                    greeting_shown_on = datetime.now().date()
+                continue
+            if now < greeting_until:
+                greeting_until = 0
+                continue
+            if morning_greeting:
+                greeting_until = now + 6
+                greeting_shown_on = datetime.now().date()
                 continue
             if show_qr:
                 show_qr = False
@@ -6916,6 +7122,8 @@ while True:
                     alarm_system.start_sleep_timer(30)
             if btn_saver.collidepoint(event.pos):
                 saver_active = not saver_active
+                if saver_active:
+                    saver_started_at = time.time()
             if btn_alarm.collidepoint(event.pos):
                 alarm_system.alarm_enabled = not alarm_system.alarm_enabled
                 alarm_system.save_alarm_settings()
