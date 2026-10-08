@@ -26,14 +26,19 @@ installation. No separate LCD commands are required.
 
 ## Updating an existing installation
 
+Do not re-run the full installer for a radio update. That can leave the splash
+on screen. From SSH or a terminal:
+
 ```bash
 cd "$HOME/tcradio"
-git fetch origin cursor/one-command-pi-install-b322
-git checkout -f cursor/one-command-pi-install-b322
-git reset --hard origin/cursor/one-command-pi-install-b322
-sudo ./install_raspberry_pi_kiosk.sh
-sudo reboot -f
+git fetch origin
+git pull --ff-only
+sudo ./boot/update-radio.sh
 ```
+
+If the splash is stuck now, unplug power once, boot, then run the commands
+above. A desktop is OK. The update script dismisses Plymouth, restores the
+normal desktop session, and starts the radio.
 
 Additional boot and troubleshooting details are available in
 [`boot/README.md`](boot/README.md).

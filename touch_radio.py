@@ -368,7 +368,9 @@ class AudioOutputManager:
         }
         
         try:
-            result = subprocess.run(['aplay', '-l'], capture_output=True, text=True)
+            result = subprocess.run(
+                ['aplay', '-l'], capture_output=True, text=True, timeout=3
+            )
             output = result.stdout.lower()
             if 'bcm2835' in output or 'headphones' in output or 'analog' in output:
                 self.outputs['analog']['available'] = True
@@ -378,7 +380,10 @@ class AudioOutputManager:
             print(f"Error scanning ALSA: {e}")
         
         try:
-            result = subprocess.run(['pactl', 'list', 'sinks', 'short'], capture_output=True, text=True)
+            result = subprocess.run(
+                ['pactl', 'list', 'sinks', 'short'],
+                capture_output=True, text=True, timeout=3,
+            )
             if result.returncode == 0:
                 for line in result.stdout.split('\n'):
                     if 'bluez' in line.lower() or 'bluetooth' in line.lower():
@@ -386,15 +391,18 @@ class AudioOutputManager:
                         parts = line.split()
                         if len(parts) >= 2:
                             self.outputs['bluetooth']['device'] = parts[1]
-        except:
+        except Exception:
             pass
         
         try:
-            result = subprocess.run(['bluetoothctl', 'devices', 'Connected'], capture_output=True, text=True)
+            result = subprocess.run(
+                ['bluetoothctl', 'devices', 'Connected'],
+                capture_output=True, text=True, timeout=3,
+            )
             if result.stdout.strip():
                 self.outputs['bluetooth']['available'] = True
                 self.outputs['bluetooth']['connected_device'] = result.stdout.strip().split('\n')[0]
-        except:
+        except Exception:
             pass
         
         print(f"Audio outputs detected: {[(k, v['available']) for k, v in self.outputs.items()]}")
@@ -4521,6 +4529,10 @@ def release_display_and_exit(_signum, _frame):
 
 signal.signal(signal.SIGTERM, release_display_and_exit)
 signal.signal(signal.SIGINT, release_display_and_exit)
+try:
+    signal.signal(signal.SIGHUP, release_display_and_exit)
+except Exception:
+    pass
 
 UI_BG_TOP = (0, 0, 0)
 UI_BG_BOTTOM = (7, 7, 10)
@@ -5615,11 +5627,8 @@ def resume_last_playback():
         title = str(saved_playback.get("name") or "YouTube")
         if title.startswith("YT: "):
             title = title[4:]
-        audio_url, err = youtube_audio_url(youtube_id, timeout=18)
-        if audio_url:
-            play_youtube_station(youtube_id, title, audio_url)
-            return
-        print(f"Could not restore YouTube item: {err}")
+        begin_youtube_play({"id": youtube_id, "title": title})
+        return
     saved_url = str(saved_station_url or "").strip()
     if youtube_id:
         saved_url = ""
@@ -5638,11 +5647,6 @@ def resume_last_playback():
         current_idx = len(stations) - 1
     play()
 
-splash_remaining = 5.0 - (time.time() - splash_started_at)
-if splash_remaining > 0:
-    time.sleep(splash_remaining)
-
-resume_last_playback()
 if stations_waiting_for_github:
     threading.Thread(target=retry_github_stations, daemon=True).start()
 ip_display_time = 0
@@ -6807,6 +6811,10 @@ def start_rotary_encoder():
 
 rotary_controls = []
 start_rotary_encoder()
+splash_remaining = 1.2 - (time.time() - splash_started_at)
+if splash_remaining > 0:
+    time.sleep(splash_remaining)
+resume_last_playback()
 
 while True:
     now = time.time()

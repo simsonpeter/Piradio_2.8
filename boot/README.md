@@ -4,7 +4,7 @@ The installer configures:
 
 - every required Python, VLC, YouTube, audio, Bluetooth, font, and boot package;
 - a dependency import check that stops immediately if anything is unavailable;
-- a black Plymouth splash displaying `TCRADIOS` and `by JayathaSoft`;
+- a black Plymouth splash displaying `TCRADIOS`, `by`, and `JayathaSoft` on separate lines;
 - quiet Linux boot options that hide the Raspberry Pi logo, text, and cursor;
 - removal of known legacy launchers that can start the radio twice;
 - removal of the long Plymouth and network-online boot waits;
@@ -12,7 +12,7 @@ The installer configures:
 - desktop auto-login where `raspi-config` is available;
 - automatic fullscreen launch of `touch_radio.py`;
 - the GoodTFT LCD35 driver with 270-degree screen and touch rotation;
-- a five-second in-app splash that covers the remaining application startup time.
+- a short in-app splash that covers startup, then the radio UI without waiting on YouTube restore.
 
 Run from the repository directory on the Raspberry Pi:
 
