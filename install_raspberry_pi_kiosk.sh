@@ -166,16 +166,20 @@ if [[ ! -t 1 ]]; then
 fi
 
 export DISPLAY="\${DISPLAY:-:0}"
-# Drop the boot splash as soon as the desktop is ready to draw.
-plymouth quit >/dev/null 2>&1 || true
+export XDG_CURRENT_DESKTOP="\${XDG_CURRENT_DESKTOP:-labwc}"
 DISPLAY_NUMBER="\${DISPLAY#:}"
-for _ in {1..30}; do
-    [[ -S "/tmp/.X11-unix/X\${DISPLAY_NUMBER}" ]] && break
-    sleep 1
+for _ in {1..20}; do
+    if [[ -S "/tmp/.X11-unix/X\${DISPLAY_NUMBER}" ]] || [[ -n "\${WAYLAND_DISPLAY:-}" ]]; then
+        break
+    fi
+    sleep 0.25
 done
-
-# Give the desktop session time to finish establishing display authorization.
-sleep 3
+# Do not reveal the desktop: keep Plymouth up until the radio window is drawn.
+if command -v xset >/dev/null 2>&1; then
+    xset s off >/dev/null 2>&1 || true
+    xset -dpms >/dev/null 2>&1 || true
+    xset s noblank >/dev/null 2>&1 || true
+fi
 cd $(printf '%q' "${SCRIPT_DIR}")
 exec /usr/bin/python3 $(printf '%q' "${SCRIPT_DIR}/touch_radio.py")
 EOF
@@ -191,18 +195,123 @@ install -m 0644 -o "${INSTALL_USER}" -g "${INSTALL_USER}" \
 
 LABWC_DIR="${INSTALL_HOME}/.config/labwc"
 LABWC_AUTOSTART="${LABWC_DIR}/autostart"
+install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${LABWC_DIR}"
+cat > "${LABWC_AUTOSTART}" <<'EOF'
+#!/bin/sh
+# TCRADIOS kiosk: radio only. No panel, desktop, or notification popups.
+/usr/local/bin/tcradios-start &
+EOF
+chown "${INSTALL_USER}:${INSTALL_USER}" "${LABWC_AUTOSTART}"
+chmod 0755 "${LABWC_AUTOSTART}"
+for sys_autostart in /etc/xdg/labwc/autostart /usr/share/labwc/autostart; do
+    if [[ -f "${sys_autostart}" ]]; then
+        cp -an "${sys_autostart}" "${sys_autostart}.tcradios-backup"
+        cat > "${sys_autostart}" <<'EOF'
+#!/bin/sh
+/usr/local/bin/tcradios-start &
+EOF
+        chmod 0755 "${sys_autostart}"
+    fi
+done
 
-if [[ -d /etc/xdg/labwc ]]; then
-    # Register with Labwc as well. Some Raspberry Pi OS images include Labwc
-    # while the selected desktop still uses XDG autostart. The launcher lock
-    # safely prevents both mechanisms from creating duplicate radio processes.
-    install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${LABWC_DIR}"
-    touch "${LABWC_AUTOSTART}"
-    sed -i '\|/usr/local/bin/tcradios-start|d' "${LABWC_AUTOSTART}"
-    sed -i '\|touch_radio.py|d' "${LABWC_AUTOSTART}"
-    printf '\n/usr/local/bin/tcradios-start &\n' >> "${LABWC_AUTOSTART}"
-    chown "${INSTALL_USER}:${INSTALL_USER}" "${LABWC_AUTOSTART}"
-    chmod 0755 "${LABWC_AUTOSTART}"
+# Hide the Raspberry Pi desktop chrome so boot is splash then radio.
+hide_xdg_autostart() {
+    local name="$1"
+    printf '%s\n' "[Desktop Entry]" "Hidden=true" \
+        > "${AUTOSTART_DIR}/${name}.desktop"
+    chown "${INSTALL_USER}:${INSTALL_USER}" "${AUTOSTART_DIR}/${name}.desktop"
+}
+
+keep_autostart='pulseaudio|pipewire|wireplumber|gnome-keyring|polkit|at-spi|xdg-permission|xdg-desktop-portal'
+if [[ -d /etc/xdg/autostart ]]; then
+    while IFS= read -r desktop_file; do
+        base="$(basename "${desktop_file}" .desktop)"
+        if echo "${base}" | grep -Eiq "${keep_autostart}"; then
+            continue
+        fi
+        hide_xdg_autostart "${base}"
+    done < <(find /etc/xdg/autostart -maxdepth 1 -name '*.desktop' | sort)
+fi
+for extra in \
+    wf-panel-pi \
+    lxpanel \
+    lxpanel-pi \
+    pcmanfm \
+    pcmanfm-desktop \
+    pcmanfm-pi \
+    nm-applet \
+    nm-tray \
+    notification-daemon \
+    xfce4-notifyd \
+    mako \
+    dunst \
+    fnott \
+    lxqt-notificationd \
+    update-notifier \
+    gnome-software-service \
+    piwiz \
+    pprompt \
+    print-applet \
+    light-locker \
+    xscreensaver \
+    pi-packages \
+    rp-prefapps \
+    geoclue-demo-agent \
+    user-dirs-update-gtk \
+    xdg-user-dirs
+do
+    hide_xdg_autostart "${extra}"
+done
+
+LXSESSION_DIR="${INSTALL_HOME}/.config/lxsession/LXDE-pi"
+if [[ -d /etc/xdg/lxsession/LXDE-pi || -d "${LXSESSION_DIR}" ]]; then
+    install -d -o "${INSTALL_USER}" -g "${INSTALL_USER}" "${LXSESSION_DIR}"
+    cat > "${LXSESSION_DIR}/autostart" <<'EOF'
+@/usr/local/bin/tcradios-start
+EOF
+    chown "${INSTALL_USER}:${INSTALL_USER}" "${LXSESSION_DIR}/autostart"
+fi
+
+WAYFIRE_INI="${INSTALL_HOME}/.config/wayfire.ini"
+if [[ -f "${WAYFIRE_INI}" ]]; then
+    python3 - "${WAYFIRE_INI}" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+lines = []
+skip_keys = {"panel", "background", "autostart_wf_shell", "xdg_autostart"}
+in_autostart = False
+for line in text.splitlines():
+    stripped = line.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        in_autostart = stripped.lower() == "[autostart]"
+        lines.append(line)
+        continue
+    if in_autostart:
+        key = stripped.split("=", 1)[0].strip().lower()
+        if key in skip_keys or key.endswith("panel") or "wf-panel" in stripped or "pcmanfm" in stripped:
+            continue
+        if "tcradios-start" in stripped:
+            continue
+    lines.append(line)
+if "[autostart]" not in text.lower():
+    lines.append("[autostart]")
+lines.append("autostart_wf_shell = false")
+lines.append("tcradios = /usr/local/bin/tcradios-start")
+path.write_text("\n".join(lines) + "\n")
+PY
+    chown "${INSTALL_USER}:${INSTALL_USER}" "${WAYFIRE_INI}"
+fi
+
+install -d /etc/NetworkManager/conf.d
+cat > /etc/NetworkManager/conf.d/tcradios-kiosk.conf <<'EOF'
+[connectivity]
+uri=
+interval=0
+EOF
+if command -v nmcli >/dev/null 2>&1; then
+    nmcli general reload >/dev/null 2>&1 || true
 fi
 
 # Disable the legacy service used by older PiRadio installations. It starts a
@@ -240,23 +349,10 @@ KillUserProcesses=yes
 UserStopDelaySec=5
 EOF
 
-cat > /etc/systemd/system/tcradios-release-display.service <<EOF
-[Unit]
-Description=Release the TCRADIOS boot splash
-DefaultDependencies=no
-After=plymouth-start.service
-Before=graphical.target display-manager.service
-Conflicts=shutdown.target
-
-[Service]
-Type=oneshot
-ExecStart=/bin/sh -c '/usr/bin/plymouth quit || true'
-TimeoutStartSec=5
-
-[Install]
-WantedBy=graphical.target
-EOF
-systemctl enable tcradios-release-display.service
+# Keep Plymouth covering the desktop until the radio window is on screen.
+systemctl disable --now tcradios-release-display.service >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/tcradios-release-display.service
+systemctl daemon-reload || true
 
 usermod -aG netdev,plugdev "${INSTALL_USER}" || true
 

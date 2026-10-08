@@ -4486,7 +4486,17 @@ screen.blit(splash_title, splash_title.get_rect(center=(160, 218)))
 screen.blit(splash_subtitle, splash_subtitle.get_rect(center=(160, 257)))
 pygame.draw.line(screen, (38, 150, 210), (100, 282), (220, 282), 2)
 pygame.display.flip()
+pygame.mouse.set_visible(False)
 splash_started_at = time.time()
+try:
+    subprocess.run(
+        ["plymouth", "quit"],
+        timeout=2,
+        capture_output=True,
+        check=False,
+    )
+except Exception:
+    pass
 
 def release_display_and_exit(_signum, _frame):
     # Exit immediately so a fullscreen window cannot hold up reboot.
@@ -5607,8 +5617,8 @@ if splash_remaining > 0:
 resume_last_playback()
 if stations_waiting_for_github:
     threading.Thread(target=retry_github_stations, daemon=True).start()
-ip_display_time = time.time() + 10
-show_startup_ip = True
+ip_display_time = 0
+show_startup_ip = False
 
 def handle_alarm_fade():
     global vol_level, alarm_fade_active, alarm_fade_data, current_idx
