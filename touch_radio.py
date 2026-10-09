@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import pygame, vlc, requests, time, os, io, math, socket, sys, threading, qrcode, json, base64, random, re, shutil, signal
+import pygame, vlc, requests, time, os, io, math, socket, sys, threading, qrcode, json, base64, random, re, shutil, signal, traceback
 from urllib.request import urlopen
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
@@ -81,6 +81,17 @@ print(f"\n   Option 3: Use Tailscale (mesh VPN):")
 print(f"   curl -fsSL https://tailscale.com/install.sh | sh")
 print(f"   sudo tailscale up")
 print(f"{'='*50}\n")
+
+def log_uncaught_exception(exc_type, exc, tb):
+    text = "".join(traceback.format_exception(exc_type, exc, tb))
+    print(f"TC RADIOS crash:\n{text}", flush=True)
+    try:
+        with open(os.path.expanduser("~/.tcradios-crash.log"), "a") as handle:
+            handle.write(f"{datetime.now().isoformat()}\n{text}\n")
+    except OSError:
+        pass
+
+sys.excepthook = log_uncaught_exception
 
 # --- AUDIO OUTPUT MANAGER ---
 class AudioOutputManager:
@@ -5751,7 +5762,7 @@ def swap_home_cards():
 
 
 def home_card_slots(top=6, height=468):
-    cards = device_settings.home_cards
+    cards = normalize_home_cards(device_settings.home_cards)
     if device_settings.home_card_layout == "single":
         return [(R(6, top, 308, height), cards[0], 6, top, 308, height)]
     return [
@@ -5769,7 +5780,7 @@ def playback_card_box():
 
 
 def playback_control_layout():
-    _rect, x, _y, w, _h = playback_card_box()
+    _rect, _kind, x, _y, w, _h = playback_card_box()
     if w < 220:
         return {
             "vol_minus": R(x + 6, 268, 30, 36),
@@ -7297,6 +7308,16 @@ def start_rotary_encoder():
 
 rotary_controls = []
 start_rotary_encoder()
+
+btn_qr = R(15, 13, 42, 40)
+btn_exit = R(268, 13, 37, 40)
+_playback_controls = playback_control_layout()
+vol_minus_rect = _playback_controls["vol_minus"]
+vol_plus_rect = _playback_controls["vol_plus"]
+vol_bar_rect = _playback_controls["vol_bar"]
+btn_prev = _playback_controls["prev"]
+btn_toggle = _playback_controls["toggle"]
+btn_next = _playback_controls["next"]
 
 while True:
     now = time.time()
