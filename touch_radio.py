@@ -5760,6 +5760,41 @@ def home_card_slots(top=6, height=468):
     ]
 
 
+def playback_card_box():
+    slots = home_card_slots()
+    for slot in slots:
+        if slot[1] == "now_playing":
+            return slot
+    return slots[0]
+
+
+def playback_control_layout():
+    _rect, x, _y, w, _h = playback_card_box()
+    if w < 220:
+        return {
+            "vol_minus": R(x + 6, 268, 30, 36),
+            "vol_plus": R(x + w - 36, 268, 30, 36),
+            "vol_bar": R(x + 38, 280, w - 76, 12),
+            "pct_x": x + w // 2,
+            "pct_y": 300,
+            "prev": R(x + 6, 316, 42, 44),
+            "toggle": R(x + 51, 312, 46, 50),
+            "next": R(x + w - 48, 316, 42, 44),
+            "compact": True,
+        }
+    return {
+        "vol_minus": R(x + 4, 270, 46, 46),
+        "vol_plus": R(x + w - 50, 270, 46, 46),
+        "vol_bar": R(x + 58, 284, w - 116, 14),
+        "pct_x": x + w // 2,
+        "pct_y": 302,
+        "prev": R(x + 6, 329, 92, 53),
+        "toggle": R(x + w // 2 - 46, 325, 92, 61),
+        "next": R(x + w - 98, 329, 92, 53),
+        "compact": False,
+    }
+
+
 def connect_touch_bluetooth(address, name):
     global touch_bluetooth_devices, touch_bluetooth_status
     global touch_bluetooth_busy, touch_bluetooth_offset
@@ -7378,30 +7413,37 @@ while True:
         pygame.draw.line(screen, UI_TEXT, XY(279, 24), XY(294, 40), S(3))
         pygame.draw.line(screen, UI_TEXT, XY(294, 24), XY(279, 40), S(3))
 
-        # Volume strip: circular vector − / + so glyphs never become boxes
-        vol_minus_rect = R(10, 270, 46, 46)
-        vol_plus_rect = R(264, 270, 46, 46)
-        vol_bar_rect = R(64, 284, 192, 14)
+        # Volume and play controls stay on the now-playing card only.
+        controls = playback_control_layout()
+        vol_minus_rect = controls["vol_minus"]
+        vol_plus_rect = controls["vol_plus"]
+        vol_bar_rect = controls["vol_bar"]
+        btn_prev = controls["prev"]
+        btn_toggle = controls["toggle"]
+        btn_next = controls["next"]
+        control_font = f_tiny if controls["compact"] else f_sm
         draw_circle_icon_button(screen, vol_minus_rect, UI_AMBER, "minus")
         pygame.draw.rect(screen, (37, 48, 72), vol_bar_rect, border_radius=S(8))
         fill_width = int(vol_bar_rect.width * vol_level / 100)
         if fill_width > 0:
             fill_rect = _Rect(
-                vol_bar_rect.x, vol_bar_rect.y, max(X(14), fill_width), vol_bar_rect.height
+                vol_bar_rect.x, vol_bar_rect.y, max(X(10), fill_width), vol_bar_rect.height
             )
             pygame.draw.rect(screen, UI_BLUE, fill_rect, border_radius=S(8))
         knob_x = vol_bar_rect.x + int(vol_bar_rect.width * vol_level / 100)
-        knob_x = max(vol_bar_rect.x + X(8), min(vol_bar_rect.right - X(8), knob_x))
-        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), S(9), UI_TEXT)
+        knob_x = max(vol_bar_rect.x + X(6), min(vol_bar_rect.right - X(6), knob_x))
+        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), S(8), UI_TEXT)
         draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), S(4), UI_BLUE)
         vol_pct_surf = f_tiny.render(f"{vol_level}%", True, UI_TEXT)
-        screen.blit(vol_pct_surf, (X(160) - vol_pct_surf.get_width() // 2, Y(302)))
+        screen.blit(
+            vol_pct_surf,
+            (
+                X(controls["pct_x"]) - vol_pct_surf.get_width() // 2,
+                Y(controls["pct_y"])
+            )
+        )
         draw_circle_icon_button(screen, vol_plus_rect, UI_GREEN, "plus")
 
-        # Primary transport controls
-        btn_prev = R(12, 329, 92, 53)
-        btn_toggle = R(114, 325, 92, 61)
-        btn_next = R(216, 329, 92, 53)
         draw_pulsing_border(
             screen,
             btn_toggle,
@@ -7414,13 +7456,17 @@ while True:
             screen, btn_toggle, toggle_color, toggle_color, 18
         )
         next_body = draw_modern_button(screen, btn_next, UI_PURPLE, UI_PURPLE, 16)
-        draw_centered_text(screen, f_sm, "PREV", contrasting_text(prev_body), btn_prev)
         draw_centered_text(
-            screen, f_sm, "PAUSE" if is_playing else "PLAY",
+            screen, control_font, "PREV", contrasting_text(prev_body), btn_prev
+        )
+        draw_centered_text(
+            screen, control_font, "PAUSE" if is_playing else "PLAY",
             contrasting_text(toggle_body),
             btn_toggle
         )
-        draw_centered_text(screen, f_sm, "NEXT", contrasting_text(next_body), btn_next)
+        draw_centered_text(
+            screen, control_font, "NEXT", contrasting_text(next_body), btn_next
+        )
 
         pages_body = draw_modern_button(
             screen, btn_open_pages, UI_BLUE, UI_BLUE, 16
