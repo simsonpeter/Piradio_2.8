@@ -5750,13 +5750,13 @@ def swap_home_cards():
     device_settings.save()
 
 
-def home_card_slots(top=64, height=200):
+def home_card_slots(top=6, height=468):
     cards = device_settings.home_cards
     if device_settings.home_card_layout == "single":
-        return [(R(8, top, 304, height), cards[0], 8, top, 304, height)]
+        return [(R(6, top, 308, height), cards[0], 6, top, 308, height)]
     return [
-        (R(8, top, 148, height), cards[0], 8, top, 148, height),
-        (R(164, top, 148, height), cards[1], 164, top, 148, height),
+        (R(6, top, 148, height), cards[0], 6, top, 148, height),
+        (R(166, top, 148, height), cards[1], 166, top, 148, height),
     ]
 
 
@@ -6148,19 +6148,21 @@ def draw_home_card(
     }
     half = layout_w < 220
     tall = layout_h >= 140
+    full = layout_h >= 400
     body = draw_info_card(
-        screen, rect, accents.get(kind, UI_BLUE), 22
+        screen, rect, accents.get(kind, UI_BLUE), 28 if full else 22
     )
     title = f_tiny.render(
         HOME_CARD_LABELS.get(kind, "CARD"), True, muted_ink_on(body)
     )
+    title_y = layout_y + (56 if full else 8)
     screen.blit(
         title,
-        (rect.centerx - title.get_width() // 2, rect.y + Y(8))
+        (rect.centerx - title.get_width() // 2, Y(title_y))
     )
     main_chars = 12 if half else 28
     sub_chars = 14 if half else 32
-    text_font = f_sm if (half or not tall) else f_lg
+    text_font = f_lg if full else (f_sm if (half or not tall) else f_lg)
 
     def blit_lines(main_text, sub_text, y_layout):
         main_surf = text_font.render(
@@ -6182,9 +6184,9 @@ def draw_home_card(
         station = stations[current_idx]['name'] if stations else "TCRADIOS"
         playing = sanitize_text(meta_text) or station
         if tall:
-            radius = 48 if half else 56
+            radius = 52 if half else 64
             cx = layout_x + layout_w // 2
-            cy = layout_y + 28 + radius
+            cy = layout_y + (110 if full else 28) + radius
             pygame.draw.ellipse(screen, (17, 31, 53), E(cx, cy, radius))
             pygame.draw.ellipse(
                 screen, (40, 58, 91), E(cx, cy, radius - 2), S(1)
@@ -6213,19 +6215,24 @@ def draw_home_card(
                     E(cx, cy, radius - 2 + pulse * 4),
                     S(2)
                 )
-            blit_lines(playing, station, layout_y + 28 + radius * 2 + 8)
+            blit_lines(
+                playing, station,
+                layout_y + (110 if full else 28) + radius * 2 + 10
+            )
         else:
             blit_lines(playing, station, layout_y + 28)
     elif kind == "weather":
         if tall:
+            icon_y = layout_y + (130 if full else 78)
             draw_weather_icon(
-                screen, layout_x + layout_w // 2, layout_y + 78,
-                weather_type, 28, dimmed=False, on_background=body
+                screen, layout_x + layout_w // 2, icon_y,
+                weather_type, 34 if full else 28,
+                dimmed=False, on_background=body
             )
             temp = f_weather.render(f"{current_temp}°C", True, ink_on(body))
             screen.blit(
                 temp,
-                (rect.centerx - temp.get_width() // 2, Y(layout_y + 118))
+                (rect.centerx - temp.get_width() // 2, Y(icon_y + 52))
             )
             city = f_tiny.render(
                 fit_label(device_settings.weather_name.upper(), sub_chars),
@@ -6233,7 +6240,7 @@ def draw_home_card(
             )
             screen.blit(
                 city,
-                (rect.centerx - city.get_width() // 2, Y(layout_y + 162))
+                (rect.centerx - city.get_width() // 2, Y(icon_y + 96))
             )
         else:
             blit_lines(
@@ -6247,27 +6254,30 @@ def draw_home_card(
             blit_lines(
                 f"{today['high']}° / {today['low']}°",
                 f"{today['day']} {today['label']}",
-                layout_y + (78 if tall else 28)
+                layout_y + (140 if full else 78 if tall else 28)
             )
         else:
-            blit_lines("No forecast", "yet", layout_y + (78 if tall else 28))
+            blit_lines(
+                "No forecast", "yet",
+                layout_y + (140 if full else 78 if tall else 28)
+            )
     elif kind == "alarm":
         blit_lines(
             alarm_system.alarm_time,
             "ALARM ON" if alarm_system.alarm_enabled else "ALARM OFF",
-            layout_y + (78 if tall else 28)
+            layout_y + (140 if full else 78 if tall else 28)
         )
     elif kind == "system":
         blit_lines(
             f"CPU {system_stats['cpu_temp']}",
             f"IP {current_ip}",
-            layout_y + (78 if tall else 28)
+            layout_y + (140 if full else 78 if tall else 28)
         )
     elif kind == "bluetooth":
         blit_lines(
             system_stats['bluetooth'],
             "SPEAKER",
-            layout_y + (78 if tall else 28)
+            layout_y + (140 if full else 78 if tall else 28)
         )
     return body
 
@@ -7335,6 +7345,17 @@ while True:
         screen.blit(ui_background, (0, 0))
         draw_animated_ui_glow(screen, now)
 
+        try: is_playing = player.get_state() == vlc.State.Playing
+        except: is_playing = False
+
+        logo_rect = R(0, 0, 1, 1)
+        for rect, kind, layout_x, layout_y, layout_w, layout_h in home_card_slots():
+            draw_home_card(
+                rect, kind, now,
+                layout_x=layout_x, layout_y=layout_y,
+                layout_w=layout_w, layout_h=layout_h
+            )
+
         # Compact header
         header_rect = R(8, 7, 304, 52)
         pygame.draw.rect(screen, UI_SURFACE, header_rect, border_radius=S(17))
@@ -7356,17 +7377,6 @@ while True:
         draw_modern_button(screen, btn_exit, (75, 30, 55), UI_PINK, 12)
         pygame.draw.line(screen, UI_TEXT, XY(279, 24), XY(294, 40), S(3))
         pygame.draw.line(screen, UI_TEXT, XY(294, 24), XY(279, 40), S(3))
-
-        try: is_playing = player.get_state() == vlc.State.Playing
-        except: is_playing = False
-
-        logo_rect = R(0, 0, 1, 1)
-        for rect, kind, layout_x, layout_y, layout_w, layout_h in home_card_slots():
-            draw_home_card(
-                rect, kind, now,
-                layout_x=layout_x, layout_y=layout_y,
-                layout_w=layout_w, layout_h=layout_h
-            )
 
         # Volume strip: circular vector − / + so glyphs never become boxes
         vol_minus_rect = R(10, 270, 46, 46)
