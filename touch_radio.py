@@ -4061,8 +4061,9 @@ try:
 except Exception:
     pass
 
-# Layout is authored at 320x480. Use one uniform scale so circles, logos,
-# and glow stay round and aligned. Letterbox extra width or height.
+# Layout is authored at 320x480 and filled to the live screen. Positions
+# and boxes follow X/Y so the 7-inch panel is used fully. Circles that
+# must sit on that layout (glow, artwork) are drawn as matching ellipses.
 BASE_W, BASE_H = 320, 480
 OFFICIAL_7_W, OFFICIAL_7_H = 720, 1280
 _Rect = pygame.Rect
@@ -4084,29 +4085,29 @@ def _open_touchscreen():
         return surface, surface.get_width(), surface.get_height()
 
 screen, SCREEN_W, SCREEN_H = _open_touchscreen()
-SCALE = min(SCREEN_W / float(BASE_W), SCREEN_H / float(BASE_H))
-OFFSET_X = int((SCREEN_W - BASE_W * SCALE) / 2)
-OFFSET_Y = int((SCREEN_H - BASE_H * SCALE) / 2)
+SCALE_X = SCREEN_W / float(BASE_W)
+SCALE_Y = SCREEN_H / float(BASE_H)
+SCALE = min(SCALE_X, SCALE_Y)
 
 def X(value):
-    return OFFSET_X + int(round(value * SCALE))
+    return int(round(value * SCALE_X))
 
 def Y(value):
-    return OFFSET_Y + int(round(value * SCALE))
+    return int(round(value * SCALE_Y))
 
 def S(value):
     return max(1, int(round(value * SCALE)))
 
 def R(x, y, w, h):
-    return _Rect(X(x), Y(y), S(w), S(h))
+    return _Rect(X(x), Y(y), max(1, X(w)), max(1, Y(h)))
 
 def XY(x, y):
     return (X(x), Y(y))
 
-print(
-    f"Touchscreen {SCREEN_W}x{SCREEN_H} "
-    f"(uniform scale {SCALE:.2f}, offset {OFFSET_X},{OFFSET_Y})"
-)
+def E(cx, cy, radius):
+    return R(cx - radius, cy - radius, radius * 2, radius * 2)
+
+print(f"Touchscreen {SCREEN_W}x{SCREEN_H} (fill {SCALE_X:.2f}x{SCALE_Y:.2f})")
 
 # --- UNICODE FONT SETUP (Tamil Support) ---
 TAMIL_RANGE = range(0x0B80, 0x0BFF + 1)
@@ -4605,9 +4606,9 @@ def create_ui_background():
         pygame.draw.line(background, color, (0, y), (SCREEN_W - 1, y))
 
     glow = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
-    pygame.draw.circle(glow, (*UI_BLUE, 28), XY(292, 108), S(120))
-    pygame.draw.circle(glow, (*UI_PURPLE, 26), XY(12, 360), S(140))
-    pygame.draw.circle(glow, (*UI_AMBER, 16), XY(160, 24), S(90))
+    pygame.draw.ellipse(glow, (*UI_BLUE, 28), E(292, 108, 120))
+    pygame.draw.ellipse(glow, (*UI_PURPLE, 26), E(12, 360, 140))
+    pygame.draw.ellipse(glow, (*UI_AMBER, 16), E(160, 24, 90))
     background.blit(glow, (0, 0))
     return background
 
@@ -4758,36 +4759,30 @@ def draw_info_card(surface, rect, accent, radius=16):
 def draw_animated_ui_glow(surface, now):
     ui_animation_layer.fill((0, 0, 0, 0))
     pulse = (math.sin(now * 1.1) + 1) / 2
-    blue_center = XY(
-        278 + int(math.sin(now * 0.35) * 18),
-        112 + int(math.cos(now * 0.42) * 16)
-    )
-    purple_center = XY(
-        28 + int(math.cos(now * 0.3) * 20),
-        365 + int(math.sin(now * 0.38) * 18)
-    )
+    blue_cx = 278 + math.sin(now * 0.35) * 18
+    blue_cy = 112 + math.cos(now * 0.42) * 16
+    purple_cx = 28 + math.cos(now * 0.3) * 20
+    purple_cy = 365 + math.sin(now * 0.38) * 18
 
     for radius, alpha in ((105, 3), (78, 5), (52, 7)):
-        pygame.draw.circle(
+        pygame.draw.ellipse(
             ui_animation_layer,
             (*UI_BLUE, alpha + int(pulse * 3)),
-            blue_center,
-            S(radius)
+            E(blue_cx, blue_cy, radius)
         )
     for radius, alpha in ((120, 3), (88, 5), (58, 7)):
-        pygame.draw.circle(
+        pygame.draw.ellipse(
             ui_animation_layer,
             (*UI_PURPLE, alpha + int((1 - pulse) * 3)),
-            purple_center,
-            S(radius)
+            E(purple_cx, purple_cy, radius)
         )
     surface.blit(ui_animation_layer, (0, 0))
 
 def draw_pulsing_border(surface, rect, color, now):
     ui_animation_layer.fill((0, 0, 0, 0))
     pulse = (math.sin(now * 2.2) + 1) / 2
-    outer = rect.inflate(S(8), S(8))
-    inner = rect.inflate(S(4), S(4))
+    outer = rect.inflate(X(8), Y(8))
+    inner = rect.inflate(X(4), Y(4))
     pygame.draw.rect(
         ui_animation_layer,
         (*color, 10 + int(pulse * 12)),
@@ -5078,6 +5073,7 @@ language_stream_offset = 0
 # Logo setup
 LOGO_SIZE = S(112)
 LOGO_CENTER = LOGO_SIZE // 2
+logo_rect = R(104, 72, 112, 112)
 logo = pygame.Surface((LOGO_SIZE, LOGO_SIZE), pygame.SRCALPHA)
 logo.fill((0, 0, 0, 0))
 pygame.draw.circle(logo, (40, 40, 40), (LOGO_CENTER, LOGO_CENTER), LOGO_CENTER)
@@ -5851,11 +5847,11 @@ def draw_forecast_screen(now):
             day_surface = f_sm.render(
                 forecast['day'].upper(), True, ink_on(body)
             )
-            screen.blit(day_surface, (X(29), row.y + S(7)))
+            screen.blit(day_surface, (X(29), row.y + Y(7)))
             label_surface = f_tiny.render(
                 forecast['label'], True, muted_ink_on(body)
             )
-            screen.blit(label_surface, (X(29), row.y + S(25)))
+            screen.blit(label_surface, (X(29), row.y + Y(25)))
 
             draw_weather_icon(
                 screen, 196, 166 + index * 52 + 22,
@@ -5865,7 +5861,7 @@ def draw_forecast_screen(now):
             temperature_surface = f_sm.render(temperature, True, ink_on(body))
             screen.blit(
                 temperature_surface,
-                (X(292) - temperature_surface.get_width(), row.y + S(14))
+                (X(292) - temperature_surface.get_width(), row.y + Y(14))
             )
     else:
         loading_rect = R(14, 166, 292, 253)
@@ -5917,12 +5913,12 @@ def draw_menu_screen(now):
         title_surface = f_sm.render(title, True, contrasting_text(body))
         screen.blit(
             title_surface,
-            (rect.centerx - title_surface.get_width() // 2, rect.y + S(12))
+            (rect.centerx - title_surface.get_width() // 2, rect.y + Y(12))
         )
         subtitle_surface = f_tiny.render(subtitle, True, contrasting_muted(body))
         screen.blit(
             subtitle_surface,
-            (rect.centerx - subtitle_surface.get_width() // 2, rect.y + S(34))
+            (rect.centerx - subtitle_surface.get_width() // 2, rect.y + Y(34))
         )
 def draw_favorites_screen(now):
     draw_page_base("FAVORITES", now)
@@ -5944,16 +5940,16 @@ def draw_favorites_screen(now):
             number = f_tiny.render(
                 f"{index + 1}", True, ink_on(body, UI_BLUE)
             )
-            screen.blit(number, (rect.x + S(10), rect.y + S(9)))
+            screen.blit(number, (rect.x + X(10), rect.y + Y(9)))
             name = f_sm.render(
                 fit_label(station['name'], 15), True, ink_on(body)
             )
-            screen.blit(name, (rect.x + S(10), rect.y + S(31)))
+            screen.blit(name, (rect.x + X(10), rect.y + Y(31)))
             genre = f_tiny.render(
                 fit_label(station.get('genre', 'Radio'), 18),
                 True, muted_ink_on(body)
             )
-            screen.blit(genre, (rect.x + S(10), rect.y + S(54)))
+            screen.blit(genre, (rect.x + X(10), rect.y + Y(54)))
         else:
             body = draw_info_card(screen, rect, (72, 80, 98), 14)
             draw_centered_text(screen, f_tiny, "EMPTY", muted_ink_on(body), rect)
@@ -5980,12 +5976,12 @@ def draw_clock_screen(now):
         dimmed=False, on_background=body
     )
     temp = f_weather.render(f"{current_temp}°C", True, ink_on(body))
-    screen.blit(temp, (X(112), weather_card.y + S(11)))
+    screen.blit(temp, (X(112), weather_card.y + Y(11)))
     city = f_tiny.render(
         fit_label(device_settings.weather_name.upper(), 18),
         True, muted_ink_on(body)
     )
-    screen.blit(city, (X(116), weather_card.y + S(53)))
+    screen.blit(city, (X(116), weather_card.y + Y(53)))
 
     station_card = R(28, 344, 264, 58)
     body = draw_info_card(screen, station_card, (72, 80, 98), 15)
@@ -6062,20 +6058,20 @@ def draw_system_screen(now):
     for rect, (label, value) in zip(system_card_rects, values):
         body = draw_info_card(screen, rect, (72, 80, 98), 16)
         label_surface = f_tiny.render(label, True, muted_ink_on(body))
-        screen.blit(label_surface, (rect.x + S(14), rect.y + S(15)))
+        screen.blit(label_surface, (rect.x + X(14), rect.y + Y(15)))
         value_surface = f_sm.render(
             fit_label(value, 18), True, ink_on(body)
         )
-        screen.blit(value_surface, (rect.x + S(14), rect.y + S(43)))
+        screen.blit(value_surface, (rect.x + X(14), rect.y + Y(43)))
 
     bluetooth_card = R(18, 320, 284, 54)
     body = draw_info_card(screen, bluetooth_card, UI_BLUE, 16)
     bt_label = f_tiny.render("BLUETOOTH AUDIO", True, muted_ink_on(body))
-    screen.blit(bt_label, (X(34), bluetooth_card.y + S(8)))
+    screen.blit(bt_label, (X(34), bluetooth_card.y + Y(8)))
     bt_value = f_sm.render(
         fit_label(system_stats['bluetooth'], 28), True, ink_on(body)
     )
-    screen.blit(bt_value, (X(34), bluetooth_card.y + S(28)))
+    screen.blit(bt_value, (X(34), bluetooth_card.y + Y(28)))
 
     shutdown_armed = now <= shutdown_confirm_until
     shutdown_label = (
@@ -6175,7 +6171,7 @@ def draw_bluetooth_screen(now):
                 fit_label(device.get('name', 'Bluetooth device'), 23),
                 True, ink_on(body)
             )
-            screen.blit(name_surface, (rect.x + S(13), rect.y + S(5)))
+            screen.blit(name_surface, (rect.x + X(13), rect.y + Y(5)))
             state = (
                 "CONNECTED" if connected
                 else ("PAIRED • TAP TO CONNECT" if device.get('paired')
@@ -6184,7 +6180,7 @@ def draw_bluetooth_screen(now):
             state_surface = f_tiny.render(
                 state, True, muted_ink_on(body, UI_GREEN if connected else None)
             )
-            screen.blit(state_surface, (rect.x + S(13), rect.y + S(24)))
+            screen.blit(state_surface, (rect.x + X(13), rect.y + Y(24)))
     else:
         empty_rect = R(18, 142, 284, 272)
         body = draw_info_card(screen, empty_rect, (72, 80, 98), 16)
@@ -6262,11 +6258,11 @@ def draw_wifi_screen(now):
                 fit_label(f"{lock}{network['ssid']}", 22),
                 True, contrasting_text(body)
             )
-            screen.blit(name, (rect.x + S(12), rect.y + S(6)))
+            screen.blit(name, (rect.x + X(12), rect.y + Y(6)))
             meta = f_tiny.render(
                 f"{network['signal']}%", True, contrasting_muted(body)
             )
-            screen.blit(meta, (rect.x + S(12), rect.y + S(26)))
+            screen.blit(meta, (rect.x + X(12), rect.y + Y(26)))
     else:
         empty = R(16, 142, 288, 200)
         body = draw_info_card(screen, empty, (72, 80, 98), 16)
@@ -6316,12 +6312,12 @@ def draw_language_stations_screen(now):
             name_surface = f_sm.render(
                 fit_label(stream['name'], 28), True, ink_on(body)
             )
-            screen.blit(name_surface, (rect.x + S(13), rect.y + S(7)))
+            screen.blit(name_surface, (rect.x + X(13), rect.y + Y(7)))
             genre_surface = f_tiny.render(
                 fit_label(stream.get('genre', 'Radio'), 34),
                 True, muted_ink_on(body)
             )
-            screen.blit(genre_surface, (rect.x + S(13), rect.y + S(29)))
+            screen.blit(genre_surface, (rect.x + X(13), rect.y + Y(29)))
     elif selected_language:
         empty_rect = R(18, 89, 284, 257)
         body = draw_info_card(screen, empty_rect, (72, 80, 98), 16)
@@ -6436,7 +6432,7 @@ def draw_youtube_screen(now):
                 fit_label(now_prefix + (video.get('title') or 'YouTube'), 28),
                 True, ink_on(body)
             )
-            screen.blit(title, (rect.x + S(12), rect.y + S(4)))
+            screen.blit(title, (rect.x + X(12), rect.y + Y(4)))
             meta = f_tiny.render(
                 fit_label(
                     f"{video.get('uploader', '')} • {video.get('duration', '')}",
@@ -6444,7 +6440,7 @@ def draw_youtube_screen(now):
                 ),
                 True, muted_ink_on(body)
             )
-            screen.blit(meta, (rect.x + S(12), rect.y + S(22)))
+            screen.blit(meta, (rect.x + X(12), rect.y + Y(22)))
     else:
         empty = R(16, 232, 288, 184)
         body = draw_info_card(screen, empty, (72, 80, 98), 16)
@@ -6963,11 +6959,17 @@ while True:
         try: is_playing = player.get_state() == vlc.State.Playing
         except: is_playing = False
 
-        # Smaller artwork area leaves breathing room between sections
-        pygame.draw.circle(screen, (17, 31, 53), XY(160, 128), S(60))
-        pygame.draw.circle(screen, (40, 58, 91), XY(160, 128), S(58), S(1))
-        logo_rect = _Rect(X(104), Y(72), LOGO_SIZE, LOGO_SIZE)
-        screen.blit(logo, logo_rect)
+        # Artwork follows the stretched layout so the ring and logo share
+        # the same box instead of a round min-scale sitting off-center.
+        pygame.draw.ellipse(screen, (17, 31, 53), E(160, 128, 60))
+        pygame.draw.ellipse(screen, (40, 58, 91), E(160, 128, 58), S(1))
+        logo_rect = R(104, 72, 112, 112)
+        screen.blit(
+            pygame.transform.smoothscale(
+                logo, (logo_rect.width, logo_rect.height)
+            ),
+            logo_rect
+        )
 
         if is_playing:
             pulse = (math.sin(time.time() * 3) + 1) / 2
@@ -6976,9 +6978,11 @@ while True:
                 int(UI_BLUE[1] * 0.75),
                 int(UI_BLUE[2] * 0.75)
             )
-            pygame.draw.circle(screen, pulse_color, XY(160, 128), S(58) + int(pulse * S(4)), S(2))
+            pygame.draw.ellipse(
+                screen, pulse_color, E(160, 128, 58 + pulse * 4), S(2)
+            )
         else:
-            pygame.draw.circle(screen, UI_MUTED, XY(160, 128), S(58), S(1))
+            pygame.draw.ellipse(screen, UI_MUTED, E(160, 128, 58), S(1))
 
         # Now-playing: Tamil on top, English transliteration under it
         display_text = sanitize_text(meta_text)
@@ -6990,15 +6994,15 @@ while True:
             roman_render = f_tiny.render(
                 fit_label(roman_text, 34), True, UI_MUTED
             )
-            screen.set_clip(name_area.inflate(-S(12), 0))
-            if name_render.get_width() <= name_area.width - S(24):
+            screen.set_clip(name_area.inflate(-X(12), 0))
+            if name_render.get_width() <= name_area.width - X(24):
                 name_x = name_area.centerx - name_render.get_width() // 2
             else:
                 scroll_x -= 2
                 if scroll_x < -name_render.get_width():
                     scroll_x = name_area.right
                 name_x = scroll_x
-            screen.blit(name_render, (name_x, name_area.y + S(4)))
+            screen.blit(name_render, (name_x, name_area.y + Y(4)))
             screen.set_clip(None)
             screen.blit(
                 roman_render,
@@ -7007,15 +7011,15 @@ while True:
         else:
             name_area = R(16, 198, 288, 34)
             name_render = f_lg.render(display_text, True, UI_TEXT)
-            screen.set_clip(name_area.inflate(-S(12), 0))
-            if name_render.get_width() <= name_area.width - S(24):
+            screen.set_clip(name_area.inflate(-X(12), 0))
+            if name_render.get_width() <= name_area.width - X(24):
                 name_x = name_area.centerx - name_render.get_width() // 2
             else:
                 scroll_x -= 2
                 if scroll_x < -name_render.get_width():
                     scroll_x = name_area.right
                 name_x = scroll_x
-            screen.blit(name_render, (name_x, name_area.y + S(5)))
+            screen.blit(name_render, (name_x, name_area.y + Y(5)))
             screen.set_clip(None)
 
         # Status chips appear only when active; controls remain in the dock
@@ -7043,11 +7047,11 @@ while True:
         fill_width = int(vol_bar_rect.width * vol_level / 100)
         if fill_width > 0:
             fill_rect = _Rect(
-                vol_bar_rect.x, vol_bar_rect.y, max(S(14), fill_width), vol_bar_rect.height
+                vol_bar_rect.x, vol_bar_rect.y, max(X(14), fill_width), vol_bar_rect.height
             )
             pygame.draw.rect(screen, UI_BLUE, fill_rect, border_radius=S(8))
         knob_x = vol_bar_rect.x + int(vol_bar_rect.width * vol_level / 100)
-        knob_x = max(vol_bar_rect.x + S(8), min(vol_bar_rect.right - S(8), knob_x))
+        knob_x = max(vol_bar_rect.x + X(8), min(vol_bar_rect.right - X(8), knob_x))
         draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), S(9), UI_TEXT)
         draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), S(4), UI_BLUE)
         vol_pct_surf = f_tiny.render(f"{vol_level}%", True, UI_TEXT)
@@ -7124,7 +7128,7 @@ while True:
             pygame.draw.circle(
                 screen,
                 UI_PINK if vol_level == 0 else UI_AMBER,
-                (btn_fab.centerx + S(16), btn_fab.centery - S(16)),
+                (btn_fab.centerx + X(16), btn_fab.centery - Y(16)),
                 S(5),
             )
 
@@ -7563,7 +7567,7 @@ while True:
             dt = time.time() - touch_start_time
             if (
                 active_page in PAGE_ORDER
-                and abs(dx) > S(45)
+                and abs(dx) > X(45)
                 and abs(dx) > abs(dy)
                 and dt < 2.5
             ):
@@ -7584,7 +7588,7 @@ while True:
                         alarm_system.stop_sleep_timer()
                     else:
                         alarm_system.start_sleep_timer(30)
-                elif abs(dy) > S(30):
+                elif abs(dy) > Y(30):
                     apply_live_volume(vol_level + (5 if dy > 0 else -5))
                     show_volume_bar = True
                     volume_bar_timer = time.time()
