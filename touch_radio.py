@@ -6389,6 +6389,25 @@ def draw_home_card(
         )
         return surface
 
+    def blit_px(text, font, color, y_px, chars):
+        surface = font.render(fit_label(text, chars), True, color)
+        screen.blit(
+            surface,
+            (rect.centerx - surface.get_width() // 2, int(y_px))
+        )
+        return surface
+
+    def same_label(left, right):
+        def key(text):
+            return "".join(
+                char for char in str(text).upper() if char.isalnum()
+            )
+        a, b = key(left), key(right)
+        if not a or not b:
+            return False
+        short, long = (a, b) if len(a) <= len(b) else (b, a)
+        return long.startswith(short[:12]) or short[:12] in long
+
     def blit_lines(main_text, sub_text, y_layout):
         blit_centered(main_text, f_sm, ink_on(body), y_layout, main_chars)
         blit_centered(
@@ -6458,32 +6477,42 @@ def draw_home_card(
 
     def draw_forecast_rows(rows, top, bottom):
         count = 5
-        step = max(28, (bottom - top) // count)
+        top_px, bottom_px = Y(top), Y(bottom)
+        span = max(1, bottom_px - top_px)
+        step = max(1, span // count)
         if not rows:
-            blit_centered(
+            blit_px(
                 "Updating forecast…", f_sm, muted_ink_on(body),
-                top + max(8, step // 4), 20
+                top_px + S(4), 20
             )
             return
         for index, forecast in enumerate(rows[:count]):
-            row_top = Y(top + index * step)
-            day = f_sm.render(forecast["day"].upper(), True, ink_on(body))
-            hi_lo = f_sm.render(
+            row_top = top_px + index * step
+            day = f_tiny.render(forecast["day"].upper(), True, ink_on(body))
+            hi_lo = f_tiny.render(
                 f"{forecast['high']}°/{forecast['low']}°", True, ink_on(body)
             )
-            screen.blit(day, (rect.x + X(8), row_top))
+            line_y = row_top + max(0, (step - day.get_height()) // 2)
+            if line_y + day.get_height() > bottom_px:
+                break
+            screen.blit(day, (rect.x + X(8), line_y))
             screen.blit(
                 hi_lo,
-                (rect.right - hi_lo.get_width() - X(8), row_top)
+                (rect.right - hi_lo.get_width() - X(8), line_y)
             )
-            label = f_tiny.render(
-                fit_label(forecast["label"], 16 if half else 22),
-                True, muted_ink_on(body)
+            room = (
+                rect.width - day.get_width() - hi_lo.get_width() - X(28)
             )
-            screen.blit(
-                label,
-                (rect.x + X(8), row_top + day.get_height() + S(2))
-            )
+            if room > S(36) and step >= day.get_height():
+                label = f_tiny.render(
+                    fit_label(forecast["label"], 10 if half else 16),
+                    True, muted_ink_on(body)
+                )
+                if label.get_width() <= room:
+                    screen.blit(
+                        label,
+                        (rect.x + X(8) + day.get_width() + X(8), line_y)
+                    )
 
     if kind == "now_playing":
         station = stations[current_idx]['name'] if stations else "TCRADIOS"
@@ -6491,7 +6520,9 @@ def draw_home_card(
         genre = ""
         if stations:
             genre = str(stations[current_idx].get('genre') or "").strip()
-        text_h = 58 if (genre and genre.upper() not in (station.upper(), "TCRADIOS", "RADIO")) else 42
+        show_station = bool(station) and not same_label(playing, station)
+        show_genre = bool(genre) and not same_label(genre, playing) and not same_label(genre, station)
+        text_h = 22 + (20 if show_station else 0) + (18 if show_genre else 0)
         logo_bottom = inner_bottom - text_h
         avail_h = max(48, logo_bottom - inner_top)
         radius = min(56 if half else 64, max(28, avail_h // 2))
@@ -6525,40 +6556,42 @@ def draw_home_card(
                 S(radius - 2 + pulse * 4),
                 S(2)
             )
-        text_y = logo_bottom + 4
-        blit_centered(
+        text_y = Y(logo_bottom + 4)
+        title = blit_px(
             playing, f_sm if half else f_lg, ink_on(body), text_y, main_chars
         )
-        blit_centered(station, f_tiny, muted_ink_on(body), text_y + 22, sub_chars)
-        if text_h > 42:
-            blit_centered(genre, f_tiny, muted_ink_on(body), text_y + 40, sub_chars)
+        next_y = text_y + title.get_height() + S(4)
+        if show_station:
+            station_line = blit_px(
+                station, f_tiny, muted_ink_on(body), next_y, sub_chars
+            )
+            next_y += station_line.get_height() + S(2)
+        if show_genre:
+            blit_px(genre, f_tiny, muted_ink_on(body), next_y, sub_chars)
     elif kind == "weather":
-        current_h = max(108, min(inner_h * 42 // 100, inner_h - 150))
-        icon_size = max(28, min(current_h // 2, layout_w // 3))
-        icon_y = inner_top + 8 + icon_size // 2
+        icon_size = 26 if half else 34
+        icon_y = inner_top + 4 + icon_size // 2
         draw_weather_icon(
             screen, layout_x + layout_w // 2, icon_y,
             weather_type, icon_size,
             dimmed=False, on_background=body
         )
+        y = Y(icon_y) + S(icon_size) // 2 + S(8)
         temp_text = f"{current_temp}°C" if current_temp else "--°C"
-        today = weather_forecast[0] if weather_forecast else None
-        blit_centered(temp_text, f_weather, ink_on(body), icon_y + icon_size // 2 + 6, 8)
-        blit_centered(
-            weather_label.upper(), f_sm, ink_on(body),
-            inner_top + current_h - 40, main_chars
+        temp = blit_px(temp_text, f_weather, ink_on(body), y, 8)
+        y += temp.get_height() + S(6)
+        condition = blit_px(
+            weather_label.upper(), f_sm, ink_on(body), y, main_chars
         )
-        city_bits = [device_settings.weather_name.upper()]
-        if today:
-            city_bits.append(f"{today['high']}°/{today['low']}°")
-        if current_wind:
-            city_bits.append(f"{current_wind} KM/H")
-        blit_centered(
-            "  ·  ".join(city_bits), f_tiny, muted_ink_on(body),
-            inner_top + current_h - 20, sub_chars + 8
+        y += condition.get_height() + S(4)
+        city = blit_px(
+            device_settings.weather_name.upper(),
+            f_tiny, muted_ink_on(body), y, sub_chars
         )
+        y += city.get_height() + S(10)
+        forecast_top = max(inner_top + 120, int(round(y / max(SCALE_Y, 0.01))))
         draw_forecast_rows(
-            weather_forecast, inner_top + current_h, inner_bottom
+            weather_forecast, forecast_top, inner_bottom
         )
     elif kind == "forecast":
         if current_temp:
@@ -6610,18 +6643,34 @@ def draw_home_card(
         )
     elif kind == "clock":
         clock_now = datetime.now()
-        blit_centered(
-            clock_now.strftime("%H:%M"),
-            f_weather if half else f_xl,
-            ink_on(body), inner_top + inner_h // 5, 8
+        time_surf = f_xl.render(
+            clock_now.strftime("%H:%M"), True, ink_on(body)
         )
-        blit_centered(
-            clock_now.strftime("%A").upper(), f_sm, ink_on(body),
-            inner_top + inner_h // 2, 16
+        target_w = int(rect.width * 0.82)
+        target_h = int(
+            time_surf.get_height() * target_w / max(1, time_surf.get_width())
         )
-        blit_centered(
+        max_h = int(rect.height * 0.46)
+        if target_h > max_h:
+            target_h = max_h
+            target_w = int(
+                time_surf.get_width() * target_h / max(1, time_surf.get_height())
+            )
+        time_surf = pygame.transform.smoothscale(
+            time_surf, (max(1, target_w), max(1, target_h))
+        )
+        y = Y(inner_top) + S(6)
+        screen.blit(
+            time_surf,
+            (rect.centerx - time_surf.get_width() // 2, y)
+        )
+        y += time_surf.get_height() + S(14)
+        day = blit_px(
+            clock_now.strftime("%A").upper(), f_sm, ink_on(body), y, 16
+        )
+        blit_px(
             clock_now.strftime("%d %B %Y"), f_tiny, muted_ink_on(body),
-            inner_top + inner_h * 2 // 3, 22
+            y + day.get_height() + S(8), 22
         )
     elif kind == "favorites":
         saved = [
