@@ -224,6 +224,60 @@ class AudioOutputManager:
             )
         )
 
+    def _discovered_bluetooth_devices(self, output):
+        discovered = []
+        seen = set()
+        for line in output.splitlines():
+            match = re.search(
+                r'\[NEW\] Device ((?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s+(.+)$',
+                line.strip()
+            )
+            if not match:
+                continue
+            address = match.group(1).upper()
+            if address in seen:
+                continue
+            seen.add(address)
+            discovered.append({
+                'address': address,
+                'name': match.group(2).strip()
+            })
+        return discovered
+
+    def _merge_bluetooth_scan(self, discovered):
+        known = {device['address']: device for device in self.get_bluetooth_devices()}
+        ordered = []
+        seen = set()
+
+        def add(address, fallback_name=None):
+            if address in seen:
+                return
+            seen.add(address)
+            device = known.get(address)
+            if device is None:
+                device = {
+                    'address': address,
+                    'name': fallback_name or address,
+                    'paired': False,
+                    'connected': False,
+                    'default': address == self.default_bluetooth_address
+                }
+            elif fallback_name and device['name'] == device['address']:
+                device = {**device, 'name': fallback_name}
+            ordered.append(device)
+
+        for device in known.values():
+            if device.get('connected'):
+                add(device['address'])
+        for device in known.values():
+            if device.get('paired'):
+                add(device['address'])
+        for item in discovered:
+            add(item['address'], item.get('name'))
+        for device in known.values():
+            add(device['address'])
+        return ordered
+
     def scan_bluetooth(self):
         with self.bluetooth_lock:
             power_result = self._run(['bluetoothctl', 'power', 'on'])
@@ -231,8 +285,14 @@ class AudioOutputManager:
                 error = power_result.stderr.strip() or power_result.stdout.strip()
                 raise RuntimeError(error or 'Could not power on Bluetooth')
             # bluetoothctl performs discovery until its timeout expires.
-            self._run(['bluetoothctl', '--timeout', '8', 'scan', 'on'], timeout=12)
-            return self.get_bluetooth_devices()
+            scan_result = self._run(
+                ['bluetoothctl', '--timeout', '8', 'scan', 'on'],
+                timeout=12
+            )
+            discovered = self._discovered_bluetooth_devices(
+                scan_result.stdout + '\n' + scan_result.stderr
+            )
+            return self._merge_bluetooth_scan(discovered)
 
     def _find_bluetooth_sink(self, address):
         result = self._run(['pactl', 'list', 'sinks', 'short'])
@@ -833,6 +893,44 @@ BLACK = (0, 0, 0)
 BACKGROUND = current_theme.pygame_background
 
 # --- WEATHER, DISPLAY & POWER SETTINGS ---
+HOME_CARD_KINDS = (
+    "now_playing",
+    "weather",
+    "forecast",
+    "alarm",
+    "system",
+    "bluetooth",
+)
+HOME_CARD_LABELS = {
+    "now_playing": "NOW PLAYING",
+    "weather": "WEATHER",
+    "forecast": "FORECAST",
+    "alarm": "ALARM",
+    "system": "SYSTEM",
+    "bluetooth": "BLUETOOTH",
+}
+DEFAULT_HOME_CARDS = ["now_playing", "weather"]
+
+
+def normalize_home_cards(raw):
+    cards = []
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            if item in HOME_CARD_LABELS and item not in cards:
+                cards.append(item)
+    for kind in DEFAULT_HOME_CARDS:
+        if len(cards) >= 2:
+            break
+        if kind not in cards:
+            cards.append(kind)
+    for kind in HOME_CARD_KINDS:
+        if len(cards) >= 2:
+            break
+        if kind not in cards:
+            cards.append(kind)
+    return cards[:2]
+
+
 class DeviceSettingsManager:
     def __init__(self):
         self.settings_file = os.path.expanduser("~/.radio_device_settings")
@@ -844,6 +942,7 @@ class DeviceSettingsManager:
         self.auto_dim_enabled = False
         self.auto_dim_minutes = 5
         self.dim_brightness = 25
+        self.home_cards = list(DEFAULT_HOME_CARDS)
         self.applied_brightness = None
         self.hardware_brightness_available = False
         self.load()
@@ -880,6 +979,7 @@ class DeviceSettingsManager:
                     data.get("dim_brightness", self.dim_brightness)
                 ))
             )
+            self.home_cards = normalize_home_cards(data.get("home_cards"))
         except (OSError, ValueError, TypeError):
             pass
 
@@ -892,7 +992,8 @@ class DeviceSettingsManager:
             "brightness": self.brightness,
             "auto_dim_enabled": self.auto_dim_enabled,
             "auto_dim_minutes": self.auto_dim_minutes,
-            "dim_brightness": self.dim_brightness
+            "dim_brightness": self.dim_brightness,
+            "home_cards": list(self.home_cards)
         }
         try:
             with open(self.settings_file, "w", encoding="utf-8") as settings:
@@ -974,7 +1075,8 @@ class DeviceSettingsManager:
             "brightness": self.brightness,
             "auto_dim_enabled": self.auto_dim_enabled,
             "auto_dim_minutes": self.auto_dim_minutes,
-            "dim_brightness": self.dim_brightness
+            "dim_brightness": self.dim_brightness,
+            "home_cards": list(self.home_cards)
         }
 
 device_settings = DeviceSettingsManager()
@@ -5054,6 +5156,8 @@ system_stats_updating = False
 touch_bluetooth_devices = []
 touch_bluetooth_status = "Tap Search to find nearby devices"
 touch_bluetooth_busy = False
+touch_bluetooth_offset = 0
+home_card_pick_slot = None
 wifi_networks = []
 wifi_status_text = "Choose a network"
 wifi_busy = False
@@ -5362,13 +5466,29 @@ def refresh_system_stats():
     finally:
         system_stats_updating = False
 
+BLUETOOTH_PAGE_SIZE = 4
+
+
+def bluetooth_last_page_offset(count):
+    if count <= BLUETOOTH_PAGE_SIZE:
+        return 0
+    return ((count - 1) // BLUETOOTH_PAGE_SIZE) * BLUETOOTH_PAGE_SIZE
+
+
+def visible_bluetooth_devices():
+    return touch_bluetooth_devices[
+        touch_bluetooth_offset:touch_bluetooth_offset + BLUETOOTH_PAGE_SIZE
+    ]
+
+
 def scan_touch_bluetooth():
     global touch_bluetooth_devices, touch_bluetooth_status
-    global touch_bluetooth_busy
+    global touch_bluetooth_busy, touch_bluetooth_offset
     try:
         touch_bluetooth_status = "Searching for nearby devices…"
         touch_bluetooth_devices = audio_manager.scan_bluetooth()
         count = len(touch_bluetooth_devices)
+        touch_bluetooth_offset = bluetooth_last_page_offset(count)
         touch_bluetooth_status = (
             f"{count} device{'s' if count != 1 else ''} found"
         )
@@ -5585,13 +5705,31 @@ def handle_wifi_key(value):
         wifi_password_text += typed
         wifi_shift = False
 
+def assign_home_card(slot, kind):
+    if kind not in HOME_CARD_LABELS:
+        return
+    cards = list(device_settings.home_cards)
+    if slot not in (0, 1):
+        return
+    other = 1 - slot
+    if cards[other] == kind:
+        cards[other] = cards[slot]
+    cards[slot] = kind
+    device_settings.home_cards = normalize_home_cards(cards)
+    device_settings.save()
+
+
 def connect_touch_bluetooth(address, name):
     global touch_bluetooth_devices, touch_bluetooth_status
-    global touch_bluetooth_busy
+    global touch_bluetooth_busy, touch_bluetooth_offset
     try:
         touch_bluetooth_status = f"Connecting to {name}…"
         audio_manager.connect_bluetooth(address)
         touch_bluetooth_devices = audio_manager.get_bluetooth_devices()
+        touch_bluetooth_offset = min(
+            touch_bluetooth_offset,
+            bluetooth_last_page_offset(len(touch_bluetooth_devices))
+        )
         touch_bluetooth_status = f"Connected to {name}"
     except Exception as error:
         touch_bluetooth_status = str(error)
@@ -5896,7 +6034,7 @@ def draw_menu_screen(now):
         ("NOW PLAYING", "Radio controls"),
         ("FAVORITES", "Quick stations"),
         ("FORECAST", "Five days"),
-        ("CLOCK", "Time dashboard"),
+        ("CLOCK", "Choose two cards"),
         ("ALARM / SLEEP", "Timers"),
         ("SYSTEM", "Pi status"),
         ("LANGUAGES", "More streams"),
@@ -5955,40 +6093,129 @@ def draw_favorites_screen(now):
             draw_centered_text(screen, f_tiny, "EMPTY", muted_ink_on(body), rect)
     draw_pages_button()
 
+def draw_home_card(rect, kind, now, layout_y=248):
+    accents = {
+        "now_playing": UI_BLUE,
+        "weather": UI_PURPLE,
+        "forecast": UI_AMBER,
+        "alarm": UI_AMBER,
+        "system": (72, 80, 98),
+        "bluetooth": UI_GREEN,
+    }
+    body = draw_info_card(screen, rect, accents.get(kind, UI_BLUE), 16)
+    title = f_tiny.render(
+        HOME_CARD_LABELS.get(kind, "CARD"), True, muted_ink_on(body)
+    )
+    screen.blit(title, (rect.x + X(12), rect.y + Y(6)))
+    hint = f_tiny.render("TAP TO CHANGE", True, muted_ink_on(body))
+    screen.blit(
+        hint,
+        (rect.right - hint.get_width() - X(12), rect.y + Y(6))
+    )
+
+    if kind == "now_playing":
+        station = stations[current_idx]['name'] if stations else "TCRADIOS"
+        playing = sanitize_text(meta_text) or station
+        name = f_sm.render(fit_label(playing, 22), True, ink_on(body))
+        screen.blit(name, (rect.x + X(12), rect.y + Y(28)))
+        if playing != station:
+            extra = f_tiny.render(
+                fit_label(station, 28), True, muted_ink_on(body)
+            )
+            screen.blit(extra, (rect.x + X(12), rect.y + Y(52)))
+    elif kind == "weather":
+        draw_weather_icon(
+            screen, 52, layout_y + 46, weather_type, 16,
+            dimmed=False, on_background=body
+        )
+        temp = f_sm.render(f"{current_temp}°C", True, ink_on(body))
+        screen.blit(temp, (rect.x + X(78), rect.y + Y(26)))
+        city = f_tiny.render(
+            fit_label(device_settings.weather_name.upper(), 22),
+            True, muted_ink_on(body)
+        )
+        screen.blit(city, (rect.x + X(78), rect.y + Y(50)))
+    elif kind == "forecast":
+        today = weather_forecast[0] if weather_forecast else None
+        if today:
+            line = f_sm.render(
+                f"{today['high']}° / {today['low']}°", True, ink_on(body)
+            )
+            screen.blit(line, (rect.x + X(12), rect.y + Y(28)))
+            extra = f_tiny.render(
+                fit_label(f"{today['day']} • {today['label']}", 28),
+                True, muted_ink_on(body)
+            )
+            screen.blit(extra, (rect.x + X(12), rect.y + Y(52)))
+        else:
+            empty = f_sm.render("No forecast yet", True, muted_ink_on(body))
+            screen.blit(empty, (rect.x + X(12), rect.y + Y(34)))
+    elif kind == "alarm":
+        alarm = f_sm.render(alarm_system.alarm_time, True, ink_on(body))
+        screen.blit(alarm, (rect.x + X(12), rect.y + Y(28)))
+        state = (
+            "ALARM ON" if alarm_system.alarm_enabled else "ALARM OFF"
+        )
+        extra = f_tiny.render(state, True, muted_ink_on(body))
+        screen.blit(extra, (rect.x + X(12), rect.y + Y(52)))
+    elif kind == "system":
+        line = f_sm.render(
+            fit_label(f"CPU {system_stats['cpu_temp']}", 22),
+            True, ink_on(body)
+        )
+        screen.blit(line, (rect.x + X(12), rect.y + Y(28)))
+        extra = f_tiny.render(
+            fit_label(f"IP {current_ip}", 28), True, muted_ink_on(body)
+        )
+        screen.blit(extra, (rect.x + X(12), rect.y + Y(52)))
+    elif kind == "bluetooth":
+        line = f_sm.render(
+            fit_label(system_stats['bluetooth'], 22), True, ink_on(body)
+        )
+        screen.blit(line, (rect.x + X(12), rect.y + Y(28)))
+        extra = f_tiny.render("SPEAKER", True, muted_ink_on(body))
+        screen.blit(extra, (rect.x + X(12), rect.y + Y(52)))
+    return body
+
+
+def draw_home_card_picker(slot):
+    panel = R(16, 72, 288, 340)
+    pygame.draw.rect(screen, UI_SURFACE, panel, border_radius=S(18))
+    pygame.draw.rect(screen, (54, 64, 91), panel, S(1), border_radius=S(18))
+    draw_centered_text(
+        screen, f_sm, f"CHOOSE CARD {slot + 1}", UI_TEXT, R(16, 80, 288, 36)
+    )
+    current = device_settings.home_cards[slot]
+    for index, kind in enumerate(HOME_CARD_KINDS):
+        rect = home_card_choice_rects[index]
+        border = UI_GREEN if kind == current else UI_BLUE
+        labeled_button(
+            screen, rect, border, f_tiny, HOME_CARD_LABELS[kind], 12
+        )
+
+
 def draw_clock_screen(now):
     draw_page_base("CLOCK", now)
     current_time = datetime.now()
     time_surface = f_xl.render(current_time.strftime("%H:%M"), True, UI_TEXT)
-    screen.blit(time_surface, (X(160) - time_surface.get_width() // 2, Y(82)))
+    screen.blit(time_surface, (X(160) - time_surface.get_width() // 2, Y(70)))
     date_surface = f_med.render(
         current_time.strftime("%A").upper(), True, ink_on(UI_BG_TOP, UI_BLUE)
     )
-    screen.blit(date_surface, (X(160) - date_surface.get_width() // 2, Y(177)))
+    screen.blit(date_surface, (X(160) - date_surface.get_width() // 2, Y(148)))
     full_date = f_sm.render(
         current_time.strftime("%d %B %Y"), True, muted_ink_on(UI_BG_TOP)
     )
-    screen.blit(full_date, (X(160) - full_date.get_width() // 2, Y(213)))
+    screen.blit(full_date, (X(160) - full_date.get_width() // 2, Y(184)))
+    hint = f_tiny.render("Tap a card to change it", True, UI_MUTED)
+    screen.blit(hint, (X(160) - hint.get_width() // 2, Y(220)))
 
-    weather_card = R(28, 252, 264, 78)
-    body = draw_info_card(screen, weather_card, UI_PURPLE, 18)
-    draw_weather_icon(
-        screen, 76, 291, weather_type, 22,
-        dimmed=False, on_background=body
-    )
-    temp = f_weather.render(f"{current_temp}°C", True, ink_on(body))
-    screen.blit(temp, (X(112), weather_card.y + Y(11)))
-    city = f_tiny.render(
-        fit_label(device_settings.weather_name.upper(), 18),
-        True, muted_ink_on(body)
-    )
-    screen.blit(city, (X(116), weather_card.y + Y(53)))
-
-    station_card = R(28, 344, 264, 58)
-    body = draw_info_card(screen, station_card, (72, 80, 98), 15)
-    draw_centered_text(
-        screen, f_sm, fit_label(stations[current_idx]['name'], 28),
-        ink_on(body), station_card
-    )
+    for index, (rect, kind) in enumerate(
+        zip(home_card_rects, device_settings.home_cards)
+    ):
+        draw_home_card(rect, kind, now, 248 if index == 0 else 338)
+    if home_card_pick_slot is not None:
+        draw_home_card_picker(home_card_pick_slot)
     draw_pages_button()
 
 def draw_alarm_screen(now):
@@ -6156,14 +6383,12 @@ def draw_bluetooth_screen(now):
     )
     screen.blit(
         status_surface,
-        (160 - status_surface.get_width() // 2, 124)
+        (X(160) - status_surface.get_width() // 2, Y(118))
     )
 
-    if touch_bluetooth_devices:
-        for index, rect in enumerate(bluetooth_device_rects):
-            if index >= len(touch_bluetooth_devices):
-                break
-            device = touch_bluetooth_devices[index]
+    visible = visible_bluetooth_devices()
+    if visible:
+        for device, rect in zip(visible, bluetooth_device_rects):
             connected = device.get('connected', False)
             accent = UI_GREEN if connected else (72, 80, 98)
             body = draw_info_card(screen, rect, accent, 13)
@@ -6182,12 +6407,30 @@ def draw_bluetooth_screen(now):
             )
             screen.blit(state_surface, (rect.x + X(13), rect.y + Y(24)))
     else:
-        empty_rect = R(18, 142, 284, 272)
+        empty_rect = R(18, 142, 284, 208)
         body = draw_info_card(screen, empty_rect, (72, 80, 98), 16)
         draw_centered_text(
             screen, f_sm, "No devices loaded", muted_ink_on(body), empty_rect
         )
 
+    count = len(touch_bluetooth_devices)
+    page_number = touch_bluetooth_offset // BLUETOOTH_PAGE_SIZE + 1
+    page_count = max(1, math.ceil(count / BLUETOOTH_PAGE_SIZE))
+    labeled_button(
+        screen, btn_bluetooth_previous,
+        UI_BLUE if touch_bluetooth_offset > 0 else (55, 61, 77),
+        f_tiny, "PREV", 13
+    )
+    draw_centered_text(
+        screen, f_sm, f"{page_number} / {page_count}", UI_MUTED,
+        R(118, 360, 84, 44)
+    )
+    has_next = touch_bluetooth_offset + BLUETOOTH_PAGE_SIZE < count
+    labeled_button(
+        screen, btn_bluetooth_next,
+        UI_BLUE if has_next else (55, 61, 77),
+        f_tiny, "NEXT", 13
+    )
     labeled_button(
         screen, btn_bluetooth_back, UI_BLUE, f_sm, "‹  SETTINGS", 16
     )
@@ -6799,11 +7042,21 @@ if not has_network_connection():
     wifi_setup_required = True
     active_page = "wifi"
     begin_wifi_scan()
-btn_bluetooth_search = R(70, 75, 180, 42)
+btn_bluetooth_search = R(70, 64, 180, 42)
 bluetooth_device_rects = [
-    R(18, 142 + index * 46, 284, 42) for index in range(6)
+    R(18, 142 + index * 52, 284, 46) for index in range(BLUETOOTH_PAGE_SIZE)
 ]
+btn_bluetooth_previous = R(18, 360, 88, 44)
+btn_bluetooth_next = R(214, 360, 88, 44)
 btn_bluetooth_back = R(70, 430, 180, 38)
+home_card_rects = [
+    R(18, 248, 284, 78),
+    R(18, 338, 284, 78),
+]
+home_card_choice_rects = [
+    R(28 + (index % 2) * 138, 124 + (index // 2) * 70, 128, 58)
+    for index in range(len(HOME_CARD_KINDS))
+]
 language_card_rects = [
     R(16 + (index % 2) * 152, 75 + (index // 2) * 83, 136, 70)
     for index in range(8)
@@ -6897,7 +7150,7 @@ while True:
         last_weather_update = now
 
     if (
-        active_page in ("system", "settings")
+        active_page in ("system", "settings", "clock")
         and now - last_system_update > 10
         and not system_stats_updating
     ):
@@ -7255,15 +7508,22 @@ while True:
                     threading.Thread(
                         target=scan_touch_bluetooth, daemon=True
                     ).start()
-                elif not touch_bluetooth_busy:
-                    for device_index, rect in enumerate(
-                        bluetooth_device_rects
+                elif btn_bluetooth_previous.collidepoint(event.pos):
+                    if touch_bluetooth_offset > 0:
+                        touch_bluetooth_offset = max(
+                            0, touch_bluetooth_offset - BLUETOOTH_PAGE_SIZE
+                        )
+                elif btn_bluetooth_next.collidepoint(event.pos):
+                    if (
+                        touch_bluetooth_offset + BLUETOOTH_PAGE_SIZE
+                        < len(touch_bluetooth_devices)
                     ):
-                        if (
-                            rect.collidepoint(event.pos)
-                            and device_index < len(touch_bluetooth_devices)
-                        ):
-                            device = touch_bluetooth_devices[device_index]
+                        touch_bluetooth_offset += BLUETOOTH_PAGE_SIZE
+                elif not touch_bluetooth_busy:
+                    for device, rect in zip(
+                        visible_bluetooth_devices(), bluetooth_device_rects
+                    ):
+                        if rect.collidepoint(event.pos):
                             touch_bluetooth_busy = True
                             threading.Thread(
                                 target=connect_touch_bluetooth,
@@ -7338,6 +7598,7 @@ while True:
             if active_page != "radio":
                 if btn_pages.collidepoint(event.pos):
                     youtube_keyboard_open = False
+                    home_card_pick_slot = None
                     active_page = "menu"
                 elif active_page == "youtube":
                     if btn_youtube_search_go.collidepoint(event.pos):
@@ -7387,6 +7648,24 @@ while True:
                                     if rect.collidepoint(event.pos):
                                         begin_youtube_play(video)
                                         break
+                elif active_page == "clock":
+                    if home_card_pick_slot is not None:
+                        picked = False
+                        for kind, rect in zip(
+                            HOME_CARD_KINDS, home_card_choice_rects
+                        ):
+                            if rect.collidepoint(event.pos):
+                                assign_home_card(home_card_pick_slot, kind)
+                                home_card_pick_slot = None
+                                picked = True
+                                break
+                        if not picked:
+                            home_card_pick_slot = None
+                    else:
+                        for slot, rect in enumerate(home_card_rects):
+                            if rect.collidepoint(event.pos):
+                                home_card_pick_slot = slot
+                                break
                 elif active_page == "favorites":
                     if btn_favorite_toggle.collidepoint(event.pos):
                         toggle_current_favorite()
@@ -7450,6 +7729,17 @@ while True:
                         if rect.collidepoint(event.pos) and available:
                             if output_name == "bluetooth":
                                 active_page = "bluetooth"
+                                if (
+                                    not touch_bluetooth_devices
+                                    and not touch_bluetooth_busy
+                                ):
+                                    try:
+                                        touch_bluetooth_devices = (
+                                            audio_manager.get_bluetooth_devices()
+                                        )
+                                        touch_bluetooth_offset = 0
+                                    except Exception:
+                                        pass
                             else:
                                 audio_manager.set_output(output_name)
                             break
