@@ -5750,13 +5750,13 @@ def swap_home_cards():
     device_settings.save()
 
 
-def home_card_slots(top=192):
+def home_card_slots(top=64, height=200):
     cards = device_settings.home_cards
     if device_settings.home_card_layout == "single":
-        return [(R(16, top, 288, 70), cards[0], 16)]
+        return [(R(8, top, 304, height), cards[0], 8, top, 304, height)]
     return [
-        (R(16, top, 132, 70), cards[0], 16),
-        (R(172, top, 132, 70), cards[1], 172),
+        (R(8, top, 148, height), cards[0], 8, top, 148, height),
+        (R(164, top, 148, height), cards[1], 164, top, 148, height),
     ]
 
 
@@ -6134,7 +6134,10 @@ def draw_favorites_screen(now):
             draw_centered_text(screen, f_tiny, "EMPTY", muted_ink_on(body), rect)
     draw_pages_button()
 
-def draw_home_card(rect, kind, now, layout_x=16, layout_y=192):
+def draw_home_card(
+    rect, kind, now, layout_x=8, layout_y=64, layout_w=148, layout_h=200
+):
+    global logo_rect
     accents = {
         "now_playing": UI_BLUE,
         "weather": UI_PURPLE,
@@ -6143,78 +6146,129 @@ def draw_home_card(rect, kind, now, layout_x=16, layout_y=192):
         "system": (72, 80, 98),
         "bluetooth": UI_GREEN,
     }
-    compact = rect.width < X(200)
+    half = layout_w < 220
+    tall = layout_h >= 140
     body = draw_info_card(
-        screen, rect, accents.get(kind, UI_BLUE), 24 if compact else 16
+        screen, rect, accents.get(kind, UI_BLUE), 22
     )
     title = f_tiny.render(
         HOME_CARD_LABELS.get(kind, "CARD"), True, muted_ink_on(body)
     )
-    screen.blit(title, (rect.x + X(10), rect.y + Y(5)))
-    main_chars = 12 if compact else 22
-    sub_chars = 14 if compact else 28
+    screen.blit(
+        title,
+        (rect.centerx - title.get_width() // 2, rect.y + Y(8))
+    )
+    main_chars = 12 if half else 28
+    sub_chars = 14 if half else 32
+    text_font = f_sm if (half or not tall) else f_lg
+
+    def blit_lines(main_text, sub_text, y_layout):
+        main_surf = text_font.render(
+            fit_label(main_text, main_chars), True, ink_on(body)
+        )
+        screen.blit(
+            main_surf,
+            (rect.centerx - main_surf.get_width() // 2, Y(y_layout))
+        )
+        sub_surf = f_tiny.render(
+            fit_label(sub_text, sub_chars), True, muted_ink_on(body)
+        )
+        screen.blit(
+            sub_surf,
+            (rect.centerx - sub_surf.get_width() // 2, Y(y_layout + 22))
+        )
 
     if kind == "now_playing":
         station = stations[current_idx]['name'] if stations else "TCRADIOS"
         playing = sanitize_text(meta_text) or station
-        name = f_sm.render(fit_label(playing, main_chars), True, ink_on(body))
-        screen.blit(name, (rect.x + X(10), rect.y + Y(24)))
-        extra = f_tiny.render(
-            fit_label(station, sub_chars), True, muted_ink_on(body)
-        )
-        screen.blit(extra, (rect.x + X(10), rect.y + Y(46)))
-    elif kind == "weather":
-        if not compact:
-            draw_weather_icon(
-                screen, layout_x + 36, layout_y + 38, weather_type, 16,
-                dimmed=False, on_background=body
+        if tall:
+            radius = 48 if half else 56
+            cx = layout_x + layout_w // 2
+            cy = layout_y + 28 + radius
+            pygame.draw.ellipse(screen, (17, 31, 53), E(cx, cy, radius))
+            pygame.draw.ellipse(
+                screen, (40, 58, 91), E(cx, cy, radius - 2), S(1)
             )
-        temp = f_sm.render(f"{current_temp}°C", True, ink_on(body))
-        text_x = rect.x + (X(10) if compact else X(70))
-        screen.blit(temp, (text_x, rect.y + Y(24)))
-        city = f_tiny.render(
-            fit_label(device_settings.weather_name.upper(), sub_chars),
-            True, muted_ink_on(body)
-        )
-        screen.blit(city, (text_x, rect.y + Y(46)))
+            inner_r = radius - 4
+            logo_rect = R(cx - inner_r, cy - inner_r, inner_r * 2, inner_r * 2)
+            screen.blit(
+                pygame.transform.smoothscale(
+                    logo, (logo_rect.width, logo_rect.height)
+                ),
+                logo_rect
+            )
+            try:
+                is_playing = player.get_state() == vlc.State.Playing
+            except Exception:
+                is_playing = False
+            if is_playing:
+                pulse = (math.sin(now * 3) + 1) / 2
+                pygame.draw.ellipse(
+                    screen,
+                    (
+                        int(UI_BLUE[0] * 0.75),
+                        int(UI_BLUE[1] * 0.75),
+                        int(UI_BLUE[2] * 0.75)
+                    ),
+                    E(cx, cy, radius - 2 + pulse * 4),
+                    S(2)
+                )
+            blit_lines(playing, station, layout_y + 28 + radius * 2 + 8)
+        else:
+            blit_lines(playing, station, layout_y + 28)
+    elif kind == "weather":
+        if tall:
+            draw_weather_icon(
+                screen, layout_x + layout_w // 2, layout_y + 78,
+                weather_type, 28, dimmed=False, on_background=body
+            )
+            temp = f_weather.render(f"{current_temp}°C", True, ink_on(body))
+            screen.blit(
+                temp,
+                (rect.centerx - temp.get_width() // 2, Y(layout_y + 118))
+            )
+            city = f_tiny.render(
+                fit_label(device_settings.weather_name.upper(), sub_chars),
+                True, muted_ink_on(body)
+            )
+            screen.blit(
+                city,
+                (rect.centerx - city.get_width() // 2, Y(layout_y + 162))
+            )
+        else:
+            blit_lines(
+                f"{current_temp}°C",
+                device_settings.weather_name.upper(),
+                layout_y + 28
+            )
     elif kind == "forecast":
         today = weather_forecast[0] if weather_forecast else None
         if today:
-            line = f_sm.render(
-                f"{today['high']}° / {today['low']}°", True, ink_on(body)
+            blit_lines(
+                f"{today['high']}° / {today['low']}°",
+                f"{today['day']} {today['label']}",
+                layout_y + (78 if tall else 28)
             )
-            screen.blit(line, (rect.x + X(10), rect.y + Y(24)))
-            extra = f_tiny.render(
-                fit_label(f"{today['day']} {today['label']}", sub_chars),
-                True, muted_ink_on(body)
-            )
-            screen.blit(extra, (rect.x + X(10), rect.y + Y(46)))
         else:
-            empty = f_tiny.render("No forecast yet", True, muted_ink_on(body))
-            screen.blit(empty, (rect.x + X(10), rect.y + Y(30)))
+            blit_lines("No forecast", "yet", layout_y + (78 if tall else 28))
     elif kind == "alarm":
-        alarm = f_sm.render(alarm_system.alarm_time, True, ink_on(body))
-        screen.blit(alarm, (rect.x + X(10), rect.y + Y(24)))
-        state = "ALARM ON" if alarm_system.alarm_enabled else "ALARM OFF"
-        extra = f_tiny.render(state, True, muted_ink_on(body))
-        screen.blit(extra, (rect.x + X(10), rect.y + Y(46)))
+        blit_lines(
+            alarm_system.alarm_time,
+            "ALARM ON" if alarm_system.alarm_enabled else "ALARM OFF",
+            layout_y + (78 if tall else 28)
+        )
     elif kind == "system":
-        line = f_sm.render(
-            fit_label(f"CPU {system_stats['cpu_temp']}", main_chars),
-            True, ink_on(body)
+        blit_lines(
+            f"CPU {system_stats['cpu_temp']}",
+            f"IP {current_ip}",
+            layout_y + (78 if tall else 28)
         )
-        screen.blit(line, (rect.x + X(10), rect.y + Y(24)))
-        extra = f_tiny.render(
-            fit_label(f"IP {current_ip}", sub_chars), True, muted_ink_on(body)
-        )
-        screen.blit(extra, (rect.x + X(10), rect.y + Y(46)))
     elif kind == "bluetooth":
-        line = f_sm.render(
-            fit_label(system_stats['bluetooth'], main_chars), True, ink_on(body)
+        blit_lines(
+            system_stats['bluetooth'],
+            "SPEAKER",
+            layout_y + (78 if tall else 28)
         )
-        screen.blit(line, (rect.x + X(10), rect.y + Y(24)))
-        extra = f_tiny.render("SPEAKER", True, muted_ink_on(body))
-        screen.blit(extra, (rect.x + X(10), rect.y + Y(46)))
     return body
 
 
@@ -6414,12 +6468,12 @@ def draw_home_cards_settings_screen(now):
     labeled_button(
         screen, btn_card_layout_single,
         UI_GREEN if not bubble else (55, 61, 77),
-        f_sm, "SINGLE", 13
+        f_tiny, "1 FULL", 13
     )
     labeled_button(
         screen, btn_card_layout_bubble,
         UI_GREEN if bubble else (55, 61, 77),
-        f_sm, "BUBBLE", 13
+        f_tiny, "2 HALVES", 13
     )
 
     left_title = f_tiny.render(
@@ -6446,8 +6500,14 @@ def draw_home_cards_settings_screen(now):
 
     preview = f_tiny.render("PREVIEW", True, UI_MUTED)
     screen.blit(preview, XY(18, 292))
-    for rect, kind, layout_x in home_card_slots(top=312):
-        draw_home_card(rect, kind, now, layout_x=layout_x, layout_y=312)
+    for rect, kind, layout_x, layout_y, layout_w, layout_h in home_card_slots(
+        top=318, height=64
+    ):
+        draw_home_card(
+            rect, kind, now,
+            layout_x=layout_x, layout_y=layout_y,
+            layout_w=layout_w, layout_h=layout_h
+        )
 
     labeled_button(
         screen, btn_home_cards_back, UI_BLUE, f_sm, "‹  SETTINGS", 16
@@ -7300,34 +7360,12 @@ while True:
         try: is_playing = player.get_state() == vlc.State.Playing
         except: is_playing = False
 
-        # Artwork follows the stretched layout so the ring and logo share
-        # the same box instead of a round min-scale sitting off-center.
-        pygame.draw.ellipse(screen, (17, 31, 53), E(160, 128, 60))
-        pygame.draw.ellipse(screen, (40, 58, 91), E(160, 128, 58), S(1))
-        logo_rect = R(104, 72, 112, 112)
-        screen.blit(
-            pygame.transform.smoothscale(
-                logo, (logo_rect.width, logo_rect.height)
-            ),
-            logo_rect
-        )
-
-        if is_playing:
-            pulse = (math.sin(time.time() * 3) + 1) / 2
-            pulse_color = (
-                int(UI_BLUE[0] * 0.75),
-                int(UI_BLUE[1] * 0.75),
-                int(UI_BLUE[2] * 0.75)
-            )
-            pygame.draw.ellipse(
-                screen, pulse_color, E(160, 128, 58 + pulse * 4), S(2)
-            )
-        else:
-            pygame.draw.ellipse(screen, UI_MUTED, E(160, 128, 58), S(1))
-
-        for rect, kind, layout_x in home_card_slots(top=192):
+        logo_rect = R(0, 0, 1, 1)
+        for rect, kind, layout_x, layout_y, layout_w, layout_h in home_card_slots():
             draw_home_card(
-                rect, kind, now, layout_x=layout_x, layout_y=192
+                rect, kind, now,
+                layout_x=layout_x, layout_y=layout_y,
+                layout_w=layout_w, layout_h=layout_h
             )
 
         # Volume strip: circular vector − / + so glyphs never become boxes
