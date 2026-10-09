@@ -910,6 +910,8 @@ HOME_CARD_LABELS = {
     "bluetooth": "BLUETOOTH",
 }
 DEFAULT_HOME_CARDS = ["now_playing", "weather"]
+HOME_CARD_LAYOUTS = ("single", "bubble")
+DEFAULT_HOME_CARD_LAYOUT = "bubble"
 
 
 def normalize_home_cards(raw):
@@ -931,6 +933,12 @@ def normalize_home_cards(raw):
     return cards[:2]
 
 
+def normalize_home_card_layout(raw):
+    if raw in HOME_CARD_LAYOUTS:
+        return raw
+    return DEFAULT_HOME_CARD_LAYOUT
+
+
 class DeviceSettingsManager:
     def __init__(self):
         self.settings_file = os.path.expanduser("~/.radio_device_settings")
@@ -943,6 +951,7 @@ class DeviceSettingsManager:
         self.auto_dim_minutes = 5
         self.dim_brightness = 25
         self.home_cards = list(DEFAULT_HOME_CARDS)
+        self.home_card_layout = DEFAULT_HOME_CARD_LAYOUT
         self.applied_brightness = None
         self.hardware_brightness_available = False
         self.load()
@@ -980,6 +989,9 @@ class DeviceSettingsManager:
                 ))
             )
             self.home_cards = normalize_home_cards(data.get("home_cards"))
+            self.home_card_layout = normalize_home_card_layout(
+                data.get("home_card_layout")
+            )
         except (OSError, ValueError, TypeError):
             pass
 
@@ -993,7 +1005,8 @@ class DeviceSettingsManager:
             "auto_dim_enabled": self.auto_dim_enabled,
             "auto_dim_minutes": self.auto_dim_minutes,
             "dim_brightness": self.dim_brightness,
-            "home_cards": list(self.home_cards)
+            "home_cards": list(self.home_cards),
+            "home_card_layout": self.home_card_layout
         }
         try:
             with open(self.settings_file, "w", encoding="utf-8") as settings:
@@ -1076,7 +1089,8 @@ class DeviceSettingsManager:
             "auto_dim_enabled": self.auto_dim_enabled,
             "auto_dim_minutes": self.auto_dim_minutes,
             "dim_brightness": self.dim_brightness,
-            "home_cards": list(self.home_cards)
+            "home_cards": list(self.home_cards),
+            "home_card_layout": self.home_card_layout
         }
 
 device_settings = DeviceSettingsManager()
@@ -5157,7 +5171,6 @@ touch_bluetooth_devices = []
 touch_bluetooth_status = "Tap Search to find nearby devices"
 touch_bluetooth_busy = False
 touch_bluetooth_offset = 0
-home_card_pick_slot = None
 wifi_networks = []
 wifi_status_text = "Choose a network"
 wifi_busy = False
@@ -5705,18 +5718,46 @@ def handle_wifi_key(value):
         wifi_password_text += typed
         wifi_shift = False
 
-def assign_home_card(slot, kind):
-    if kind not in HOME_CARD_LABELS:
-        return
-    cards = list(device_settings.home_cards)
+def set_home_card_layout(layout):
+    device_settings.home_card_layout = normalize_home_card_layout(layout)
+    device_settings.save()
+
+
+def cycle_home_card(slot, direction):
     if slot not in (0, 1):
         return
-    other = 1 - slot
-    if cards[other] == kind:
-        cards[other] = cards[slot]
-    cards[slot] = kind
+    kinds = list(HOME_CARD_KINDS)
+    cards = list(device_settings.home_cards)
+    current = cards[slot]
+    index = kinds.index(current) if current in kinds else 0
+    other = cards[1 - slot]
+    for _ in kinds:
+        index = (index + direction) % len(kinds)
+        candidate = kinds[index]
+        if (
+            device_settings.home_card_layout == "single"
+            or candidate != other
+        ):
+            cards[slot] = candidate
+            break
     device_settings.home_cards = normalize_home_cards(cards)
     device_settings.save()
+
+
+def swap_home_cards():
+    cards = list(device_settings.home_cards)
+    device_settings.home_cards = [cards[1], cards[0]]
+    device_settings.save()
+
+
+def home_card_slots(top=192):
+    cards = device_settings.home_cards
+    if device_settings.home_card_layout == "single":
+        return [(R(16, top, 288, 70), cards[0], 16)]
+    return [
+        (R(16, top, 132, 70), cards[0], 16),
+        (R(172, top, 132, 70), cards[1], 172),
+    ]
 
 
 def connect_touch_bluetooth(address, name):
@@ -6103,7 +6144,9 @@ def draw_home_card(rect, kind, now, layout_x=16, layout_y=192):
         "bluetooth": UI_GREEN,
     }
     compact = rect.width < X(200)
-    body = draw_info_card(screen, rect, accents.get(kind, UI_BLUE), 14)
+    body = draw_info_card(
+        screen, rect, accents.get(kind, UI_BLUE), 24 if compact else 16
+    )
     title = f_tiny.render(
         HOME_CARD_LABELS.get(kind, "CARD"), True, muted_ink_on(body)
     )
@@ -6173,22 +6216,6 @@ def draw_home_card(rect, kind, now, layout_x=16, layout_y=192):
         extra = f_tiny.render("SPEAKER", True, muted_ink_on(body))
         screen.blit(extra, (rect.x + X(10), rect.y + Y(46)))
     return body
-
-
-def draw_home_card_picker(slot):
-    panel = R(16, 72, 288, 340)
-    pygame.draw.rect(screen, UI_SURFACE, panel, border_radius=S(18))
-    pygame.draw.rect(screen, (54, 64, 91), panel, S(1), border_radius=S(18))
-    draw_centered_text(
-        screen, f_sm, f"CHOOSE CARD {slot + 1}", UI_TEXT, R(16, 80, 288, 36)
-    )
-    current = device_settings.home_cards[slot]
-    for index, kind in enumerate(HOME_CARD_KINDS):
-        rect = home_card_choice_rects[index]
-        border = UI_GREEN if kind == current else UI_BLUE
-        labeled_button(
-            screen, rect, border, f_tiny, HOME_CARD_LABELS[kind], 12
-        )
 
 
 def draw_clock_screen(now):
@@ -6376,7 +6403,56 @@ def draw_settings_screen(now):
     labeled_button(screen, btn_theme_next, UI_BLUE, f_lg, "›", 14)
     labeled_button(screen, btn_wifi_setup, UI_GREEN, f_tiny, "WI-FI", 14)
     labeled_button(screen, btn_wifi_qr, UI_PURPLE, f_tiny, "WEB QR", 14)
+    labeled_button(screen, btn_home_cards, UI_AMBER, f_tiny, "CARDS", 14)
     draw_pages_button()
+
+def draw_home_cards_settings_screen(now):
+    draw_page_base("HOME CARDS", now)
+    layout_title = f_tiny.render("LAYOUT", True, UI_MUTED)
+    screen.blit(layout_title, XY(18, 62))
+    bubble = device_settings.home_card_layout == "bubble"
+    labeled_button(
+        screen, btn_card_layout_single,
+        UI_GREEN if not bubble else (55, 61, 77),
+        f_sm, "SINGLE", 13
+    )
+    labeled_button(
+        screen, btn_card_layout_bubble,
+        UI_GREEN if bubble else (55, 61, 77),
+        f_sm, "BUBBLE", 13
+    )
+
+    left_title = f_tiny.render(
+        "LEFT CARD" if bubble else "CARD", True, UI_MUTED
+    )
+    screen.blit(left_title, XY(18, 118))
+    labeled_button(screen, btn_card_left_prev, UI_BLUE, f_lg, "‹", 13)
+    labeled_button(
+        screen, btn_card_left_label, UI_BLUE, f_tiny,
+        HOME_CARD_LABELS[device_settings.home_cards[0]], 13
+    )
+    labeled_button(screen, btn_card_left_next, UI_BLUE, f_lg, "›", 13)
+
+    if bubble:
+        right_title = f_tiny.render("RIGHT CARD", True, UI_MUTED)
+        screen.blit(right_title, XY(18, 186))
+        labeled_button(screen, btn_card_right_prev, UI_BLUE, f_lg, "‹", 13)
+        labeled_button(
+            screen, btn_card_right_label, UI_PURPLE, f_tiny,
+            HOME_CARD_LABELS[device_settings.home_cards[1]], 13
+        )
+        labeled_button(screen, btn_card_right_next, UI_BLUE, f_lg, "›", 13)
+        labeled_button(screen, btn_card_swap, UI_AMBER, f_sm, "SWAP ORDER", 14)
+
+    preview = f_tiny.render("PREVIEW", True, UI_MUTED)
+    screen.blit(preview, XY(18, 292))
+    for rect, kind, layout_x in home_card_slots(top=312):
+        draw_home_card(rect, kind, now, layout_x=layout_x, layout_y=312)
+
+    labeled_button(
+        screen, btn_home_cards_back, UI_BLUE, f_sm, "‹  SETTINGS", 16
+    )
+
 
 def draw_bluetooth_screen(now):
     draw_page_base("BLUETOOTH", now)
@@ -7016,8 +7092,9 @@ btn_auto_dim = R(78, 184, 164, 48)
 btn_brightness_plus = R(252, 184, 50, 48)
 btn_theme_previous = R(18, 274, 50, 58)
 btn_theme_next = R(252, 274, 50, 58)
-btn_wifi_setup = R(16, 353, 140, 50)
-btn_wifi_qr = R(164, 353, 140, 50)
+btn_wifi_setup = R(16, 353, 92, 50)
+btn_wifi_qr = R(114, 353, 92, 50)
+btn_home_cards = R(212, 353, 92, 50)
 btn_wifi_scan = R(16, 86, 288, 40)
 wifi_network_rects = [
     R(16, 142 + index * 50, 288, 46) for index in range(4)
@@ -7058,14 +7135,16 @@ bluetooth_device_rects = [
 btn_bluetooth_previous = R(18, 360, 88, 44)
 btn_bluetooth_next = R(214, 360, 88, 44)
 btn_bluetooth_back = R(70, 430, 180, 38)
-home_card_rects = [
-    R(16, 192, 140, 70),
-    R(164, 192, 140, 70),
-]
-home_card_choice_rects = [
-    R(28 + (index % 2) * 138, 124 + (index // 2) * 70, 128, 58)
-    for index in range(len(HOME_CARD_KINDS))
-]
+btn_card_layout_single = R(16, 76, 140, 40)
+btn_card_layout_bubble = R(164, 76, 140, 40)
+btn_card_left_prev = R(16, 132, 44, 44)
+btn_card_left_label = R(66, 132, 188, 44)
+btn_card_left_next = R(260, 132, 44, 44)
+btn_card_right_prev = R(16, 194, 44, 44)
+btn_card_right_label = R(66, 194, 188, 44)
+btn_card_right_next = R(260, 194, 44, 44)
+btn_card_swap = R(16, 248, 288, 40)
+btn_home_cards_back = R(70, 430, 180, 38)
 language_card_rects = [
     R(16 + (index % 2) * 152, 75 + (index // 2) * 83, 136, 70)
     for index in range(8)
@@ -7246,13 +7325,9 @@ while True:
         else:
             pygame.draw.ellipse(screen, UI_MUTED, E(160, 128, 58), S(1))
 
-        for index, (rect, kind) in enumerate(
-            zip(home_card_rects, device_settings.home_cards)
-        ):
+        for rect, kind, layout_x in home_card_slots(top=192):
             draw_home_card(
-                rect, kind, now,
-                layout_x=16 if index == 0 else 164,
-                layout_y=192
+                rect, kind, now, layout_x=layout_x, layout_y=192
             )
 
         # Volume strip: circular vector − / + so glyphs never become boxes
@@ -7349,9 +7424,6 @@ while True:
                 S(5),
             )
 
-        if home_card_pick_slot is not None:
-            draw_home_card_picker(home_card_pick_slot)
-
         if show_qr:
             qr_panel = R(31, 78, 258, 278)
             body = draw_info_card(screen, qr_panel, UI_BLUE, 18)
@@ -7383,6 +7455,8 @@ while True:
                 draw_system_screen(now)
             elif active_page == "settings":
                 draw_settings_screen(now)
+            elif active_page == "home_cards":
+                draw_home_cards_settings_screen(now)
             elif active_page == "bluetooth":
                 draw_bluetooth_screen(now)
             elif active_page == "languages":
@@ -7500,6 +7574,26 @@ while True:
                             break
                 continue
 
+            if active_page == "home_cards":
+                if btn_home_cards_back.collidepoint(event.pos):
+                    active_page = "settings"
+                elif btn_card_layout_single.collidepoint(event.pos):
+                    set_home_card_layout("single")
+                elif btn_card_layout_bubble.collidepoint(event.pos):
+                    set_home_card_layout("bubble")
+                elif btn_card_left_prev.collidepoint(event.pos):
+                    cycle_home_card(0, -1)
+                elif btn_card_left_next.collidepoint(event.pos):
+                    cycle_home_card(0, 1)
+                elif device_settings.home_card_layout == "bubble":
+                    if btn_card_right_prev.collidepoint(event.pos):
+                        cycle_home_card(1, -1)
+                    elif btn_card_right_next.collidepoint(event.pos):
+                        cycle_home_card(1, 1)
+                    elif btn_card_swap.collidepoint(event.pos):
+                        swap_home_cards()
+                continue
+
             if active_page == "languages":
                 if btn_pages.collidepoint(event.pos):
                     active_page = "menu"
@@ -7565,7 +7659,6 @@ while True:
             if active_page != "radio":
                 if btn_pages.collidepoint(event.pos):
                     youtube_keyboard_open = False
-                    home_card_pick_slot = None
                     active_page = "menu"
                 elif active_page == "youtube":
                     if btn_youtube_search_go.collidepoint(event.pos):
@@ -7723,6 +7816,8 @@ while True:
                             begin_wifi_scan()
                     elif btn_wifi_qr.collidepoint(event.pos):
                         show_qr = True
+                    elif btn_home_cards.collidepoint(event.pos):
+                        active_page = "home_cards"
                     elif (
                         btn_theme_previous.collidepoint(event.pos)
                         or btn_theme_next.collidepoint(event.pos)
@@ -7748,28 +7843,6 @@ while True:
                         )
                 continue
 
-            if home_card_pick_slot is not None:
-                picked = False
-                for kind, rect in zip(
-                    HOME_CARD_KINDS, home_card_choice_rects
-                ):
-                    if rect.collidepoint(event.pos):
-                        assign_home_card(home_card_pick_slot, kind)
-                        home_card_pick_slot = None
-                        picked = True
-                        break
-                if not picked:
-                    home_card_pick_slot = None
-                continue
-            card_touched = False
-            for slot, rect in enumerate(home_card_rects):
-                if rect.collidepoint(event.pos):
-                    home_card_pick_slot = slot
-                    card_touched = True
-                    break
-            if card_touched:
-                continue
-
             if btn_fab.collidepoint(event.pos):
                 fab_open = not fab_open
                 continue
@@ -7792,7 +7865,6 @@ while True:
                 continue
             if btn_open_pages.collidepoint(event.pos):
                 fab_open = False
-                home_card_pick_slot = None
                 active_page = "menu"
                 continue
             if btn_exit.collidepoint(event.pos):
@@ -7827,9 +7899,6 @@ while True:
             dx = event.pos[0] - touch_start_pos[0]
             dy = event.pos[1] - touch_start_pos[1]
             dt = time.time() - touch_start_time
-            if home_card_pick_slot is not None:
-                adjusting_volume = False
-                continue
             if (
                 active_page in PAGE_ORDER
                 and abs(dx) > X(45)
