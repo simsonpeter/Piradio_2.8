@@ -4061,6 +4061,50 @@ try:
 except Exception:
     pass
 
+# Official 7-inch Touch Display 2 is 720x1280 portrait. Layout is authored
+# at 320x480 and scaled to the live framebuffer so hit targets stay aligned.
+BASE_W, BASE_H = 320, 480
+OFFICIAL_7_W, OFFICIAL_7_H = 720, 1280
+_Rect = pygame.Rect
+
+def _open_touchscreen():
+    flags = pygame.FULLSCREEN | pygame.NOFRAME
+    try:
+        surface = pygame.display.set_mode((0, 0), flags)
+        width, height = surface.get_size()
+        if width >= 640 and height >= 480:
+            return surface, width, height
+    except Exception:
+        pass
+    try:
+        surface = pygame.display.set_mode((OFFICIAL_7_W, OFFICIAL_7_H), flags)
+        return surface, surface.get_width(), surface.get_height()
+    except Exception:
+        surface = pygame.display.set_mode((OFFICIAL_7_W, OFFICIAL_7_H))
+        return surface, surface.get_width(), surface.get_height()
+
+screen, SCREEN_W, SCREEN_H = _open_touchscreen()
+SCALE_X = SCREEN_W / float(BASE_W)
+SCALE_Y = SCREEN_H / float(BASE_H)
+SCALE = min(SCALE_X, SCALE_Y)
+
+def X(value):
+    return int(round(value * SCALE_X))
+
+def Y(value):
+    return int(round(value * SCALE_Y))
+
+def S(value):
+    return max(1, int(round(value * SCALE)))
+
+def R(x, y, w, h):
+    return _Rect(X(x), Y(y), max(1, X(w)), max(1, Y(h)))
+
+def XY(x, y):
+    return (X(x), Y(y))
+
+print(f"Touchscreen {SCREEN_W}x{SCREEN_H} (scale {SCALE_X:.2f}x{SCALE_Y:.2f})")
+
 # --- UNICODE FONT SETUP (Tamil Support) ---
 TAMIL_RANGE = range(0x0B80, 0x0BFF + 1)
 APP_FONT_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "fonts")
@@ -4465,39 +4509,34 @@ def get_unicode_font(size, bold=False):
 
 # Load Unicode fonts
 try:
-    f_lg = get_unicode_font(24, bold=True)
-    f_sm = get_unicode_font(16, bold=True)
-    f_xl = get_unicode_font(80, bold=True)
-    f_med = get_unicode_font(24, bold=True)
-    f_tiny = get_unicode_font(12, bold=True)
-    f_weather = get_unicode_font(42, bold=True)
+    f_lg = get_unicode_font(S(24), bold=True)
+    f_sm = get_unicode_font(S(16), bold=True)
+    f_xl = get_unicode_font(S(80), bold=True)
+    f_med = get_unicode_font(S(24), bold=True)
+    f_tiny = get_unicode_font(S(12), bold=True)
+    f_weather = get_unicode_font(S(42), bold=True)
     tamil_loaded = tamil_font_path() or 'missing'
     print(f"Unicode fonts loaded. Tamil font: {tamil_loaded}")
     if tamil_loaded == 'missing':
         print("Tamil names will show as boxes until NotoSansTamil-Regular.ttf is installed.")
 except Exception as e:
     print(f"Font error: {e}, using defaults")
-    f_lg = pygame.font.Font(None, 24)
-    f_sm = pygame.font.Font(None, 16)
-    f_xl = pygame.font.Font(None, 80)
-    f_med = pygame.font.Font(None, 24)
-    f_tiny = pygame.font.Font(None, 12)
-    f_weather = pygame.font.Font(None, 42)
-
-try:
-    screen = pygame.display.set_mode((320, 480), pygame.FULLSCREEN | pygame.NOFRAME)
-except:
-    screen = pygame.display.set_mode((320, 480))
+    f_lg = pygame.font.Font(None, S(24))
+    f_sm = pygame.font.Font(None, S(16))
+    f_xl = pygame.font.Font(None, S(80))
+    f_med = pygame.font.Font(None, S(24))
+    f_tiny = pygame.font.Font(None, S(12))
+    f_weather = pygame.font.Font(None, S(42))
 
 # Cover application initialization with the same branding as the boot splash.
 screen.fill((0, 0, 0))
-splash_title_font = get_unicode_font(38, bold=True)
-splash_subtitle_font = get_unicode_font(16)
+splash_title_font = get_unicode_font(S(38), bold=True)
+splash_subtitle_font = get_unicode_font(S(16))
 splash_title = splash_title_font.render("TCRADIOS", True, (235, 242, 255))
 splash_subtitle = splash_subtitle_font.render("by JayathaSoft", True, (214, 224, 240))
-screen.blit(splash_title, splash_title.get_rect(center=(160, 218)))
-screen.blit(splash_subtitle, splash_subtitle.get_rect(center=(160, 257)))
-pygame.draw.line(screen, (38, 150, 210), (100, 282), (220, 282), 2)
+screen.blit(splash_title, splash_title.get_rect(center=XY(160, 218)))
+screen.blit(splash_subtitle, splash_subtitle.get_rect(center=XY(160, 257)))
+pygame.draw.line(screen, (38, 150, 210), XY(100, 282), XY(220, 282), S(2))
 pygame.display.flip()
 pygame.mouse.set_visible(False)
 splash_started_at = time.time()
@@ -4553,19 +4592,19 @@ def ensure_bright(color, minimum=125):
     return mix_colors(color, (255, 255, 255), amount)
 
 def create_ui_background():
-    background = pygame.Surface((320, 480))
-    for y in range(480):
-        ratio = y / 479
+    background = pygame.Surface((SCREEN_W, SCREEN_H))
+    for y in range(SCREEN_H):
+        ratio = y / max(1, SCREEN_H - 1)
         color = tuple(
             int(UI_BG_TOP[i] + (UI_BG_BOTTOM[i] - UI_BG_TOP[i]) * ratio)
             for i in range(3)
         )
-        pygame.draw.line(background, color, (0, y), (319, y))
+        pygame.draw.line(background, color, (0, y), (SCREEN_W - 1, y))
 
-    glow = pygame.Surface((320, 480), pygame.SRCALPHA)
-    pygame.draw.circle(glow, (*UI_BLUE, 28), (292, 108), 120)
-    pygame.draw.circle(glow, (*UI_PURPLE, 26), (12, 360), 140)
-    pygame.draw.circle(glow, (*UI_AMBER, 16), (160, 24), 90)
+    glow = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+    pygame.draw.circle(glow, (*UI_BLUE, 28), XY(292, 108), S(120))
+    pygame.draw.circle(glow, (*UI_PURPLE, 26), XY(12, 360), S(140))
+    pygame.draw.circle(glow, (*UI_AMBER, 16), XY(160, 24), S(90))
     background.blit(glow, (0, 0))
     return background
 
@@ -4699,7 +4738,7 @@ def draw_circle_icon_button(surface, rect, fill, kind):
 
 def draw_modern_button(surface, rect, fill, border, radius=14, border_width=0):
     body = border if (border[0] + border[1] + border[2]) > 90 else fill
-    pygame.draw.rect(surface, body, rect, border_radius=radius)
+    pygame.draw.rect(surface, body, rect, border_radius=S(radius))
     return body
 
 def labeled_button(surface, rect, fill, font, text, radius=14, border=None):
@@ -4709,18 +4748,18 @@ def labeled_button(surface, rect, fill, font, text, radius=14, border=None):
 
 def draw_info_card(surface, rect, accent, radius=16):
     body = UI_SURFACE_RAISED
-    pygame.draw.rect(surface, body, rect, border_radius=radius)
-    pygame.draw.rect(surface, accent, rect, 2, border_radius=radius)
+    pygame.draw.rect(surface, body, rect, border_radius=S(radius))
+    pygame.draw.rect(surface, accent, rect, S(2), border_radius=S(radius))
     return body
 
 def draw_animated_ui_glow(surface, now):
     ui_animation_layer.fill((0, 0, 0, 0))
     pulse = (math.sin(now * 1.1) + 1) / 2
-    blue_center = (
+    blue_center = XY(
         278 + int(math.sin(now * 0.35) * 18),
         112 + int(math.cos(now * 0.42) * 16)
     )
-    purple_center = (
+    purple_center = XY(
         28 + int(math.cos(now * 0.3) * 20),
         365 + int(math.sin(now * 0.38) * 18)
     )
@@ -4730,42 +4769,42 @@ def draw_animated_ui_glow(surface, now):
             ui_animation_layer,
             (*UI_BLUE, alpha + int(pulse * 3)),
             blue_center,
-            radius
+            S(radius)
         )
     for radius, alpha in ((120, 3), (88, 5), (58, 7)):
         pygame.draw.circle(
             ui_animation_layer,
             (*UI_PURPLE, alpha + int((1 - pulse) * 3)),
             purple_center,
-            radius
+            S(radius)
         )
     surface.blit(ui_animation_layer, (0, 0))
 
 def draw_pulsing_border(surface, rect, color, now):
     ui_animation_layer.fill((0, 0, 0, 0))
     pulse = (math.sin(now * 2.2) + 1) / 2
-    outer = rect.inflate(8, 8)
-    inner = rect.inflate(4, 4)
+    outer = rect.inflate(S(8), S(8))
+    inner = rect.inflate(S(4), S(4))
     pygame.draw.rect(
         ui_animation_layer,
         (*color, 10 + int(pulse * 12)),
         outer,
-        2,
-        border_radius=22
+        S(2),
+        border_radius=S(22)
     )
     pygame.draw.rect(
         ui_animation_layer,
         (*color, 20 + int(pulse * 18)),
         inner,
-        2,
-        border_radius=20
+        S(2),
+        border_radius=S(20)
     )
     surface.blit(ui_animation_layer, (0, 0))
 
 ui_background = None
 ui_palette_theme = None
-ui_animation_layer = pygame.Surface((320, 480), pygame.SRCALPHA)
-brightness_overlay = pygame.Surface((320, 480), pygame.SRCALPHA)
+ui_animation_layer = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+brightness_overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
 refresh_ui_palette()
 
 instance = vlc.Instance('--no-video')
@@ -4997,8 +5036,8 @@ current_temp = 0
 weather_type = "clear"
 weather_forecast = []
 meta_text = ""
-scroll_x = 320
-saver_scroll_x = 320
+scroll_x = SCREEN_W
+saver_scroll_x = SCREEN_W
 alarm_fade_active = False
 alarm_fade_data = {}
 saver_active = False
@@ -5034,7 +5073,7 @@ language_stream_busy = False
 language_stream_offset = 0
 
 # Logo setup
-LOGO_SIZE = 112
+LOGO_SIZE = S(112)
 LOGO_CENTER = LOGO_SIZE // 2
 logo = pygame.Surface((LOGO_SIZE, LOGO_SIZE), pygame.SRCALPHA)
 logo.fill((0, 0, 0, 0))
@@ -5046,7 +5085,7 @@ text_rect = text.get_rect(center=(LOGO_CENTER, LOGO_CENTER))
 logo.blit(text, text_rect)
 
 qr_target = ""
-qr_surface = pygame.Surface((240, 240))
+qr_surface = pygame.Surface((S(240), S(240)))
 qr_surface.fill((0, 0, 0))
 last_ip_check = time.time()
 
@@ -5061,7 +5100,7 @@ def rebuild_qr_surface():
     try:
         qr_img = qrcode.make(target).convert('RGB')
         qr_surface = pygame.image.fromstring(qr_img.tobytes(), qr_img.size, 'RGB')
-        qr_surface = pygame.transform.scale(qr_surface, (240, 240))
+        qr_surface = pygame.transform.scale(qr_surface, (S(240), S(240)))
         qr_target = target
     except Exception:
         pass
@@ -5131,8 +5170,8 @@ def update_logo(url):
 
 def play():
     global meta_text, scroll_x, saver_scroll_x, saved_station_url, saved_station_index
-    scroll_x = 320
-    saver_scroll_x = 320
+    scroll_x = SCREEN_W
+    saver_scroll_x = SCREEN_W
     if not stations:
         return
     station = stations[current_idx]
@@ -5712,6 +5751,7 @@ def request_touch_shutdown():
     threading.Thread(target=perform_safe_shutdown, daemon=True).start()
 
 def draw_weather_icon(surface, x, y, type, size=30, dimmed=True, on_background=None):
+    x, y, size = X(x), Y(y), S(size)
     line_width = max(2, size // 8)
     if dimmed:
         sun_color = tuple(int(channel * 0.3) for channel in GOLD)
@@ -5779,12 +5819,12 @@ def draw_forecast_screen(now):
     screen.blit(ui_background, (0, 0))
     draw_animated_ui_glow(screen, now)
 
-    header_rect = pygame.Rect(8, 7, 304, 52)
-    pygame.draw.rect(screen, UI_SURFACE, header_rect, border_radius=17)
-    pygame.draw.rect(screen, (54, 75, 112), header_rect, 1, border_radius=17)
+    header_rect = R(8, 7, 304, 52)
+    pygame.draw.rect(screen, UI_SURFACE, header_rect, border_radius=S(17))
+    pygame.draw.rect(screen, (54, 75, 112), header_rect, S(1), border_radius=S(17))
     draw_centered_text(screen, f_lg, "5-DAY FORECAST", UI_TEXT, header_rect)
 
-    current_rect = pygame.Rect(14, 72, 292, 84)
+    current_rect = R(14, 72, 292, 84)
     body = draw_info_card(screen, current_rect, UI_BLUE, 18)
     draw_weather_icon(
         screen, 65, 111, weather_type, 25, dimmed=False, on_background=body
@@ -5792,40 +5832,40 @@ def draw_forecast_screen(now):
     current_surface = f_weather.render(
         f"{current_temp}°C", True, ink_on(body)
     )
-    screen.blit(current_surface, (103, 82))
+    screen.blit(current_surface, XY(103, 82))
     location_label = fit_label(device_settings.weather_name.upper(), 18)
     now_surface = f_tiny.render(
         f"{location_label}  •  NOW", True, muted_ink_on(body)
     )
-    screen.blit(now_surface, (106, 127))
+    screen.blit(now_surface, XY(106, 127))
 
     if weather_forecast:
         for index, forecast in enumerate(weather_forecast[:5]):
-            row = pygame.Rect(14, 166 + index * 52, 292, 45)
+            row = R(14, 166 + index * 52, 292, 45)
             accent = UI_PURPLE if index == 0 else (72, 80, 98)
             body = draw_info_card(screen, row, accent, 13)
 
             day_surface = f_sm.render(
                 forecast['day'].upper(), True, ink_on(body)
             )
-            screen.blit(day_surface, (29, row.y + 7))
+            screen.blit(day_surface, (X(29), row.y + Y(7)))
             label_surface = f_tiny.render(
                 forecast['label'], True, muted_ink_on(body)
             )
-            screen.blit(label_surface, (29, row.y + 25))
+            screen.blit(label_surface, (X(29), row.y + Y(25)))
 
             draw_weather_icon(
-                screen, 196, row.centery - 2,
+                screen, 196, 166 + index * 52 + 22,
                 forecast['type'], 12, dimmed=False, on_background=body
             )
             temperature = f"{forecast['high']}° / {forecast['low']}°"
             temperature_surface = f_sm.render(temperature, True, ink_on(body))
             screen.blit(
                 temperature_surface,
-                (292 - temperature_surface.get_width(), row.y + 14)
+                (X(292) - temperature_surface.get_width(), row.y + Y(14))
             )
     else:
-        loading_rect = pygame.Rect(14, 166, 292, 253)
+        loading_rect = R(14, 166, 292, 253)
         body = draw_info_card(screen, loading_rect, (72, 80, 98), 16)
         draw_centered_text(
             screen, f_sm, "Forecast unavailable", muted_ink_on(body), loading_rect
@@ -5836,9 +5876,9 @@ def draw_forecast_screen(now):
 def draw_page_base(title, now):
     screen.blit(ui_background, (0, 0))
     draw_animated_ui_glow(screen, now)
-    header = pygame.Rect(8, 7, 304, 52)
-    pygame.draw.rect(screen, UI_SURFACE, header, border_radius=17)
-    pygame.draw.rect(screen, (54, 75, 112), header, 1, border_radius=17)
+    header = R(8, 7, 304, 52)
+    pygame.draw.rect(screen, UI_SURFACE, header, border_radius=S(17))
+    pygame.draw.rect(screen, (54, 75, 112), header, S(1), border_radius=S(17))
     draw_centered_text(screen, f_lg, title, UI_TEXT, header)
 
 def draw_pages_button():
@@ -5920,31 +5960,31 @@ def draw_clock_screen(now):
     draw_page_base("CLOCK", now)
     current_time = datetime.now()
     time_surface = f_xl.render(current_time.strftime("%H:%M"), True, UI_TEXT)
-    screen.blit(time_surface, (160 - time_surface.get_width() // 2, 82))
+    screen.blit(time_surface, (X(160) - time_surface.get_width() // 2, Y(82)))
     date_surface = f_med.render(
         current_time.strftime("%A").upper(), True, ink_on(UI_BG_TOP, UI_BLUE)
     )
-    screen.blit(date_surface, (160 - date_surface.get_width() // 2, 177))
+    screen.blit(date_surface, (X(160) - date_surface.get_width() // 2, Y(177)))
     full_date = f_sm.render(
         current_time.strftime("%d %B %Y"), True, muted_ink_on(UI_BG_TOP)
     )
-    screen.blit(full_date, (160 - full_date.get_width() // 2, 213))
+    screen.blit(full_date, (X(160) - full_date.get_width() // 2, Y(213)))
 
-    weather_card = pygame.Rect(28, 252, 264, 78)
+    weather_card = R(28, 252, 264, 78)
     body = draw_info_card(screen, weather_card, UI_PURPLE, 18)
     draw_weather_icon(
-        screen, 76, weather_card.centery, weather_type, 22,
+        screen, 76, 291, weather_type, 22,
         dimmed=False, on_background=body
     )
     temp = f_weather.render(f"{current_temp}°C", True, ink_on(body))
-    screen.blit(temp, (112, weather_card.y + 11))
+    screen.blit(temp, (X(112), weather_card.y + Y(11)))
     city = f_tiny.render(
         fit_label(device_settings.weather_name.upper(), 18),
         True, muted_ink_on(body)
     )
-    screen.blit(city, (116, weather_card.y + 53))
+    screen.blit(city, (X(116), weather_card.y + Y(53)))
 
-    station_card = pygame.Rect(28, 344, 264, 58)
+    station_card = R(28, 344, 264, 58)
     body = draw_info_card(screen, station_card, (72, 80, 98), 15)
     draw_centered_text(
         screen, f_sm, fit_label(stations[current_idx]['name'], 28),
@@ -5954,7 +5994,7 @@ def draw_clock_screen(now):
 
 def draw_alarm_screen(now):
     draw_page_base("ALARM & SLEEP", now)
-    alarm_card = pygame.Rect(18, 75, 284, 115)
+    alarm_card = R(18, 75, 284, 115)
     body = draw_info_card(
         screen, alarm_card,
         UI_AMBER if alarm_system.alarm_enabled else (72, 80, 98), 18
@@ -5985,7 +6025,7 @@ def draw_alarm_screen(now):
         labeled_button(screen, rect, UI_BLUE, f_tiny, label, 13)
 
     sleep_title = f_sm.render("SLEEP TIMER", True, UI_TEXT)
-    screen.blit(sleep_title, (20, 261))
+    screen.blit(sleep_title, XY(20, 261))
     for rect, minutes in zip(btn_sleep_presets, (15, 30, 60)):
         active = (
             alarm_system.sleep_timer_enabled
@@ -6025,14 +6065,14 @@ def draw_system_screen(now):
         )
         screen.blit(value_surface, (rect.x + 14, rect.y + 43))
 
-    bluetooth_card = pygame.Rect(18, 320, 284, 54)
+    bluetooth_card = R(18, 320, 284, 54)
     body = draw_info_card(screen, bluetooth_card, UI_BLUE, 16)
     bt_label = f_tiny.render("BLUETOOTH AUDIO", True, muted_ink_on(body))
-    screen.blit(bt_label, (34, bluetooth_card.y + 8))
+    screen.blit(bt_label, (X(34), bluetooth_card.y + Y(8)))
     bt_value = f_sm.render(
         fit_label(system_stats['bluetooth'], 28), True, ink_on(body)
     )
-    screen.blit(bt_value, (34, bluetooth_card.y + 28))
+    screen.blit(bt_value, (X(34), bluetooth_card.y + Y(28)))
 
     shutdown_armed = now <= shutdown_confirm_until
     shutdown_label = (
@@ -6051,7 +6091,7 @@ def draw_settings_screen(now):
     draw_page_base("SETTINGS", now)
 
     audio_title = f_sm.render("SOUND OUTPUT", True, UI_TEXT)
-    screen.blit(audio_title, (18, 67))
+    screen.blit(audio_title, XY(18, 67))
     audio_labels = ("AUTO", "JACK", "HDMI", "BLUETOOTH")
     audio_names = ("auto", "analog", "hdmi", "bluetooth")
     for rect, label, output_name in zip(
@@ -6076,7 +6116,7 @@ def draw_settings_screen(now):
     display_title = f_sm.render(
         f"DISPLAY  •  {device_settings.brightness}%", True, UI_TEXT
     )
-    screen.blit(display_title, (18, 158))
+    screen.blit(display_title, XY(18, 158))
     labeled_button(screen, btn_brightness_minus, UI_BLUE, f_lg, "−", 13)
     labeled_button(
         screen, btn_auto_dim,
@@ -6091,8 +6131,8 @@ def draw_settings_screen(now):
     labeled_button(screen, btn_brightness_plus, UI_BLUE, f_lg, "+", 13)
 
     theme_title = f_sm.render("THEME", True, UI_TEXT)
-    screen.blit(theme_title, (18, 248))
-    current_theme_rect = pygame.Rect(78, 274, 164, 58)
+    screen.blit(theme_title, XY(18, 248))
+    current_theme_rect = R(78, 274, 164, 58)
     labeled_button(
         screen, current_theme_rect, UI_AMBER, f_sm,
         current_theme.name.upper(), 14
@@ -6143,7 +6183,7 @@ def draw_bluetooth_screen(now):
             )
             screen.blit(state_surface, (rect.x + 13, rect.y + 24))
     else:
-        empty_rect = pygame.Rect(18, 142, 284, 272)
+        empty_rect = R(18, 142, 284, 272)
         body = draw_info_card(screen, empty_rect, (72, 80, 98), 16)
         draw_centered_text(
             screen, f_sm, "No devices loaded", muted_ink_on(body), empty_rect
@@ -6177,7 +6217,7 @@ def draw_wifi_screen(now):
     if wifi_password_open and wifi_target:
         name = fit_label(wifi_target.get('ssid', 'Wi-Fi'), 28)
         status = f_tiny.render(name, True, UI_MUTED)
-        screen.blit(status, (160 - status.get_width() // 2, 64))
+        screen.blit(status, (X(160) - status.get_width() // 2, Y(64)))
         body = draw_modern_button(
             screen, btn_wifi_password_field, UI_PURPLE, UI_PURPLE, 14
         )
@@ -6202,7 +6242,7 @@ def draw_wifi_screen(now):
         return
 
     status = f_tiny.render(fit_label(wifi_status_label(), 42), True, UI_MUTED)
-    screen.blit(status, (160 - status.get_width() // 2, 64))
+    screen.blit(status, (X(160) - status.get_width() // 2, Y(64)))
     labeled_button(
         screen, btn_wifi_scan,
         UI_PURPLE if wifi_busy else UI_BLUE, f_sm,
@@ -6225,7 +6265,7 @@ def draw_wifi_screen(now):
             )
             screen.blit(meta, (rect.x + 12, rect.y + 26))
     else:
-        empty = pygame.Rect(16, 142, 288, 200)
+        empty = R(16, 142, 288, 200)
         body = draw_info_card(screen, empty, (72, 80, 98), 16)
         draw_centered_text(
             screen, f_sm, "Tap SCAN to find Wi-Fi", muted_ink_on(body), empty
@@ -6262,7 +6302,7 @@ def draw_language_stations_screen(now):
         language_stream_offset:language_stream_offset + 5
     ]
     if language_stream_busy:
-        loading_rect = pygame.Rect(18, 89, 284, 257)
+        loading_rect = R(18, 89, 284, 257)
         body = draw_info_card(screen, loading_rect, (72, 80, 98), 16)
         draw_centered_text(
             screen, f_sm, "Loading stations…", muted_ink_on(body), loading_rect
@@ -6280,7 +6320,7 @@ def draw_language_stations_screen(now):
             )
             screen.blit(genre_surface, (rect.x + 13, rect.y + 29))
     elif selected_language:
-        empty_rect = pygame.Rect(18, 89, 284, 257)
+        empty_rect = R(18, 89, 284, 257)
         body = draw_info_card(screen, empty_rect, (72, 80, 98), 16)
         draw_centered_text(
             screen, f_sm, "No stations available", muted_ink_on(body), empty_rect
@@ -6293,7 +6333,7 @@ def draw_language_stations_screen(now):
         UI_BLUE if language_stream_offset > 0 else (55, 61, 77),
         f_tiny, "PREV", 13
     )
-    page_rect = pygame.Rect(118, 360, 84, 44)
+    page_rect = R(118, 360, 84, 44)
     draw_centered_text(
         screen, f_sm, f"{page_number} / {page_count}", UI_MUTED, page_rect
     )
@@ -6376,7 +6416,7 @@ def draw_youtube_screen(now):
 
     visible = youtube_results_cache[youtube_touch_offset:youtube_touch_offset + 4]
     if youtube_touch_busy and not visible:
-        waiting = pygame.Rect(16, 232, 288, 184)
+        waiting = R(16, 232, 288, 184)
         body = draw_info_card(screen, waiting, (72, 80, 98), 16)
         draw_centered_text(
             screen, f_sm, "Searching YouTube…", muted_ink_on(body), waiting
@@ -6403,7 +6443,7 @@ def draw_youtube_screen(now):
             )
             screen.blit(meta, (rect.x + 12, rect.y + 22))
     else:
-        empty = pygame.Rect(16, 232, 288, 184)
+        empty = R(16, 232, 288, 184)
         body = draw_info_card(screen, empty, (72, 80, 98), 16)
         draw_centered_text(
             screen, f_sm, "Type in the search bar", muted_ink_on(body), empty
@@ -6414,7 +6454,7 @@ def draw_screensaver():
     # Lantern clock: huge dim time and a weather icon only.
     screen.fill((0, 0, 0))
     time_surf = f_xl.render(datetime.now().strftime("%H:%M"), True, (58, 58, 58))
-    screen.blit(time_surf, time_surf.get_rect(center=(160, 200)))
+    screen.blit(time_surf, time_surf.get_rect(center=XY(160, 200)))
     draw_weather_icon(screen, 160, 332, weather_type, 36)
 
 def greeting_phrases():
@@ -6445,19 +6485,19 @@ def draw_house_greeting():
     station = sanitize_text(stations[current_idx]['name'] if stations else "TCRADIOS")
     temp = f"{current_temp}°C" if current_temp else "--°C"
     time_surf = f_xl.render(datetime.now().strftime("%H:%M"), True, UI_TEXT)
-    screen.blit(time_surf, time_surf.get_rect(center=(160, 92)))
+    screen.blit(time_surf, time_surf.get_rect(center=XY(160, 92)))
     draw_weather_icon(
         screen, 118, 168, weather_type, 22, dimmed=False, on_background=(0, 0, 0)
     )
     temp_surf = f_weather.render(temp, True, UI_TEXT)
-    screen.blit(temp_surf, (148, 146))
+    screen.blit(temp_surf, XY(148, 146))
     tamil_line = f_sm.render(f"{tamil}. {station} தயார்.", True, UI_TEXT)
-    screen.blit(tamil_line, tamil_line.get_rect(center=(160, 250)))
+    screen.blit(tamil_line, tamil_line.get_rect(center=XY(160, 250)))
     english_line = f_tiny.render(
         f"{english}. {temp}. {fit_label(station, 18)} is ready.",
         True, UI_MUTED
     )
-    screen.blit(english_line, english_line.get_rect(center=(160, 286)))
+    screen.blit(english_line, english_line.get_rect(center=XY(160, 286)))
 
 adjusting_volume = False
 show_volume_bar = False
@@ -6469,20 +6509,20 @@ PAGE_ORDER = [
     "radio", "favorites", "forecast", "clock",
     "alarm", "system", "languages", "settings", "youtube"
 ]
-btn_open_pages = pygame.Rect(16, 422, 228, 46)
+btn_open_pages = R(16, 422, 228, 46)
 fab_open = False
-btn_fab = pygame.Rect(256, 416, 54, 54)
-btn_sleep = pygame.Rect(16, 248, 140, 52)
-btn_saver = pygame.Rect(164, 248, 140, 52)
-btn_alarm = pygame.Rect(16, 308, 140, 52)
-btn_mute = pygame.Rect(164, 308, 140, 52)
-vol_rect = pygame.Rect(0, 0, 0, 0)
-btn_pages = pygame.Rect(70, 430, 180, 38)
+btn_fab = R(256, 416, 54, 54)
+btn_sleep = R(16, 248, 140, 52)
+btn_saver = R(164, 248, 140, 52)
+btn_alarm = R(16, 308, 140, 52)
+btn_mute = R(164, 308, 140, 52)
+vol_rect = R(0, 0, 0, 0)
+btn_pages = R(70, 430, 180, 38)
 menu_card_rects = [
-    pygame.Rect(16 + (index % 2) * 152, 68 + (index // 2) * 70, 136, 62)
+    R(16 + (index % 2) * 152, 68 + (index // 2) * 70, 136, 62)
     for index in range(8)
 ]
-menu_card_rects.append(pygame.Rect(16, 348, 288, 62))
+menu_card_rects.append(R(16, 348, 288, 62))
 YOUTUBE_PRESETS = (
     ("LOFI", "lofi hip hop radio"),
     ("JAZZ", "smooth jazz radio"),
@@ -6491,20 +6531,20 @@ YOUTUBE_PRESETS = (
     ("POP", "pop hits radio"),
     ("CLASSICAL", "classical music radio"),
 )
-btn_youtube_search_field = pygame.Rect(16, 68, 220, 42)
-btn_youtube_search_go = pygame.Rect(244, 68, 60, 42)
+btn_youtube_search_field = R(16, 68, 220, 42)
+btn_youtube_search_go = R(244, 68, 60, 42)
 youtube_preset_rects = [
-    pygame.Rect(16 + (index % 3) * 102, 134 + (index // 3) * 36, 92, 32)
+    R(16 + (index % 3) * 102, 134 + (index // 3) * 36, 92, 32)
     for index in range(6)
 ]
-btn_youtube_prev = pygame.Rect(16, 210, 52, 28)
-btn_youtube_next = pygame.Rect(252, 210, 52, 28)
-youtube_page_rect = pygame.Rect(74, 210, 172, 28)
+btn_youtube_prev = R(16, 210, 52, 28)
+btn_youtube_next = R(252, 210, 52, 28)
+youtube_page_rect = R(74, 210, 172, 28)
 youtube_result_rects = [
-    pygame.Rect(16, 246 + index * 44, 288, 40)
+    R(16, 246 + index * 44, 288, 40)
     for index in range(4)
 ]
-btn_youtube_keyboard_close = pygame.Rect(70, 372, 180, 40)
+btn_youtube_keyboard_close = R(70, 372, 180, 40)
 youtube_keyboard_open = False
 youtube_keyboard_text = ""
 youtube_touch_query = ""
@@ -6529,14 +6569,14 @@ def build_youtube_keys():
             keys.append((
                 character.upper(),
                 character,
-                pygame.Rect(x, y, key_w, key_h)
+                R(x, y, key_w, key_h)
             ))
             x += key_w + gap
         if row == "zxcvbnm":
-            keys.append(("⌫", "backspace", pygame.Rect(x + 3, y, 46, key_h)))
+            keys.append(("⌫", "backspace", R(x + 3, y, 46, key_h)))
         y += 42
-    keys.append(("SPACE", "space", pygame.Rect(16, y, 140, 40)))
-    keys.append(("SEARCH", "search", pygame.Rect(164, y, 140, 40)))
+    keys.append(("SPACE", "space", R(16, y, 140, 40)))
+    keys.append(("SEARCH", "search", R(164, y, 140, 40)))
     return keys
 
 youtube_key_rects = build_youtube_keys()
@@ -6700,39 +6740,39 @@ def handle_youtube_key(value):
         begin_youtube_search(youtube_keyboard_text)
     elif len(youtube_keyboard_text) < 60:
         youtube_keyboard_text += value
-btn_favorite_toggle = pygame.Rect(90, 67, 140, 34)
+btn_favorite_toggle = R(90, 67, 140, 34)
 favorite_card_rects = [
-    pygame.Rect(16 + (index % 2) * 152, 112 + (index // 2) * 96, 136, 86)
+    R(16 + (index % 2) * 152, 112 + (index // 2) * 96, 136, 86)
     for index in range(6)
 ]
-btn_alarm_minus = pygame.Rect(18, 204, 88, 42)
-btn_alarm_toggle_page = pygame.Rect(116, 204, 88, 42)
-btn_alarm_plus = pygame.Rect(214, 204, 88, 42)
+btn_alarm_minus = R(18, 204, 88, 42)
+btn_alarm_toggle_page = R(116, 204, 88, 42)
+btn_alarm_plus = R(214, 204, 88, 42)
 btn_sleep_presets = [
-    pygame.Rect(18 + index * 98, 282, 88, 48) for index in range(3)
+    R(18 + index * 98, 282, 88, 48) for index in range(3)
 ]
-btn_sleep_cancel = pygame.Rect(18, 344, 284, 54)
-btn_safe_shutdown = pygame.Rect(55, 383, 210, 36)
+btn_sleep_cancel = R(18, 344, 284, 54)
+btn_safe_shutdown = R(55, 383, 210, 36)
 system_card_rects = [
-    pygame.Rect(18 + (index % 2) * 146, 76 + (index // 2) * 126, 138, 110)
+    R(18 + (index % 2) * 146, 76 + (index // 2) * 126, 138, 110)
     for index in range(4)
 ]
 btn_audio_outputs = [
-    pygame.Rect(14 + index * 76, 88, 70, 56) for index in range(4)
+    R(14 + index * 76, 88, 70, 56) for index in range(4)
 ]
-btn_brightness_minus = pygame.Rect(18, 184, 50, 48)
-btn_auto_dim = pygame.Rect(78, 184, 164, 48)
-btn_brightness_plus = pygame.Rect(252, 184, 50, 48)
-btn_theme_previous = pygame.Rect(18, 274, 50, 58)
-btn_theme_next = pygame.Rect(252, 274, 50, 58)
-btn_wifi_setup = pygame.Rect(16, 353, 140, 50)
-btn_wifi_qr = pygame.Rect(164, 353, 140, 50)
-btn_wifi_scan = pygame.Rect(16, 86, 288, 40)
+btn_brightness_minus = R(18, 184, 50, 48)
+btn_auto_dim = R(78, 184, 164, 48)
+btn_brightness_plus = R(252, 184, 50, 48)
+btn_theme_previous = R(18, 274, 50, 58)
+btn_theme_next = R(252, 274, 50, 58)
+btn_wifi_setup = R(16, 353, 140, 50)
+btn_wifi_qr = R(164, 353, 140, 50)
+btn_wifi_scan = R(16, 86, 288, 40)
 wifi_network_rects = [
-    pygame.Rect(16, 142 + index * 50, 288, 46) for index in range(4)
+    R(16, 142 + index * 50, 288, 46) for index in range(4)
 ]
-btn_wifi_skip = pygame.Rect(70, 352, 180, 42)
-btn_wifi_password_field = pygame.Rect(16, 86, 288, 40)
+btn_wifi_skip = R(70, 352, 180, 42)
+btn_wifi_password_field = R(16, 86, 288, 40)
 
 def build_wifi_keys():
     keys = []
@@ -6743,15 +6783,15 @@ def build_wifi_keys():
         row_w = len(row) * key_w + (len(row) - 1) * gap
         x = (320 - row_w) // 2
         for character in row:
-            keys.append((character, pygame.Rect(x, y, key_w, key_h)))
+            keys.append((character, R(x, y, key_w, key_h)))
             x += key_w + gap
         y += 38
     keys.extend((
-        ('shift', pygame.Rect(16, y, 70, 38)),
-        ('space', pygame.Rect(92, y, 70, 38)),
-        ('backspace', pygame.Rect(168, y, 52, 38)),
-        ('connect', pygame.Rect(226, y, 78, 38)),
-        ('cancel', pygame.Rect(70, 372, 180, 40)),
+        ('shift', R(16, y, 70, 38)),
+        ('space', R(92, y, 70, 38)),
+        ('backspace', R(168, y, 52, 38)),
+        ('connect', R(226, y, 78, 38)),
+        ('cancel', R(70, 372, 180, 40)),
     ))
     return keys
 
@@ -6760,21 +6800,21 @@ if not has_network_connection():
     wifi_setup_required = True
     active_page = "wifi"
     begin_wifi_scan()
-btn_bluetooth_search = pygame.Rect(70, 75, 180, 42)
+btn_bluetooth_search = R(70, 75, 180, 42)
 bluetooth_device_rects = [
-    pygame.Rect(18, 142 + index * 46, 284, 42) for index in range(6)
+    R(18, 142 + index * 46, 284, 42) for index in range(6)
 ]
-btn_bluetooth_back = pygame.Rect(70, 430, 180, 38)
+btn_bluetooth_back = R(70, 430, 180, 38)
 language_card_rects = [
-    pygame.Rect(16 + (index % 2) * 152, 75 + (index // 2) * 83, 136, 70)
+    R(16 + (index % 2) * 152, 75 + (index // 2) * 83, 136, 70)
     for index in range(8)
 ]
 language_station_rects = [
-    pygame.Rect(18, 89 + index * 52, 284, 46) for index in range(5)
+    R(18, 89 + index * 52, 284, 46) for index in range(5)
 ]
-btn_language_previous = pygame.Rect(18, 360, 88, 44)
-btn_language_next = pygame.Rect(214, 360, 88, 44)
-btn_language_back = pygame.Rect(70, 430, 180, 38)
+btn_language_previous = R(18, 360, 88, 44)
+btn_language_next = R(214, 360, 88, 44)
+btn_language_back = R(70, 430, 180, 38)
 
 def adjust_volume(delta):
     global show_volume_bar, volume_bar_timer, last_interaction_time
@@ -6896,34 +6936,34 @@ while True:
         draw_animated_ui_glow(screen, now)
 
         # Compact header
-        header_rect = pygame.Rect(8, 7, 304, 52)
-        pygame.draw.rect(screen, UI_SURFACE, header_rect, border_radius=17)
-        pygame.draw.rect(screen, (54, 75, 112), header_rect, 1, border_radius=17)
-        pygame.draw.line(screen, UI_BLUE, (28, 58), (145, 58), 2)
-        pygame.draw.line(screen, UI_PURPLE, (175, 58), (292, 58), 2)
+        header_rect = R(8, 7, 304, 52)
+        pygame.draw.rect(screen, UI_SURFACE, header_rect, border_radius=S(17))
+        pygame.draw.rect(screen, (54, 75, 112), header_rect, S(1), border_radius=S(17))
+        pygame.draw.line(screen, UI_BLUE, XY(28, 58), XY(145, 58), S(2))
+        pygame.draw.line(screen, UI_PURPLE, XY(175, 58), XY(292, 58), S(2))
 
-        btn_qr = pygame.Rect(15, 13, 42, 40)
+        btn_qr = R(15, 13, 42, 40)
         qr_body = draw_modern_button(screen, btn_qr, UI_BLUE, UI_BLUE, 12)
         draw_centered_text(screen, f_sm, "QR", contrasting_text(qr_body), btn_qr)
 
-        title_rect = pygame.Rect(65, 10, 190, 38)
+        title_rect = R(65, 10, 190, 38)
         draw_centered_text(screen, f_lg, "TC RADIOS", UI_TEXT, title_rect)
         if show_startup_ip and now < ip_display_time:
             ip_surface = f_tiny.render(f"{current_ip}:8080", True, UI_MUTED)
-            screen.blit(ip_surface, (160 - ip_surface.get_width() // 2, 43))
+            screen.blit(ip_surface, (X(160) - ip_surface.get_width() // 2, Y(43)))
 
-        btn_exit = pygame.Rect(268, 13, 37, 40)
+        btn_exit = R(268, 13, 37, 40)
         draw_modern_button(screen, btn_exit, (75, 30, 55), UI_PINK, 12)
-        pygame.draw.line(screen, UI_TEXT, (279, 24), (294, 40), 3)
-        pygame.draw.line(screen, UI_TEXT, (294, 24), (279, 40), 3)
+        pygame.draw.line(screen, UI_TEXT, XY(279, 24), XY(294, 40), S(3))
+        pygame.draw.line(screen, UI_TEXT, XY(294, 24), XY(279, 40), S(3))
 
         try: is_playing = player.get_state() == vlc.State.Playing
         except: is_playing = False
 
         # Smaller artwork area leaves breathing room between sections
-        pygame.draw.circle(screen, (17, 31, 53), (160, 128), 60)
-        pygame.draw.circle(screen, (40, 58, 91), (160, 128), 58, 1)
-        logo_rect = pygame.Rect(104, 72, LOGO_SIZE, LOGO_SIZE)
+        pygame.draw.circle(screen, (17, 31, 53), XY(160, 128), S(60))
+        pygame.draw.circle(screen, (40, 58, 91), XY(160, 128), S(58), S(1))
+        logo_rect = _Rect(X(104), Y(72), LOGO_SIZE, LOGO_SIZE)
         screen.blit(logo, logo_rect)
 
         if is_playing:
@@ -6933,51 +6973,51 @@ while True:
                 int(UI_BLUE[1] * 0.75),
                 int(UI_BLUE[2] * 0.75)
             )
-            pygame.draw.circle(screen, pulse_color, (160, 128), 58 + int(pulse * 4), 2)
+            pygame.draw.circle(screen, pulse_color, XY(160, 128), S(58) + int(pulse * S(4)), S(2))
         else:
-            pygame.draw.circle(screen, UI_MUTED, (160, 128), 58, 1)
+            pygame.draw.circle(screen, UI_MUTED, XY(160, 128), S(58), S(1))
 
         # Now-playing: Tamil on top, English transliteration under it
         display_text = sanitize_text(meta_text)
         roman_text = transliterate_tamil(display_text)
         if roman_text:
-            name_area = pygame.Rect(16, 192, 288, 28)
-            roman_area = pygame.Rect(16, 220, 288, 20)
+            name_area = R(16, 192, 288, 28)
+            roman_area = R(16, 220, 288, 20)
             name_render = f_sm.render(display_text, True, UI_TEXT)
             roman_render = f_tiny.render(
                 fit_label(roman_text, 34), True, UI_MUTED
             )
-            screen.set_clip(name_area.inflate(-12, 0))
-            if name_render.get_width() <= name_area.width - 24:
+            screen.set_clip(name_area.inflate(-X(12), 0))
+            if name_render.get_width() <= name_area.width - X(24):
                 name_x = name_area.centerx - name_render.get_width() // 2
             else:
                 scroll_x -= 2
                 if scroll_x < -name_render.get_width():
                     scroll_x = name_area.right
                 name_x = scroll_x
-            screen.blit(name_render, (name_x, name_area.y + 4))
+            screen.blit(name_render, (name_x, name_area.y + Y(4)))
             screen.set_clip(None)
             screen.blit(
                 roman_render,
                 (roman_area.centerx - roman_render.get_width() // 2, roman_area.y)
             )
         else:
-            name_area = pygame.Rect(16, 198, 288, 34)
+            name_area = R(16, 198, 288, 34)
             name_render = f_lg.render(display_text, True, UI_TEXT)
-            screen.set_clip(name_area.inflate(-12, 0))
-            if name_render.get_width() <= name_area.width - 24:
+            screen.set_clip(name_area.inflate(-X(12), 0))
+            if name_render.get_width() <= name_area.width - X(24):
                 name_x = name_area.centerx - name_render.get_width() // 2
             else:
                 scroll_x -= 2
                 if scroll_x < -name_render.get_width():
                     scroll_x = name_area.right
                 name_x = scroll_x
-            screen.blit(name_render, (name_x, name_area.y + 5))
+            screen.blit(name_render, (name_x, name_area.y + Y(5)))
             screen.set_clip(None)
 
         # Status chips appear only when active; controls remain in the dock
-        alarm_chip = pygame.Rect(18, 242, 128, 22)
-        sleep_chip = pygame.Rect(174, 242, 128, 22)
+        alarm_chip = R(18, 242, 128, 22)
+        sleep_chip = R(174, 242, 128, 22)
         if alarm_system.alarm_enabled:
             draw_modern_button(screen, alarm_chip, (57, 48, 31), (112, 88, 41), 10)
             draw_centered_text(
@@ -6992,29 +7032,29 @@ while True:
             draw_centered_text(screen, f_tiny, sleep_label, sleep_color, sleep_chip)
 
         # Volume strip: circular vector − / + so glyphs never become boxes
-        vol_minus_rect = pygame.Rect(10, 270, 46, 46)
-        vol_plus_rect = pygame.Rect(264, 270, 46, 46)
-        vol_bar_rect = pygame.Rect(64, 284, 192, 14)
+        vol_minus_rect = R(10, 270, 46, 46)
+        vol_plus_rect = R(264, 270, 46, 46)
+        vol_bar_rect = R(64, 284, 192, 14)
         draw_circle_icon_button(screen, vol_minus_rect, UI_AMBER, "minus")
-        pygame.draw.rect(screen, (37, 48, 72), vol_bar_rect, border_radius=8)
+        pygame.draw.rect(screen, (37, 48, 72), vol_bar_rect, border_radius=S(8))
         fill_width = int(vol_bar_rect.width * vol_level / 100)
         if fill_width > 0:
-            fill_rect = pygame.Rect(
-                vol_bar_rect.x, vol_bar_rect.y, max(14, fill_width), vol_bar_rect.height
+            fill_rect = _Rect(
+                vol_bar_rect.x, vol_bar_rect.y, max(S(14), fill_width), vol_bar_rect.height
             )
-            pygame.draw.rect(screen, UI_BLUE, fill_rect, border_radius=8)
+            pygame.draw.rect(screen, UI_BLUE, fill_rect, border_radius=S(8))
         knob_x = vol_bar_rect.x + int(vol_bar_rect.width * vol_level / 100)
-        knob_x = max(vol_bar_rect.x + 8, min(vol_bar_rect.right - 8, knob_x))
-        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), 9, UI_TEXT)
-        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), 4, UI_BLUE)
+        knob_x = max(vol_bar_rect.x + S(8), min(vol_bar_rect.right - S(8), knob_x))
+        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), S(9), UI_TEXT)
+        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), S(4), UI_BLUE)
         vol_pct_surf = f_tiny.render(f"{vol_level}%", True, UI_TEXT)
-        screen.blit(vol_pct_surf, (160 - vol_pct_surf.get_width() // 2, 302))
+        screen.blit(vol_pct_surf, (X(160) - vol_pct_surf.get_width() // 2, Y(302)))
         draw_circle_icon_button(screen, vol_plus_rect, UI_GREEN, "plus")
 
         # Primary transport controls
-        btn_prev = pygame.Rect(12, 329, 92, 53)
-        btn_toggle = pygame.Rect(114, 325, 92, 61)
-        btn_next = pygame.Rect(216, 329, 92, 53)
+        btn_prev = R(12, 329, 92, 53)
+        btn_toggle = R(114, 325, 92, 61)
+        btn_next = R(216, 329, 92, 53)
         draw_pulsing_border(
             screen,
             btn_toggle,
@@ -7043,12 +7083,12 @@ while True:
         )
 
         if fab_open:
-            dim = pygame.Surface((320, 480), pygame.SRCALPHA)
+            dim = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
             dim.fill((0, 0, 0, 150))
             screen.blit(dim, (0, 0))
-            panel = pygame.Rect(8, 236, 304, 136)
-            pygame.draw.rect(screen, UI_SURFACE, panel, border_radius=18)
-            pygame.draw.rect(screen, (54, 64, 91), panel, 1, border_radius=18)
+            panel = R(8, 236, 304, 136)
+            pygame.draw.rect(screen, UI_SURFACE, panel, border_radius=S(18))
+            pygame.draw.rect(screen, (54, 64, 91), panel, S(1), border_radius=S(18))
             sleep_fill = UI_PURPLE if alarm_system.sleep_timer_enabled else UI_SURFACE_RAISED
             moon_fill = UI_BLUE if saver_active else UI_SURFACE_RAISED
             alarm_fill = UI_AMBER if alarm_system.alarm_enabled else UI_SURFACE_RAISED
@@ -7062,13 +7102,13 @@ while True:
             )
 
         fab_fill = UI_PINK if fab_open else UI_PURPLE
-        draw_smooth_circle(screen, btn_fab.center, 26, fab_fill)
+        draw_smooth_circle(screen, btn_fab.center, S(26), fab_fill)
         draw_vector_icon(
             screen, btn_fab.center,
             "close" if fab_open else "gear",
             ink_on(fab_fill),
-            radius=11,
-            width=3,
+            radius=S(11),
+            width=S(3),
         )
         if (
             not fab_open
@@ -7081,24 +7121,24 @@ while True:
             pygame.draw.circle(
                 screen,
                 UI_PINK if vol_level == 0 else UI_AMBER,
-                (btn_fab.centerx + 16, btn_fab.centery - 16),
-                5,
+                (btn_fab.centerx + S(16), btn_fab.centery - S(16)),
+                S(5),
             )
 
         if show_qr:
-            qr_panel = pygame.Rect(31, 78, 258, 278)
+            qr_panel = R(31, 78, 258, 278)
             body = draw_info_card(screen, qr_panel, UI_BLUE, 18)
-            screen.blit(qr_surface, (40, 88))
+            screen.blit(qr_surface, XY(40, 88))
             draw_centered_text(
                 screen, f_tiny, "LISTEN ALONG", ink_on(body),
-                pygame.Rect(40, 328, 240, 16)
+                R(40, 328, 240, 16)
             )
             station_label = fit_label(
                 stations[current_idx]['name'] if stations else "TCRADIOS", 22
             )
             draw_centered_text(
                 screen, f_sm, station_label, muted_ink_on(body),
-                pygame.Rect(40, 344, 240, 18)
+                R(40, 344, 240, 18)
             )
 
         if not show_qr:
@@ -7520,7 +7560,7 @@ while True:
             dt = time.time() - touch_start_time
             if (
                 active_page in PAGE_ORDER
-                and abs(dx) > 45
+                and abs(dx) > X(45)
                 and abs(dx) > abs(dy)
                 and dt < 2.5
             ):
@@ -7541,7 +7581,7 @@ while True:
                         alarm_system.stop_sleep_timer()
                     else:
                         alarm_system.start_sleep_timer(30)
-                elif abs(dy) > 30:
+                elif abs(dy) > Y(30):
                     apply_live_volume(vol_level + (5 if dy > 0 else -5))
                     show_volume_bar = True
                     volume_bar_timer = time.time()
