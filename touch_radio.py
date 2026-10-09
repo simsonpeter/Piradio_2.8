@@ -906,18 +906,28 @@ BACKGROUND = current_theme.pygame_background
 # --- WEATHER, DISPLAY & POWER SETTINGS ---
 HOME_CARD_KINDS = (
     "now_playing",
-    "weather",
+    "favorites",
     "forecast",
+    "clock",
     "alarm",
     "system",
+    "languages",
+    "settings",
+    "youtube",
+    "weather",
     "bluetooth",
 )
 HOME_CARD_LABELS = {
     "now_playing": "NOW PLAYING",
-    "weather": "WEATHER",
+    "favorites": "FAVORITES",
     "forecast": "FORECAST",
+    "clock": "CLOCK",
     "alarm": "ALARM",
     "system": "SYSTEM",
+    "languages": "LANGUAGES",
+    "settings": "SETTINGS",
+    "youtube": "YOUTUBE",
+    "weather": "WEATHER",
     "bluetooth": "BLUETOOTH",
 }
 DEFAULT_HOME_CARDS = ["now_playing", "weather"]
@@ -6343,10 +6353,15 @@ def draw_home_card(
     global logo_rect
     accents = {
         "now_playing": UI_BLUE,
-        "weather": UI_PURPLE,
+        "favorites": UI_PINK,
         "forecast": UI_AMBER,
+        "clock": UI_AMBER,
         "alarm": UI_AMBER,
         "system": (72, 80, 98),
+        "languages": UI_PURPLE,
+        "settings": UI_BLUE,
+        "youtube": UI_PINK,
+        "weather": UI_PURPLE,
         "bluetooth": UI_GREEN,
     }
     half = layout_w < 220
@@ -6422,8 +6437,19 @@ def draw_home_card(
                 f"IP {current_ip}",
                 layout_y + 24
             )
+        elif kind == "clock":
+            blit_lines(datetime.now().strftime("%H:%M"), datetime.now().strftime("%A").upper(), layout_y + 24)
+        elif kind == "favorites":
+            count = len(favorite_indices)
+            blit_lines(f"{count} SAVED", "STATIONS", layout_y + 24)
+        elif kind == "youtube":
+            blit_lines(youtube_touch_status, "YOUTUBE", layout_y + 24)
+        elif kind == "languages":
+            blit_lines(str(len(LANGUAGE_STREAMS)), "LANGUAGES", layout_y + 24)
+        elif kind == "settings":
+            blit_lines(current_theme.name.upper(), f"{device_settings.brightness}%", layout_y + 24)
         else:
-            blit_lines(system_stats['bluetooth'], "SPEAKER", layout_y + 24)
+            blit_lines(HOME_CARD_LABELS.get(kind, "CARD"), "", layout_y + 24)
         return body
 
     inner_top = layout_y + 26
@@ -6581,6 +6607,82 @@ def draw_home_card(
         blit_centered(
             touch_bluetooth_status, f_tiny, muted_ink_on(body),
             inner_top + inner_h * 2 // 3, sub_chars
+        )
+    elif kind == "clock":
+        clock_now = datetime.now()
+        blit_centered(
+            clock_now.strftime("%H:%M"),
+            f_weather if half else f_xl,
+            ink_on(body), inner_top + inner_h // 5, 8
+        )
+        blit_centered(
+            clock_now.strftime("%A").upper(), f_sm, ink_on(body),
+            inner_top + inner_h // 2, 16
+        )
+        blit_centered(
+            clock_now.strftime("%d %B %Y"), f_tiny, muted_ink_on(body),
+            inner_top + inner_h * 2 // 3, 22
+        )
+    elif kind == "favorites":
+        saved = [
+            stations[index]['name']
+            for index in favorite_indices
+            if 0 <= index < len(stations)
+        ][:6]
+        if not saved:
+            blit_centered(
+                "NO FAVORITES YET", f_sm, muted_ink_on(body),
+                inner_top + inner_h // 3, 18
+            )
+        else:
+            step = max(28, inner_h // max(1, len(saved)))
+            for index, name in enumerate(saved):
+                blit_centered(
+                    name, f_sm, ink_on(body),
+                    inner_top + index * step, main_chars
+                )
+    elif kind == "languages":
+        names = list(LANGUAGE_STREAMS)
+        step = max(24, inner_h // max(1, len(names)))
+        for index, name in enumerate(names):
+            chosen = name == selected_language
+            blit_centered(
+                name.upper(), f_sm if not half else f_tiny,
+                ink_on(body) if chosen else muted_ink_on(body),
+                inner_top + index * step, 16
+            )
+    elif kind == "youtube":
+        playing = ""
+        if stations and current_youtube_id():
+            playing = stations[current_idx].get('name', '')
+        blit_centered(
+            playing or youtube_touch_status, f_sm, ink_on(body),
+            inner_top, main_chars
+        )
+        titles = [
+            video.get('title') or 'YouTube'
+            for video in youtube_results_cache[:4]
+        ]
+        if not titles:
+            blit_centered(
+                "OPEN PAGES TO SEARCH", f_tiny, muted_ink_on(body),
+                inner_top + 36, 22
+            )
+        else:
+            for index, title in enumerate(titles):
+                blit_centered(
+                    title, f_tiny, muted_ink_on(body),
+                    inner_top + 40 + index * (inner_h // 5), sub_chars
+                )
+    elif kind == "settings":
+        blit_rows(
+            (
+                ("SOUND", str(audio_manager.current_output).upper()),
+                ("BRIGHTNESS", f"{device_settings.brightness}%"),
+                ("THEME", current_theme.name.upper()),
+                ("AUTO DIM", "ON" if device_settings.auto_dim_enabled else "OFF"),
+            ),
+            inner_top, max(40, inner_h // 4)
         )
     return body
 
@@ -6819,12 +6921,17 @@ def draw_home_cards_settings_screen(now):
     screen.blit(pick_title, XY(18, 168))
     home_card_choice_rects = []
     selected = device_settings.home_cards[home_card_edit_slot]
+    columns = 3
     for index, kind in enumerate(HOME_CARD_KINDS):
-        rect = R(16 + (index % 2) * 152, 186 + (index // 2) * 72, 140, 64)
+        rect = R(
+            10 + (index % columns) * 102,
+            186 + (index // columns) * 54,
+            96, 48
+        )
         home_card_choice_rects.append(rect)
         fill = UI_GREEN if kind == selected else UI_BLUE
         labeled_button(
-            screen, rect, fill, f_tiny, HOME_CARD_LABELS[kind], 14
+            screen, rect, fill, f_tiny, HOME_CARD_LABELS[kind], 12
         )
 
     labeled_button(
