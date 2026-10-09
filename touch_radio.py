@@ -6034,7 +6034,7 @@ def draw_menu_screen(now):
         ("NOW PLAYING", "Radio controls"),
         ("FAVORITES", "Quick stations"),
         ("FORECAST", "Five days"),
-        ("CLOCK", "Choose two cards"),
+        ("CLOCK", "Time dashboard"),
         ("ALARM / SLEEP", "Timers"),
         ("SYSTEM", "Pi status"),
         ("LANGUAGES", "More streams"),
@@ -6093,7 +6093,7 @@ def draw_favorites_screen(now):
             draw_centered_text(screen, f_tiny, "EMPTY", muted_ink_on(body), rect)
     draw_pages_button()
 
-def draw_home_card(rect, kind, now, layout_y=248):
+def draw_home_card(rect, kind, now, layout_x=16, layout_y=192):
     accents = {
         "now_playing": UI_BLUE,
         "weather": UI_PURPLE,
@@ -6102,79 +6102,76 @@ def draw_home_card(rect, kind, now, layout_y=248):
         "system": (72, 80, 98),
         "bluetooth": UI_GREEN,
     }
-    body = draw_info_card(screen, rect, accents.get(kind, UI_BLUE), 16)
+    compact = rect.width < X(200)
+    body = draw_info_card(screen, rect, accents.get(kind, UI_BLUE), 14)
     title = f_tiny.render(
         HOME_CARD_LABELS.get(kind, "CARD"), True, muted_ink_on(body)
     )
-    screen.blit(title, (rect.x + X(12), rect.y + Y(6)))
-    hint = f_tiny.render("TAP TO CHANGE", True, muted_ink_on(body))
-    screen.blit(
-        hint,
-        (rect.right - hint.get_width() - X(12), rect.y + Y(6))
-    )
+    screen.blit(title, (rect.x + X(10), rect.y + Y(5)))
+    main_chars = 12 if compact else 22
+    sub_chars = 14 if compact else 28
 
     if kind == "now_playing":
         station = stations[current_idx]['name'] if stations else "TCRADIOS"
         playing = sanitize_text(meta_text) or station
-        name = f_sm.render(fit_label(playing, 22), True, ink_on(body))
-        screen.blit(name, (rect.x + X(12), rect.y + Y(28)))
-        if playing != station:
-            extra = f_tiny.render(
-                fit_label(station, 28), True, muted_ink_on(body)
-            )
-            screen.blit(extra, (rect.x + X(12), rect.y + Y(52)))
-    elif kind == "weather":
-        draw_weather_icon(
-            screen, 52, layout_y + 46, weather_type, 16,
-            dimmed=False, on_background=body
+        name = f_sm.render(fit_label(playing, main_chars), True, ink_on(body))
+        screen.blit(name, (rect.x + X(10), rect.y + Y(24)))
+        extra = f_tiny.render(
+            fit_label(station, sub_chars), True, muted_ink_on(body)
         )
+        screen.blit(extra, (rect.x + X(10), rect.y + Y(46)))
+    elif kind == "weather":
+        if not compact:
+            draw_weather_icon(
+                screen, layout_x + 36, layout_y + 38, weather_type, 16,
+                dimmed=False, on_background=body
+            )
         temp = f_sm.render(f"{current_temp}°C", True, ink_on(body))
-        screen.blit(temp, (rect.x + X(78), rect.y + Y(26)))
+        text_x = rect.x + (X(10) if compact else X(70))
+        screen.blit(temp, (text_x, rect.y + Y(24)))
         city = f_tiny.render(
-            fit_label(device_settings.weather_name.upper(), 22),
+            fit_label(device_settings.weather_name.upper(), sub_chars),
             True, muted_ink_on(body)
         )
-        screen.blit(city, (rect.x + X(78), rect.y + Y(50)))
+        screen.blit(city, (text_x, rect.y + Y(46)))
     elif kind == "forecast":
         today = weather_forecast[0] if weather_forecast else None
         if today:
             line = f_sm.render(
                 f"{today['high']}° / {today['low']}°", True, ink_on(body)
             )
-            screen.blit(line, (rect.x + X(12), rect.y + Y(28)))
+            screen.blit(line, (rect.x + X(10), rect.y + Y(24)))
             extra = f_tiny.render(
-                fit_label(f"{today['day']} • {today['label']}", 28),
+                fit_label(f"{today['day']} {today['label']}", sub_chars),
                 True, muted_ink_on(body)
             )
-            screen.blit(extra, (rect.x + X(12), rect.y + Y(52)))
+            screen.blit(extra, (rect.x + X(10), rect.y + Y(46)))
         else:
-            empty = f_sm.render("No forecast yet", True, muted_ink_on(body))
-            screen.blit(empty, (rect.x + X(12), rect.y + Y(34)))
+            empty = f_tiny.render("No forecast yet", True, muted_ink_on(body))
+            screen.blit(empty, (rect.x + X(10), rect.y + Y(30)))
     elif kind == "alarm":
         alarm = f_sm.render(alarm_system.alarm_time, True, ink_on(body))
-        screen.blit(alarm, (rect.x + X(12), rect.y + Y(28)))
-        state = (
-            "ALARM ON" if alarm_system.alarm_enabled else "ALARM OFF"
-        )
+        screen.blit(alarm, (rect.x + X(10), rect.y + Y(24)))
+        state = "ALARM ON" if alarm_system.alarm_enabled else "ALARM OFF"
         extra = f_tiny.render(state, True, muted_ink_on(body))
-        screen.blit(extra, (rect.x + X(12), rect.y + Y(52)))
+        screen.blit(extra, (rect.x + X(10), rect.y + Y(46)))
     elif kind == "system":
         line = f_sm.render(
-            fit_label(f"CPU {system_stats['cpu_temp']}", 22),
+            fit_label(f"CPU {system_stats['cpu_temp']}", main_chars),
             True, ink_on(body)
         )
-        screen.blit(line, (rect.x + X(12), rect.y + Y(28)))
+        screen.blit(line, (rect.x + X(10), rect.y + Y(24)))
         extra = f_tiny.render(
-            fit_label(f"IP {current_ip}", 28), True, muted_ink_on(body)
+            fit_label(f"IP {current_ip}", sub_chars), True, muted_ink_on(body)
         )
-        screen.blit(extra, (rect.x + X(12), rect.y + Y(52)))
+        screen.blit(extra, (rect.x + X(10), rect.y + Y(46)))
     elif kind == "bluetooth":
         line = f_sm.render(
-            fit_label(system_stats['bluetooth'], 22), True, ink_on(body)
+            fit_label(system_stats['bluetooth'], main_chars), True, ink_on(body)
         )
-        screen.blit(line, (rect.x + X(12), rect.y + Y(28)))
+        screen.blit(line, (rect.x + X(10), rect.y + Y(24)))
         extra = f_tiny.render("SPEAKER", True, muted_ink_on(body))
-        screen.blit(extra, (rect.x + X(12), rect.y + Y(52)))
+        screen.blit(extra, (rect.x + X(10), rect.y + Y(46)))
     return body
 
 
@@ -6198,24 +6195,36 @@ def draw_clock_screen(now):
     draw_page_base("CLOCK", now)
     current_time = datetime.now()
     time_surface = f_xl.render(current_time.strftime("%H:%M"), True, UI_TEXT)
-    screen.blit(time_surface, (X(160) - time_surface.get_width() // 2, Y(70)))
+    screen.blit(time_surface, (X(160) - time_surface.get_width() // 2, Y(82)))
     date_surface = f_med.render(
         current_time.strftime("%A").upper(), True, ink_on(UI_BG_TOP, UI_BLUE)
     )
-    screen.blit(date_surface, (X(160) - date_surface.get_width() // 2, Y(148)))
+    screen.blit(date_surface, (X(160) - date_surface.get_width() // 2, Y(177)))
     full_date = f_sm.render(
         current_time.strftime("%d %B %Y"), True, muted_ink_on(UI_BG_TOP)
     )
-    screen.blit(full_date, (X(160) - full_date.get_width() // 2, Y(184)))
-    hint = f_tiny.render("Tap a card to change it", True, UI_MUTED)
-    screen.blit(hint, (X(160) - hint.get_width() // 2, Y(220)))
+    screen.blit(full_date, (X(160) - full_date.get_width() // 2, Y(213)))
 
-    for index, (rect, kind) in enumerate(
-        zip(home_card_rects, device_settings.home_cards)
-    ):
-        draw_home_card(rect, kind, now, 248 if index == 0 else 338)
-    if home_card_pick_slot is not None:
-        draw_home_card_picker(home_card_pick_slot)
+    weather_card = R(28, 252, 264, 78)
+    body = draw_info_card(screen, weather_card, UI_PURPLE, 18)
+    draw_weather_icon(
+        screen, 76, 291, weather_type, 22,
+        dimmed=False, on_background=body
+    )
+    temp = f_weather.render(f"{current_temp}°C", True, ink_on(body))
+    screen.blit(temp, (X(112), weather_card.y + Y(11)))
+    city = f_tiny.render(
+        fit_label(device_settings.weather_name.upper(), 18),
+        True, muted_ink_on(body)
+    )
+    screen.blit(city, (X(116), weather_card.y + Y(53)))
+
+    station_card = R(28, 344, 264, 58)
+    body = draw_info_card(screen, station_card, (72, 80, 98), 15)
+    draw_centered_text(
+        screen, f_sm, fit_label(stations[current_idx]['name'], 28),
+        ink_on(body), station_card
+    )
     draw_pages_button()
 
 def draw_alarm_screen(now):
@@ -7050,8 +7059,8 @@ btn_bluetooth_previous = R(18, 360, 88, 44)
 btn_bluetooth_next = R(214, 360, 88, 44)
 btn_bluetooth_back = R(70, 430, 180, 38)
 home_card_rects = [
-    R(18, 248, 284, 78),
-    R(18, 338, 284, 78),
+    R(16, 192, 140, 70),
+    R(164, 192, 140, 70),
 ]
 home_card_choice_rects = [
     R(28 + (index % 2) * 138, 124 + (index // 2) * 70, 128, 58)
@@ -7150,7 +7159,7 @@ while True:
         last_weather_update = now
 
     if (
-        active_page in ("system", "settings", "clock")
+        active_page in ("system", "settings", "clock", "radio")
         and now - last_system_update > 10
         and not system_stats_updating
     ):
@@ -7237,59 +7246,14 @@ while True:
         else:
             pygame.draw.ellipse(screen, UI_MUTED, E(160, 128, 58), S(1))
 
-        # Now-playing: Tamil on top, English transliteration under it
-        display_text = sanitize_text(meta_text)
-        roman_text = transliterate_tamil(display_text)
-        if roman_text:
-            name_area = R(16, 192, 288, 28)
-            roman_area = R(16, 220, 288, 20)
-            name_render = f_sm.render(display_text, True, UI_TEXT)
-            roman_render = f_tiny.render(
-                fit_label(roman_text, 34), True, UI_MUTED
+        for index, (rect, kind) in enumerate(
+            zip(home_card_rects, device_settings.home_cards)
+        ):
+            draw_home_card(
+                rect, kind, now,
+                layout_x=16 if index == 0 else 164,
+                layout_y=192
             )
-            screen.set_clip(name_area.inflate(-X(12), 0))
-            if name_render.get_width() <= name_area.width - X(24):
-                name_x = name_area.centerx - name_render.get_width() // 2
-            else:
-                scroll_x -= 2
-                if scroll_x < -name_render.get_width():
-                    scroll_x = name_area.right
-                name_x = scroll_x
-            screen.blit(name_render, (name_x, name_area.y + Y(4)))
-            screen.set_clip(None)
-            screen.blit(
-                roman_render,
-                (roman_area.centerx - roman_render.get_width() // 2, roman_area.y)
-            )
-        else:
-            name_area = R(16, 198, 288, 34)
-            name_render = f_lg.render(display_text, True, UI_TEXT)
-            screen.set_clip(name_area.inflate(-X(12), 0))
-            if name_render.get_width() <= name_area.width - X(24):
-                name_x = name_area.centerx - name_render.get_width() // 2
-            else:
-                scroll_x -= 2
-                if scroll_x < -name_render.get_width():
-                    scroll_x = name_area.right
-                name_x = scroll_x
-            screen.blit(name_render, (name_x, name_area.y + Y(5)))
-            screen.set_clip(None)
-
-        # Status chips appear only when active; controls remain in the dock
-        alarm_chip = R(18, 242, 128, 22)
-        sleep_chip = R(174, 242, 128, 22)
-        if alarm_system.alarm_enabled:
-            draw_modern_button(screen, alarm_chip, (57, 48, 31), (112, 88, 41), 10)
-            draw_centered_text(
-                screen, f_tiny, f"ALARM {alarm_system.alarm_time}",
-                UI_AMBER, alarm_chip
-            )
-        if alarm_system.sleep_timer_enabled:
-            rem = alarm_system.get_sleep_remaining()
-            sleep_label = f"SLEEP {rem} MIN"
-            sleep_color = UI_GREEN if rem > 5 else UI_PINK
-            draw_modern_button(screen, sleep_chip, (35, 40, 67), (75, 61, 126), 10)
-            draw_centered_text(screen, f_tiny, sleep_label, sleep_color, sleep_chip)
 
         # Volume strip: circular vector − / + so glyphs never become boxes
         vol_minus_rect = R(10, 270, 46, 46)
@@ -7384,6 +7348,9 @@ while True:
                 (btn_fab.centerx + X(16), btn_fab.centery - Y(16)),
                 S(5),
             )
+
+        if home_card_pick_slot is not None:
+            draw_home_card_picker(home_card_pick_slot)
 
         if show_qr:
             qr_panel = R(31, 78, 258, 278)
@@ -7648,24 +7615,6 @@ while True:
                                     if rect.collidepoint(event.pos):
                                         begin_youtube_play(video)
                                         break
-                elif active_page == "clock":
-                    if home_card_pick_slot is not None:
-                        picked = False
-                        for kind, rect in zip(
-                            HOME_CARD_KINDS, home_card_choice_rects
-                        ):
-                            if rect.collidepoint(event.pos):
-                                assign_home_card(home_card_pick_slot, kind)
-                                home_card_pick_slot = None
-                                picked = True
-                                break
-                        if not picked:
-                            home_card_pick_slot = None
-                    else:
-                        for slot, rect in enumerate(home_card_rects):
-                            if rect.collidepoint(event.pos):
-                                home_card_pick_slot = slot
-                                break
                 elif active_page == "favorites":
                     if btn_favorite_toggle.collidepoint(event.pos):
                         toggle_current_favorite()
@@ -7799,6 +7748,28 @@ while True:
                         )
                 continue
 
+            if home_card_pick_slot is not None:
+                picked = False
+                for kind, rect in zip(
+                    HOME_CARD_KINDS, home_card_choice_rects
+                ):
+                    if rect.collidepoint(event.pos):
+                        assign_home_card(home_card_pick_slot, kind)
+                        home_card_pick_slot = None
+                        picked = True
+                        break
+                if not picked:
+                    home_card_pick_slot = None
+                continue
+            card_touched = False
+            for slot, rect in enumerate(home_card_rects):
+                if rect.collidepoint(event.pos):
+                    home_card_pick_slot = slot
+                    card_touched = True
+                    break
+            if card_touched:
+                continue
+
             if btn_fab.collidepoint(event.pos):
                 fab_open = not fab_open
                 continue
@@ -7821,6 +7792,7 @@ while True:
                 continue
             if btn_open_pages.collidepoint(event.pos):
                 fab_open = False
+                home_card_pick_slot = None
                 active_page = "menu"
                 continue
             if btn_exit.collidepoint(event.pos):
@@ -7855,6 +7827,9 @@ while True:
             dx = event.pos[0] - touch_start_pos[0]
             dy = event.pos[1] - touch_start_pos[1]
             dt = time.time() - touch_start_time
+            if home_card_pick_slot is not None:
+                adjusting_volume = False
+                continue
             if (
                 active_page in PAGE_ORDER
                 and abs(dx) > X(45)
