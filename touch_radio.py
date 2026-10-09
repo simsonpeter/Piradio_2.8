@@ -4251,6 +4251,13 @@ def square_around(cx, cy, radius):
     x, y = X(cx), Y(cy)
     return _Rect(x - r, y - r, r * 2, r * 2)
 
+def header_edge_buttons(header):
+    side = max(1, header.height - S(6))
+    top = header.y + (header.height - side) // 2
+    qr = _Rect(header.x, top, side, side)
+    close = _Rect(header.right - side, top, side, side)
+    return qr, close
+
 print(f"Touchscreen {SCREEN_W}x{SCREEN_H} (fill {SCALE_X:.2f}x{SCALE_Y:.2f})")
 
 # --- UNICODE FONT SETUP (Tamil Support) ---
@@ -5767,6 +5774,21 @@ def set_home_card_layout(layout):
     device_settings.save()
 
 
+def assign_home_card(slot, kind):
+    if kind not in HOME_CARD_KINDS or slot not in (0, 1):
+        return
+    cards = list(normalize_home_cards(device_settings.home_cards))
+    if (
+        device_settings.home_card_layout == "bubble"
+        and cards[1 - slot] == kind
+    ):
+        cards[slot], cards[1 - slot] = cards[1 - slot], cards[slot]
+    else:
+        cards[slot] = kind
+    device_settings.home_cards = normalize_home_cards(cards)
+    device_settings.save()
+
+
 def cycle_home_card(slot, direction):
     if slot not in (0, 1):
         return
@@ -6270,15 +6292,15 @@ def draw_menu_screen(now):
             else (UI_BLUE, UI_PURPLE, UI_AMBER)[index % 3]
         )
         body = draw_modern_button(screen, rect, border, border, 16)
-        title_surface = f_sm.render(title, True, contrasting_text(body))
-        screen.blit(
-            title_surface,
-            (rect.centerx - title_surface.get_width() // 2, rect.y + Y(12))
+        title_band = _Rect(rect.x, rect.y, rect.width, rect.height // 2)
+        subtitle_band = _Rect(
+            rect.x, rect.y + rect.height // 2, rect.width, rect.height // 2
         )
-        subtitle_surface = f_tiny.render(subtitle, True, contrasting_muted(body))
-        screen.blit(
-            subtitle_surface,
-            (rect.centerx - subtitle_surface.get_width() // 2, rect.y + Y(34))
+        draw_centered_text(
+            screen, f_sm, title, contrasting_text(body), title_band
+        )
+        draw_centered_text(
+            screen, f_tiny, subtitle, contrasting_muted(body), subtitle_band
         )
 def draw_favorites_screen(now):
     draw_page_base("FAVORITES", now)
@@ -6360,18 +6382,15 @@ def draw_home_card(
 
     def blit_rows(rows, start_y, step=36):
         for index, (label, value) in enumerate(rows):
-            row_y = start_y + index * step
+            row_top = Y(start_y + index * step)
             label_surf = f_tiny.render(label, True, muted_ink_on(body))
             value_surf = f_sm.render(
                 fit_label(str(value), main_chars), True, ink_on(body)
             )
-            screen.blit(label_surf, (rect.x + X(10), Y(row_y)))
+            screen.blit(label_surf, (rect.x + X(12), row_top))
             screen.blit(
                 value_surf,
-                (
-                    rect.right - value_surf.get_width() - X(10),
-                    Y(row_y + (8 if half else 4))
-                )
+                (rect.x + X(12), row_top + label_surf.get_height() + S(4))
             )
 
     if preview:
@@ -6414,7 +6433,6 @@ def draw_home_card(
     def draw_forecast_rows(rows, top, bottom):
         count = 5
         step = max(28, (bottom - top) // count)
-        icon_size = max(12, min(18, step // 2))
         if not rows:
             blit_centered(
                 "Updating forecast…", f_sm, muted_ink_on(body),
@@ -6422,29 +6440,23 @@ def draw_home_card(
             )
             return
         for index, forecast in enumerate(rows[:count]):
-            fy = top + index * step
+            row_top = Y(top + index * step)
             day = f_sm.render(forecast["day"].upper(), True, ink_on(body))
-            screen.blit(day, (rect.x + X(8), Y(fy + max(2, step // 6))))
-            if step >= 40:
-                label = f_tiny.render(
-                    fit_label(forecast["label"], 12 if half else 18),
-                    True, muted_ink_on(body)
-                )
-                screen.blit(label, (rect.x + X(8), Y(fy + 20)))
-            draw_weather_icon(
-                screen, layout_x + (layout_w - 58 if half else layout_w // 2),
-                fy + step // 2, forecast["type"], icon_size,
-                dimmed=False, on_background=body
-            )
-            hi_lo = (f_sm if step >= 34 else f_tiny).render(
+            hi_lo = f_sm.render(
                 f"{forecast['high']}°/{forecast['low']}°", True, ink_on(body)
             )
+            screen.blit(day, (rect.x + X(8), row_top))
             screen.blit(
                 hi_lo,
-                (
-                    rect.right - hi_lo.get_width() - X(8),
-                    Y(fy + max(4, (step - 14) // 2))
-                )
+                (rect.right - hi_lo.get_width() - X(8), row_top)
+            )
+            label = f_tiny.render(
+                fit_label(forecast["label"], 16 if half else 22),
+                True, muted_ink_on(body)
+            )
+            screen.blit(
+                label,
+                (rect.x + X(8), row_top + day.get_height() + S(2))
             )
 
     if kind == "now_playing":
@@ -6621,7 +6633,10 @@ def draw_alarm_screen(now):
     )
     screen.blit(
         alarm_label,
-        (alarm_card.centerx - alarm_label.get_width() // 2, 91)
+        (
+            alarm_card.centerx - alarm_label.get_width() // 2,
+            alarm_card.y + Y(16)
+        )
     )
     state = "ALARM ON" if alarm_system.alarm_enabled else "ALARM OFF"
     state_surface = f_sm.render(
@@ -6631,7 +6646,10 @@ def draw_alarm_screen(now):
     )
     screen.blit(
         state_surface,
-        (alarm_card.centerx - state_surface.get_width() // 2, 150)
+        (
+            alarm_card.centerx - state_surface.get_width() // 2,
+            alarm_card.y + alarm_label.get_height() + Y(24)
+        )
     )
 
     for rect, label in (
@@ -6762,6 +6780,7 @@ def draw_settings_screen(now):
     draw_pages_button()
 
 def draw_home_cards_settings_screen(now):
+    global home_card_choice_rects, home_card_edit_slot
     draw_page_base("HOME CARDS", now)
     layout_title = f_tiny.render("LAYOUT", True, UI_MUTED)
     screen.blit(layout_title, XY(18, 62))
@@ -6777,37 +6796,35 @@ def draw_home_cards_settings_screen(now):
         f_tiny, "2 HALVES", 13
     )
 
-    left_title = f_tiny.render(
-        "LEFT CARD" if bubble else "CARD", True, UI_MUTED
-    )
-    screen.blit(left_title, XY(18, 118))
-    labeled_button(screen, btn_card_left_prev, UI_BLUE, f_lg, "‹", 13)
+    if not bubble:
+        home_card_edit_slot = 0
     labeled_button(
-        screen, btn_card_left_label, UI_BLUE, f_tiny,
-        HOME_CARD_LABELS[device_settings.home_cards[0]], 13
+        screen, btn_card_slot_left,
+        UI_GREEN if home_card_edit_slot == 0 else (55, 61, 77),
+        f_tiny,
+        f"LEFT  {HOME_CARD_LABELS[device_settings.home_cards[0]]}"
+        if bubble else f"CARD  {HOME_CARD_LABELS[device_settings.home_cards[0]]}",
+        12
     )
-    labeled_button(screen, btn_card_left_next, UI_BLUE, f_lg, "›", 13)
-
     if bubble:
-        right_title = f_tiny.render("RIGHT CARD", True, UI_MUTED)
-        screen.blit(right_title, XY(18, 186))
-        labeled_button(screen, btn_card_right_prev, UI_BLUE, f_lg, "‹", 13)
         labeled_button(
-            screen, btn_card_right_label, UI_PURPLE, f_tiny,
-            HOME_CARD_LABELS[device_settings.home_cards[1]], 13
+            screen, btn_card_slot_right,
+            UI_GREEN if home_card_edit_slot == 1 else (55, 61, 77),
+            f_tiny,
+            f"RIGHT  {HOME_CARD_LABELS[device_settings.home_cards[1]]}",
+            12
         )
-        labeled_button(screen, btn_card_right_next, UI_BLUE, f_lg, "›", 13)
-        labeled_button(screen, btn_card_swap, UI_AMBER, f_sm, "SWAP ORDER", 14)
 
-    preview = f_tiny.render("PREVIEW", True, UI_MUTED)
-    screen.blit(preview, XY(18, 292))
-    for rect, kind, layout_x, layout_y, layout_w, layout_h in home_card_slots(
-        top=318, height=64
-    ):
-        draw_home_card(
-            rect, kind, now,
-            layout_x=layout_x, layout_y=layout_y,
-            layout_w=layout_w, layout_h=layout_h
+    pick_title = f_tiny.render("TAP A CARD", True, UI_MUTED)
+    screen.blit(pick_title, XY(18, 168))
+    home_card_choice_rects = []
+    selected = device_settings.home_cards[home_card_edit_slot]
+    for index, kind in enumerate(HOME_CARD_KINDS):
+        rect = R(16 + (index % 2) * 152, 186 + (index // 2) * 72, 140, 64)
+        home_card_choice_rects.append(rect)
+        fill = UI_GREEN if kind == selected else UI_BLUE
+        labeled_button(
+            screen, rect, fill, f_tiny, HOME_CARD_LABELS[kind], 14
         )
 
     labeled_button(
@@ -6982,7 +6999,7 @@ def draw_language_stations_screen(now):
     )
     screen.blit(
         status_surface,
-        (160 - status_surface.get_width() // 2, 67)
+        (X(160) - status_surface.get_width() // 2, Y(67))
     )
 
     streams = language_stream_cache.get(selected_language, [])
@@ -7046,7 +7063,7 @@ def draw_youtube_search_bar():
     screen.blit(
         text,
         (
-            btn_youtube_search_field.x + 12,
+            btn_youtube_search_field.x + X(12),
             btn_youtube_search_field.centery - text.get_height() // 2,
         ),
     )
@@ -7074,7 +7091,7 @@ def draw_youtube_screen(now):
     status_surface = f_tiny.render(fit_label(status, 42), True, UI_MUTED)
     screen.blit(
         status_surface,
-        (160 - status_surface.get_width() // 2, 116)
+        (X(160) - status_surface.get_width() // 2, Y(116))
     )
     for (label, query), rect in zip(YOUTUBE_PRESETS, youtube_preset_rects):
         selected = youtube_touch_query == query and not youtube_touch_busy
@@ -7207,10 +7224,10 @@ btn_mute = R(164, 308, 140, 52)
 vol_rect = R(0, 0, 0, 0)
 btn_pages = R(70, 430, 180, 38)
 menu_card_rects = [
-    R(16 + (index % 2) * 152, 68 + (index // 2) * 70, 136, 62)
+    R(12 + (index % 2) * 154, 66 + (index // 2) * 82, 142, 74)
     for index in range(8)
 ]
-menu_card_rects.append(R(16, 348, 288, 62))
+menu_card_rects.append(R(12, 394, 296, 74))
 YOUTUBE_PRESETS = (
     ("LOFI", "lofi hip hop radio"),
     ("JAZZ", "smooth jazz radio"),
@@ -7505,6 +7522,10 @@ btn_card_right_prev = R(16, 194, 44, 44)
 btn_card_right_label = R(66, 194, 188, 44)
 btn_card_right_next = R(260, 194, 44, 44)
 btn_card_swap = R(16, 248, 288, 40)
+btn_card_slot_left = R(16, 124, 140, 36)
+btn_card_slot_right = R(164, 124, 140, 36)
+home_card_choice_rects = []
+home_card_edit_slot = 0
 btn_home_cards_back = R(70, 430, 180, 38)
 language_card_rects = [
     R(16 + (index % 2) * 152, 75 + (index // 2) * 83, 136, 70)
@@ -7554,8 +7575,7 @@ def start_rotary_encoder():
 rotary_controls = []
 start_rotary_encoder()
 
-btn_qr = inscribed_square(15, 13, 42, 40)
-btn_exit = inscribed_square(268, 13, 37, 40)
+btn_qr, btn_exit = header_edge_buttons(R(8, 7, 304, 52))
 _playback_controls = playback_control_layout()
 vol_minus_rect = _playback_controls["vol_minus"]
 vol_plus_rect = _playback_controls["vol_plus"]
@@ -7629,10 +7649,8 @@ while True:
         header_rect = R(8, 7, 304, 52)
         pygame.draw.rect(screen, UI_SURFACE, header_rect, border_radius=S(17))
         pygame.draw.rect(screen, (54, 75, 112), header_rect, S(1), border_radius=S(17))
-        pygame.draw.line(screen, UI_BLUE, XY(28, 58), XY(145, 58), S(2))
-        pygame.draw.line(screen, UI_PURPLE, XY(175, 58), XY(292, 58), S(2))
 
-        btn_qr = inscribed_square(15, 13, 42, 40)
+        btn_qr, btn_exit = header_edge_buttons(header_rect)
         qr_body = draw_modern_button(screen, btn_qr, UI_BLUE, UI_BLUE, 12)
         draw_centered_text(screen, f_sm, "QR", contrasting_text(qr_body), btn_qr)
 
@@ -7642,7 +7660,6 @@ while True:
             ip_surface = f_tiny.render(f"{current_ip}:8080", True, UI_MUTED)
             screen.blit(ip_surface, (X(160) - ip_surface.get_width() // 2, Y(43)))
 
-        btn_exit = inscribed_square(268, 13, 37, 40)
         exit_body = draw_modern_button(screen, btn_exit, (75, 30, 55), UI_PINK, 12)
         draw_vector_icon(
             screen, btn_exit.center, "close",
@@ -7920,19 +7937,23 @@ while True:
                     active_page = "settings"
                 elif btn_card_layout_single.collidepoint(event.pos):
                     set_home_card_layout("single")
+                    home_card_edit_slot = 0
                 elif btn_card_layout_bubble.collidepoint(event.pos):
                     set_home_card_layout("bubble")
-                elif btn_card_left_prev.collidepoint(event.pos):
-                    cycle_home_card(0, -1)
-                elif btn_card_left_next.collidepoint(event.pos):
-                    cycle_home_card(0, 1)
-                elif device_settings.home_card_layout == "bubble":
-                    if btn_card_right_prev.collidepoint(event.pos):
-                        cycle_home_card(1, -1)
-                    elif btn_card_right_next.collidepoint(event.pos):
-                        cycle_home_card(1, 1)
-                    elif btn_card_swap.collidepoint(event.pos):
-                        swap_home_cards()
+                elif btn_card_slot_left.collidepoint(event.pos):
+                    home_card_edit_slot = 0
+                elif (
+                    device_settings.home_card_layout == "bubble"
+                    and btn_card_slot_right.collidepoint(event.pos)
+                ):
+                    home_card_edit_slot = 1
+                else:
+                    for kind, rect in zip(
+                        HOME_CARD_KINDS, home_card_choice_rects
+                    ):
+                        if rect.collidepoint(event.pos):
+                            assign_home_card(home_card_edit_slot, kind)
+                            break
                 continue
 
             if active_page == "languages":
