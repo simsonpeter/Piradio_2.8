@@ -4061,8 +4061,8 @@ try:
 except Exception:
     pass
 
-# Official 7-inch Touch Display 2 is 720x1280 portrait. Layout is authored
-# at 320x480 and scaled to the live framebuffer so hit targets stay aligned.
+# Layout is authored at 320x480. Use one uniform scale so circles, logos,
+# and glow stay round and aligned. Letterbox extra width or height.
 BASE_W, BASE_H = 320, 480
 OFFICIAL_7_W, OFFICIAL_7_H = 720, 1280
 _Rect = pygame.Rect
@@ -4084,26 +4084,29 @@ def _open_touchscreen():
         return surface, surface.get_width(), surface.get_height()
 
 screen, SCREEN_W, SCREEN_H = _open_touchscreen()
-SCALE_X = SCREEN_W / float(BASE_W)
-SCALE_Y = SCREEN_H / float(BASE_H)
-SCALE = min(SCALE_X, SCALE_Y)
+SCALE = min(SCREEN_W / float(BASE_W), SCREEN_H / float(BASE_H))
+OFFSET_X = int((SCREEN_W - BASE_W * SCALE) / 2)
+OFFSET_Y = int((SCREEN_H - BASE_H * SCALE) / 2)
 
 def X(value):
-    return int(round(value * SCALE_X))
+    return OFFSET_X + int(round(value * SCALE))
 
 def Y(value):
-    return int(round(value * SCALE_Y))
+    return OFFSET_Y + int(round(value * SCALE))
 
 def S(value):
     return max(1, int(round(value * SCALE)))
 
 def R(x, y, w, h):
-    return _Rect(X(x), Y(y), max(1, X(w)), max(1, Y(h)))
+    return _Rect(X(x), Y(y), S(w), S(h))
 
 def XY(x, y):
     return (X(x), Y(y))
 
-print(f"Touchscreen {SCREEN_W}x{SCREEN_H} (scale {SCALE_X:.2f}x{SCALE_Y:.2f})")
+print(
+    f"Touchscreen {SCREEN_W}x{SCREEN_H} "
+    f"(uniform scale {SCALE:.2f}, offset {OFFSET_X},{OFFSET_Y})"
+)
 
 # --- UNICODE FONT SETUP (Tamil Support) ---
 TAMIL_RANGE = range(0x0B80, 0x0BFF + 1)
@@ -5848,11 +5851,11 @@ def draw_forecast_screen(now):
             day_surface = f_sm.render(
                 forecast['day'].upper(), True, ink_on(body)
             )
-            screen.blit(day_surface, (X(29), row.y + Y(7)))
+            screen.blit(day_surface, (X(29), row.y + S(7)))
             label_surface = f_tiny.render(
                 forecast['label'], True, muted_ink_on(body)
             )
-            screen.blit(label_surface, (X(29), row.y + Y(25)))
+            screen.blit(label_surface, (X(29), row.y + S(25)))
 
             draw_weather_icon(
                 screen, 196, 166 + index * 52 + 22,
@@ -5862,7 +5865,7 @@ def draw_forecast_screen(now):
             temperature_surface = f_sm.render(temperature, True, ink_on(body))
             screen.blit(
                 temperature_surface,
-                (X(292) - temperature_surface.get_width(), row.y + Y(14))
+                (X(292) - temperature_surface.get_width(), row.y + S(14))
             )
     else:
         loading_rect = R(14, 166, 292, 253)
@@ -5914,12 +5917,12 @@ def draw_menu_screen(now):
         title_surface = f_sm.render(title, True, contrasting_text(body))
         screen.blit(
             title_surface,
-            (rect.centerx - title_surface.get_width() // 2, rect.y + 12)
+            (rect.centerx - title_surface.get_width() // 2, rect.y + S(12))
         )
         subtitle_surface = f_tiny.render(subtitle, True, contrasting_muted(body))
         screen.blit(
             subtitle_surface,
-            (rect.centerx - subtitle_surface.get_width() // 2, rect.y + 34)
+            (rect.centerx - subtitle_surface.get_width() // 2, rect.y + S(34))
         )
 def draw_favorites_screen(now):
     draw_page_base("FAVORITES", now)
@@ -5941,16 +5944,16 @@ def draw_favorites_screen(now):
             number = f_tiny.render(
                 f"{index + 1}", True, ink_on(body, UI_BLUE)
             )
-            screen.blit(number, (rect.x + 10, rect.y + 9))
+            screen.blit(number, (rect.x + S(10), rect.y + S(9)))
             name = f_sm.render(
                 fit_label(station['name'], 15), True, ink_on(body)
             )
-            screen.blit(name, (rect.x + 10, rect.y + 31))
+            screen.blit(name, (rect.x + S(10), rect.y + S(31)))
             genre = f_tiny.render(
                 fit_label(station.get('genre', 'Radio'), 18),
                 True, muted_ink_on(body)
             )
-            screen.blit(genre, (rect.x + 10, rect.y + 54))
+            screen.blit(genre, (rect.x + S(10), rect.y + S(54)))
         else:
             body = draw_info_card(screen, rect, (72, 80, 98), 14)
             draw_centered_text(screen, f_tiny, "EMPTY", muted_ink_on(body), rect)
@@ -5977,12 +5980,12 @@ def draw_clock_screen(now):
         dimmed=False, on_background=body
     )
     temp = f_weather.render(f"{current_temp}°C", True, ink_on(body))
-    screen.blit(temp, (X(112), weather_card.y + Y(11)))
+    screen.blit(temp, (X(112), weather_card.y + S(11)))
     city = f_tiny.render(
         fit_label(device_settings.weather_name.upper(), 18),
         True, muted_ink_on(body)
     )
-    screen.blit(city, (X(116), weather_card.y + Y(53)))
+    screen.blit(city, (X(116), weather_card.y + S(53)))
 
     station_card = R(28, 344, 264, 58)
     body = draw_info_card(screen, station_card, (72, 80, 98), 15)
@@ -6059,20 +6062,20 @@ def draw_system_screen(now):
     for rect, (label, value) in zip(system_card_rects, values):
         body = draw_info_card(screen, rect, (72, 80, 98), 16)
         label_surface = f_tiny.render(label, True, muted_ink_on(body))
-        screen.blit(label_surface, (rect.x + 14, rect.y + 15))
+        screen.blit(label_surface, (rect.x + S(14), rect.y + S(15)))
         value_surface = f_sm.render(
             fit_label(value, 18), True, ink_on(body)
         )
-        screen.blit(value_surface, (rect.x + 14, rect.y + 43))
+        screen.blit(value_surface, (rect.x + S(14), rect.y + S(43)))
 
     bluetooth_card = R(18, 320, 284, 54)
     body = draw_info_card(screen, bluetooth_card, UI_BLUE, 16)
     bt_label = f_tiny.render("BLUETOOTH AUDIO", True, muted_ink_on(body))
-    screen.blit(bt_label, (X(34), bluetooth_card.y + Y(8)))
+    screen.blit(bt_label, (X(34), bluetooth_card.y + S(8)))
     bt_value = f_sm.render(
         fit_label(system_stats['bluetooth'], 28), True, ink_on(body)
     )
-    screen.blit(bt_value, (X(34), bluetooth_card.y + Y(28)))
+    screen.blit(bt_value, (X(34), bluetooth_card.y + S(28)))
 
     shutdown_armed = now <= shutdown_confirm_until
     shutdown_label = (
@@ -6172,7 +6175,7 @@ def draw_bluetooth_screen(now):
                 fit_label(device.get('name', 'Bluetooth device'), 23),
                 True, ink_on(body)
             )
-            screen.blit(name_surface, (rect.x + 13, rect.y + 5))
+            screen.blit(name_surface, (rect.x + S(13), rect.y + S(5)))
             state = (
                 "CONNECTED" if connected
                 else ("PAIRED • TAP TO CONNECT" if device.get('paired')
@@ -6181,7 +6184,7 @@ def draw_bluetooth_screen(now):
             state_surface = f_tiny.render(
                 state, True, muted_ink_on(body, UI_GREEN if connected else None)
             )
-            screen.blit(state_surface, (rect.x + 13, rect.y + 24))
+            screen.blit(state_surface, (rect.x + S(13), rect.y + S(24)))
     else:
         empty_rect = R(18, 142, 284, 272)
         body = draw_info_card(screen, empty_rect, (72, 80, 98), 16)
@@ -6259,11 +6262,11 @@ def draw_wifi_screen(now):
                 fit_label(f"{lock}{network['ssid']}", 22),
                 True, contrasting_text(body)
             )
-            screen.blit(name, (rect.x + 12, rect.y + 6))
+            screen.blit(name, (rect.x + S(12), rect.y + S(6)))
             meta = f_tiny.render(
                 f"{network['signal']}%", True, contrasting_muted(body)
             )
-            screen.blit(meta, (rect.x + 12, rect.y + 26))
+            screen.blit(meta, (rect.x + S(12), rect.y + S(26)))
     else:
         empty = R(16, 142, 288, 200)
         body = draw_info_card(screen, empty, (72, 80, 98), 16)
@@ -6313,12 +6316,12 @@ def draw_language_stations_screen(now):
             name_surface = f_sm.render(
                 fit_label(stream['name'], 28), True, ink_on(body)
             )
-            screen.blit(name_surface, (rect.x + 13, rect.y + 7))
+            screen.blit(name_surface, (rect.x + S(13), rect.y + S(7)))
             genre_surface = f_tiny.render(
                 fit_label(stream.get('genre', 'Radio'), 34),
                 True, muted_ink_on(body)
             )
-            screen.blit(genre_surface, (rect.x + 13, rect.y + 29))
+            screen.blit(genre_surface, (rect.x + S(13), rect.y + S(29)))
     elif selected_language:
         empty_rect = R(18, 89, 284, 257)
         body = draw_info_card(screen, empty_rect, (72, 80, 98), 16)
@@ -6433,7 +6436,7 @@ def draw_youtube_screen(now):
                 fit_label(now_prefix + (video.get('title') or 'YouTube'), 28),
                 True, ink_on(body)
             )
-            screen.blit(title, (rect.x + 12, rect.y + 4))
+            screen.blit(title, (rect.x + S(12), rect.y + S(4)))
             meta = f_tiny.render(
                 fit_label(
                     f"{video.get('uploader', '')} • {video.get('duration', '')}",
@@ -6441,7 +6444,7 @@ def draw_youtube_screen(now):
                 ),
                 True, muted_ink_on(body)
             )
-            screen.blit(meta, (rect.x + 12, rect.y + 22))
+            screen.blit(meta, (rect.x + S(12), rect.y + S(22)))
     else:
         empty = R(16, 232, 288, 184)
         body = draw_info_card(screen, empty, (72, 80, 98), 16)
@@ -6987,15 +6990,15 @@ while True:
             roman_render = f_tiny.render(
                 fit_label(roman_text, 34), True, UI_MUTED
             )
-            screen.set_clip(name_area.inflate(-X(12), 0))
-            if name_render.get_width() <= name_area.width - X(24):
+            screen.set_clip(name_area.inflate(-S(12), 0))
+            if name_render.get_width() <= name_area.width - S(24):
                 name_x = name_area.centerx - name_render.get_width() // 2
             else:
                 scroll_x -= 2
                 if scroll_x < -name_render.get_width():
                     scroll_x = name_area.right
                 name_x = scroll_x
-            screen.blit(name_render, (name_x, name_area.y + Y(4)))
+            screen.blit(name_render, (name_x, name_area.y + S(4)))
             screen.set_clip(None)
             screen.blit(
                 roman_render,
@@ -7004,15 +7007,15 @@ while True:
         else:
             name_area = R(16, 198, 288, 34)
             name_render = f_lg.render(display_text, True, UI_TEXT)
-            screen.set_clip(name_area.inflate(-X(12), 0))
-            if name_render.get_width() <= name_area.width - X(24):
+            screen.set_clip(name_area.inflate(-S(12), 0))
+            if name_render.get_width() <= name_area.width - S(24):
                 name_x = name_area.centerx - name_render.get_width() // 2
             else:
                 scroll_x -= 2
                 if scroll_x < -name_render.get_width():
                     scroll_x = name_area.right
                 name_x = scroll_x
-            screen.blit(name_render, (name_x, name_area.y + Y(5)))
+            screen.blit(name_render, (name_x, name_area.y + S(5)))
             screen.set_clip(None)
 
         # Status chips appear only when active; controls remain in the dock
@@ -7560,7 +7563,7 @@ while True:
             dt = time.time() - touch_start_time
             if (
                 active_page in PAGE_ORDER
-                and abs(dx) > X(45)
+                and abs(dx) > S(45)
                 and abs(dx) > abs(dy)
                 and dt < 2.5
             ):
@@ -7581,7 +7584,7 @@ while True:
                         alarm_system.stop_sleep_timer()
                     else:
                         alarm_system.start_sleep_timer(30)
-                elif abs(dy) > Y(30):
+                elif abs(dy) > S(30):
                     apply_live_volume(vol_level + (5 if dy > 0 else -5))
                     show_volume_bar = True
                     volume_bar_timer = time.time()
