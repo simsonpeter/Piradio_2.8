@@ -923,12 +923,13 @@ HOME_CARD_LABELS = {
 DEFAULT_HOME_CARDS = ["now_playing", "weather"]
 HOME_CARD_LAYOUTS = ("single", "bubble")
 DEFAULT_HOME_CARD_LAYOUT = "bubble"
-# Title bar and PAGES stay outside this band. Cards fill it, no middle gap.
+# Title bar and PAGES stay outside this band. Two cards with a small gap.
 HOME_CARD_TOP = 64
 HOME_CARD_HEIGHT = 352
 HOME_CARD_INSET = 8
 HOME_CARD_FULL_W = 304
-HOME_CARD_HALF_W = 152
+HOME_CARD_GAP = 8
+HOME_CARD_HALF_W = (HOME_CARD_FULL_W - HOME_CARD_GAP) // 2
 
 
 def normalize_home_cards(raw):
@@ -4240,6 +4241,16 @@ def XY(x, y):
 def E(cx, cy, radius):
     return R(cx - radius, cy - radius, radius * 2, radius * 2)
 
+def inscribed_square(x, y, w, h):
+    box = R(x, y, w, h)
+    side = min(box.width, box.height)
+    return _Rect(box.centerx - side // 2, box.centery - side // 2, side, side)
+
+def square_around(cx, cy, radius):
+    r = max(1, S(radius))
+    x, y = X(cx), Y(cy)
+    return _Rect(x - r, y - r, r * 2, r * 2)
+
 print(f"Touchscreen {SCREEN_W}x{SCREEN_H} (fill {SCALE_X:.2f}x{SCALE_Y:.2f})")
 
 # --- UNICODE FONT SETUP (Tamil Support) ---
@@ -4889,6 +4900,19 @@ def draw_info_card(surface, rect, accent, radius=16):
     pygame.draw.rect(surface, accent, rect, S(2), border_radius=S(radius))
     return body
 
+def draw_glass_card(surface, rect, accent, radius=22):
+    overlay = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+    body = UI_SURFACE_RAISED
+    pygame.draw.rect(
+        overlay, (*body, 150), overlay.get_rect(), border_radius=S(radius)
+    )
+    pygame.draw.rect(
+        overlay, (*accent, 210), overlay.get_rect(), S(2),
+        border_radius=S(radius)
+    )
+    surface.blit(overlay, rect.topleft)
+    return body
+
 def draw_animated_ui_glow(surface, now):
     ui_animation_layer.fill((0, 0, 0, 0))
     pulse = (math.sin(now * 1.1) + 1) / 2
@@ -5164,9 +5188,11 @@ saver_mode = False
 show_qr = False
 weather_str = f"{device_settings.weather_name.upper()}: --C"
 current_temp = 0
+current_wind = 0
 weather_type = "clear"
 weather_label = "Clear"
 weather_forecast = []
+weather_updating = False
 meta_text = ""
 scroll_x = SCREEN_W
 saver_scroll_x = SCREEN_W
@@ -5776,7 +5802,7 @@ def home_card_slots(top=HOME_CARD_TOP, height=HOME_CARD_HEIGHT):
             cards[0], HOME_CARD_INSET, top, HOME_CARD_FULL_W, height
         )]
     left_x = HOME_CARD_INSET
-    right_x = HOME_CARD_INSET + HOME_CARD_HALF_W
+    right_x = HOME_CARD_INSET + HOME_CARD_HALF_W + HOME_CARD_GAP
     return [
         (R(left_x, top, HOME_CARD_HALF_W, height), cards[0], left_x, top, HOME_CARD_HALF_W, height),
         (R(right_x, top, HOME_CARD_HALF_W, height), cards[1], right_x, top, HOME_CARD_HALF_W, height),
@@ -5815,8 +5841,8 @@ def playback_control_layout():
         vol_y = y + h - 136
         btn_y = y + h - 80
         return {
-            "vol_minus": R(x + 8, vol_y, 28, 34),
-            "vol_plus": R(x + w - 36, vol_y, 28, 34),
+            "vol_minus": inscribed_square(x + 8, vol_y, 28, 34),
+            "vol_plus": inscribed_square(x + w - 36, vol_y, 28, 34),
             "vol_bar": R(x + 40, vol_y + 10, w - 80, 12),
             "pct_x": x + w // 2,
             "pct_y": vol_y + 32,
@@ -5829,8 +5855,8 @@ def playback_control_layout():
     vol_y = y + h - 132
     btn_y = y + h - 76
     return {
-        "vol_minus": R(x + 10, vol_y, 46, 46),
-        "vol_plus": R(x + w - 56, vol_y, 46, 46),
+        "vol_minus": inscribed_square(x + 10, vol_y, 46, 46),
+        "vol_plus": inscribed_square(x + w - 56, vol_y, 46, 46),
         "vol_bar": R(x + 64, vol_y + 14, w - 128, 14),
         "pct_x": x + w // 2,
         "pct_y": vol_y + 34,
@@ -6075,6 +6101,79 @@ def weather_code_label(code):
         return "Thunder"
     return "Mixed"
 
+
+def first_weather_series(mapping, *names):
+    for name in names:
+        values = mapping.get(name)
+        if isinstance(values, list) and values:
+            return values
+    return []
+
+
+def parse_weather_forecast(daily):
+    if not isinstance(daily, dict):
+        return []
+    dates = first_weather_series(daily, "time")
+    codes = first_weather_series(daily, "weather_code", "weathercode")
+    highs = first_weather_series(daily, "temperature_2m_max")
+    lows = first_weather_series(daily, "temperature_2m_min")
+    parsed = []
+    for date, daily_code, high, low in zip(dates, codes, highs, lows):
+        try:
+            date_text = str(date)
+            if len(date_text) >= 10:
+                day = datetime.strptime(date_text[:10], "%Y-%m-%d").strftime("%a")
+            else:
+                day = date_text[:3]
+            parsed.append({
+                "day": day,
+                "type": weather_code_to_type(int(daily_code)),
+                "label": weather_code_label(int(daily_code)),
+                "high": int(round(float(high))),
+                "low": int(round(float(low))),
+            })
+        except (TypeError, ValueError, OverflowError):
+            continue
+    return parsed
+
+
+def refresh_weather():
+    global current_temp, current_wind, weather_type, weather_label
+    global weather_forecast, last_weather_update, weather_updating
+    try:
+        response = requests.get(device_settings.weather_url(), timeout=12)
+        response.raise_for_status()
+        weather_data = response.json()
+        current = (
+            weather_data.get("current_weather")
+            or weather_data.get("current")
+            or {}
+        )
+        if current:
+            temperature = current.get("temperature", current.get("temperature_2m"))
+            if temperature is not None:
+                current_temp = int(round(float(temperature)))
+            code = current.get("weathercode", current.get("weather_code", 0))
+            weather_type = weather_code_to_type(int(code or 0))
+            weather_label = weather_code_label(int(code or 0))
+            wind = current.get("windspeed", current.get("wind_speed_10m"))
+            if wind is not None:
+                current_wind = int(round(float(wind)))
+        parsed = parse_weather_forecast(weather_data.get("daily") or {})
+        if parsed:
+            weather_forecast = parsed
+        last_weather_update = time.time()
+        print(
+            f"Weather updated: {current_temp}°C {weather_label}, "
+            f"{len(weather_forecast)} forecast days",
+            flush=True
+        )
+    except Exception as error:
+        print(f"Weather update error: {error}", flush=True)
+        last_weather_update = time.time() - 1170
+    finally:
+        weather_updating = False
+
 def draw_forecast_screen(now):
     screen.blit(ui_background, (0, 0))
     draw_animated_ui_glow(screen, now)
@@ -6230,8 +6329,10 @@ def draw_home_card(
     }
     half = layout_w < 220
     preview = layout_h < 100
-    body = draw_info_card(
-        screen, rect, accents.get(kind, UI_BLUE), 14 if preview else 16
+    body = (
+        draw_info_card(screen, rect, accents.get(kind, UI_BLUE), 14)
+        if preview else
+        draw_glass_card(screen, rect, accents.get(kind, UI_BLUE), 22)
     )
     title = f_tiny.render(
         HOME_CARD_LABELS.get(kind, "CARD"), True, muted_ink_on(body)
@@ -6306,20 +6407,63 @@ def draw_home_card(
             blit_lines(system_stats['bluetooth'], "SPEAKER", layout_y + 24)
         return body
 
+    inner_top = layout_y + 26
+    inner_bottom = layout_y + layout_h - (148 if kind == "now_playing" else 10)
+    inner_h = max(80, inner_bottom - inner_top)
+
+    def draw_forecast_rows(rows, top, bottom):
+        count = 5
+        step = max(28, (bottom - top) // count)
+        icon_size = max(12, min(18, step // 2))
+        if not rows:
+            blit_centered(
+                "Updating forecast…", f_sm, muted_ink_on(body),
+                top + max(8, step // 4), 20
+            )
+            return
+        for index, forecast in enumerate(rows[:count]):
+            fy = top + index * step
+            day = f_sm.render(forecast["day"].upper(), True, ink_on(body))
+            screen.blit(day, (rect.x + X(8), Y(fy + max(2, step // 6))))
+            if step >= 40:
+                label = f_tiny.render(
+                    fit_label(forecast["label"], 12 if half else 18),
+                    True, muted_ink_on(body)
+                )
+                screen.blit(label, (rect.x + X(8), Y(fy + 20)))
+            draw_weather_icon(
+                screen, layout_x + (layout_w - 58 if half else layout_w // 2),
+                fy + step // 2, forecast["type"], icon_size,
+                dimmed=False, on_background=body
+            )
+            hi_lo = (f_sm if step >= 34 else f_tiny).render(
+                f"{forecast['high']}°/{forecast['low']}°", True, ink_on(body)
+            )
+            screen.blit(
+                hi_lo,
+                (
+                    rect.right - hi_lo.get_width() - X(8),
+                    Y(fy + max(4, (step - 14) // 2))
+                )
+            )
+
     if kind == "now_playing":
         station = stations[current_idx]['name'] if stations else "TCRADIOS"
         playing = sanitize_text(meta_text) or station
         genre = ""
         if stations:
             genre = str(stations[current_idx].get('genre') or "").strip()
-        text_y = layout_y + layout_h - 186
-        radius = 38 if half else 52
+        text_h = 58 if (genre and genre.upper() not in (station.upper(), "TCRADIOS", "RADIO")) else 42
+        logo_bottom = inner_bottom - text_h
+        avail_h = max(48, logo_bottom - inner_top)
+        radius = min(56 if half else 64, max(28, avail_h // 2))
         cx = layout_x + layout_w // 2
-        cy = layout_y + 30 + radius
-        pygame.draw.ellipse(screen, (17, 31, 53), E(cx, cy, radius))
-        pygame.draw.ellipse(screen, (40, 58, 91), E(cx, cy, radius - 2), S(1))
+        cy = inner_top + avail_h // 2
+        center = XY(cx, cy)
+        pygame.draw.circle(screen, (17, 31, 53), center, S(radius))
+        pygame.draw.circle(screen, (40, 58, 91), center, S(radius - 2), S(1))
         inner_r = radius - 4
-        logo_rect = R(cx - inner_r, cy - inner_r, inner_r * 2, inner_r * 2)
+        logo_rect = square_around(cx, cy, inner_r)
         screen.blit(
             pygame.transform.smoothscale(
                 logo, (logo_rect.width, logo_rect.height)
@@ -6332,126 +6476,99 @@ def draw_home_card(
             is_playing = False
         if is_playing:
             pulse = (math.sin(now * 3) + 1) / 2
-            pygame.draw.ellipse(
+            pygame.draw.circle(
                 screen,
                 (
                     int(UI_BLUE[0] * 0.75),
                     int(UI_BLUE[1] * 0.75),
                     int(UI_BLUE[2] * 0.75)
                 ),
-                E(cx, cy, radius - 2 + pulse * 4),
+                center,
+                S(radius - 2 + pulse * 4),
                 S(2)
             )
-        blit_centered(playing, f_sm, ink_on(body), text_y, main_chars)
-        blit_centered(station, f_tiny, muted_ink_on(body), text_y + 20, sub_chars)
-        if genre and genre.upper() not in (station.upper(), "TCRADIOS", "RADIO"):
-            blit_centered(genre, f_tiny, muted_ink_on(body), text_y + 38, sub_chars)
+        text_y = logo_bottom + 4
+        blit_centered(
+            playing, f_sm if half else f_lg, ink_on(body), text_y, main_chars
+        )
+        blit_centered(station, f_tiny, muted_ink_on(body), text_y + 22, sub_chars)
+        if text_h > 42:
+            blit_centered(genre, f_tiny, muted_ink_on(body), text_y + 40, sub_chars)
     elif kind == "weather":
-        icon_y = layout_y + (58 if half else 54)
+        current_h = max(108, min(inner_h * 42 // 100, inner_h - 150))
+        icon_size = max(28, min(current_h // 2, layout_w // 3))
+        icon_y = inner_top + 8 + icon_size // 2
         draw_weather_icon(
             screen, layout_x + layout_w // 2, icon_y,
-            weather_type, 30 if half else 36,
+            weather_type, icon_size,
             dimmed=False, on_background=body
         )
         temp_text = f"{current_temp}°C" if current_temp else "--°C"
-        blit_centered(temp_text, f_weather, ink_on(body), icon_y + 36, 8)
-        blit_centered(weather_label.upper(), f_sm, ink_on(body), icon_y + 82, main_chars)
+        today = weather_forecast[0] if weather_forecast else None
+        blit_centered(temp_text, f_weather, ink_on(body), icon_y + icon_size // 2 + 6, 8)
         blit_centered(
-            device_settings.weather_name.upper(),
-            f_tiny, muted_ink_on(body), icon_y + 104, sub_chars
+            weather_label.upper(), f_sm, ink_on(body),
+            inner_top + current_h - 40, main_chars
         )
-        rows = weather_forecast[:4 if half else 5]
-        row_y = icon_y + 128
-        if rows:
-            for index, forecast in enumerate(rows):
-                fy = row_y + index * (36 if half else 30)
-                day = f_tiny.render(forecast['day'].upper(), True, muted_ink_on(body))
-                screen.blit(day, (rect.x + X(10), Y(fy)))
-                draw_weather_icon(
-                    screen, layout_x + layout_w // 2, fy + 10,
-                    forecast['type'], 8, dimmed=False, on_background=body
-                )
-                hi_lo = f_tiny.render(
-                    f"{forecast['high']}° / {forecast['low']}°",
-                    True, ink_on(body)
-                )
-                screen.blit(
-                    hi_lo,
-                    (rect.right - hi_lo.get_width() - X(8), Y(fy + 6))
-                )
-        else:
-            blit_centered(
-                "Forecast loading", f_tiny, muted_ink_on(body),
-                row_y, 18
-            )
+        city_bits = [device_settings.weather_name.upper()]
+        if today:
+            city_bits.append(f"{today['high']}°/{today['low']}°")
+        if current_wind:
+            city_bits.append(f"{current_wind} KM/H")
+        blit_centered(
+            "  ·  ".join(city_bits), f_tiny, muted_ink_on(body),
+            inner_top + current_h - 20, sub_chars + 8
+        )
+        draw_forecast_rows(
+            weather_forecast, inner_top + current_h, inner_bottom
+        )
     elif kind == "forecast":
-        days = weather_forecast[:5]
-        if days:
-            row_h = 56 if half else 52
-            for index, forecast in enumerate(days):
-                fy = layout_y + 30 + index * row_h
-                day = f_sm.render(forecast['day'].upper(), True, ink_on(body))
-                screen.blit(day, (rect.x + X(10), Y(fy)))
-                label = f_tiny.render(
-                    fit_label(forecast['label'], 12 if half else 18),
-                    True, muted_ink_on(body)
-                )
-                screen.blit(label, (rect.x + X(10), Y(fy + 20)))
-                draw_weather_icon(
-                    screen, layout_x + (98 if half else 170), fy + 22,
-                    forecast['type'], 10, dimmed=False, on_background=body
-                )
-                hi_lo = f_sm.render(
-                    f"{forecast['high']}° / {forecast['low']}°",
-                    True, ink_on(body)
-                )
-                screen.blit(
-                    hi_lo,
-                    (rect.right - hi_lo.get_width() - X(8), Y(fy + 12))
-                )
+        if current_temp:
+            blit_centered(
+                f"NOW {current_temp}°C  {weather_label.upper()}",
+                f_tiny, muted_ink_on(body), inner_top, 28
+            )
+            draw_forecast_rows(
+                weather_forecast, inner_top + 22, inner_bottom
+            )
         else:
-            blit_lines("No forecast", "yet", layout_y + 80)
+            draw_forecast_rows(weather_forecast, inner_top, inner_bottom)
     elif kind == "alarm":
         blit_centered(
             alarm_system.alarm_time, f_weather, ink_on(body),
-            layout_y + 70, 8
+            inner_top + inner_h // 4, 8
         )
         blit_centered(
             "ALARM ON" if alarm_system.alarm_enabled else "ALARM OFF",
             f_sm,
             ink_on(body) if alarm_system.alarm_enabled else muted_ink_on(body),
-            layout_y + 130, 14
+            inner_top + inner_h // 2, 14
         )
-        if alarm_system.sleep_timer_enabled:
-            blit_centered(
-                f"SLEEP {alarm_system.get_sleep_remaining()} MIN",
-                f_tiny, muted_ink_on(body), layout_y + 168, 18
-            )
-        else:
-            blit_centered(
-                "SLEEP TIMER OFF", f_tiny, muted_ink_on(body),
-                layout_y + 168, 18
-            )
+        sleep_text = (
+            f"SLEEP {alarm_system.get_sleep_remaining()} MIN"
+            if alarm_system.sleep_timer_enabled else "SLEEP TIMER OFF"
+        )
+        blit_centered(
+            sleep_text, f_tiny, muted_ink_on(body),
+            inner_top + inner_h * 2 // 3, 18
+        )
     elif kind == "system":
-        blit_rows(
-            (
-                ("WI-FI", system_stats['wifi']),
-                ("IP", current_ip),
-                ("CPU", system_stats['cpu_temp']),
-                ("STORAGE", system_stats['disk_free']),
-            ),
-            layout_y + 40,
-            56 if half else 52
+        rows = (
+            ("WI-FI", system_stats['wifi']),
+            ("IP", current_ip),
+            ("CPU", system_stats['cpu_temp']),
+            ("STORAGE", system_stats['disk_free']),
         )
+        blit_rows(rows, inner_top, max(40, inner_h // len(rows)))
     elif kind == "bluetooth":
-        blit_centered("SPEAKER", f_tiny, muted_ink_on(body), layout_y + 50, 12)
+        blit_centered("SPEAKER", f_tiny, muted_ink_on(body), inner_top + 8, 12)
         blit_centered(
             system_stats['bluetooth'], f_lg if not half else f_sm,
-            ink_on(body), layout_y + 86, main_chars
+            ink_on(body), inner_top + inner_h // 3, main_chars
         )
         blit_centered(
             touch_bluetooth_status, f_tiny, muted_ink_on(body),
-            layout_y + 140, sub_chars
+            inner_top + inner_h * 2 // 3, sub_chars
         )
     return body
 
@@ -7437,8 +7554,8 @@ def start_rotary_encoder():
 rotary_controls = []
 start_rotary_encoder()
 
-btn_qr = R(15, 13, 42, 40)
-btn_exit = R(268, 13, 37, 40)
+btn_qr = inscribed_square(15, 13, 42, 40)
+btn_exit = inscribed_square(268, 13, 37, 40)
 _playback_controls = playback_control_layout()
 vol_minus_rect = _playback_controls["vol_minus"]
 vol_plus_rect = _playback_controls["vol_plus"]
@@ -7461,36 +7578,9 @@ while True:
     maybe_advance_youtube_queue()
     apply_wifi_result()
     
-    if now - last_weather_update > 1200:
-        try:
-            r = requests.get(device_settings.weather_url(), timeout=5)
-            if r.status_code == 200:
-                weather_data = r.json()
-                data = weather_data['current_weather']
-                current_temp = int(round(data['temperature']))
-                code = data['weathercode']
-                weather_type = weather_code_to_type(code)
-                weather_label = weather_code_label(code)
-
-                daily = weather_data.get('daily', {})
-                dates = daily.get('time', [])
-                codes = daily.get('weather_code', [])
-                highs = daily.get('temperature_2m_max', [])
-                lows = daily.get('temperature_2m_min', [])
-                weather_forecast = []
-                for date, daily_code, high, low in zip(
-                    dates, codes, highs, lows
-                ):
-                    forecast_date = datetime.strptime(date, "%Y-%m-%d")
-                    weather_forecast.append({
-                        'day': forecast_date.strftime("%a"),
-                        'type': weather_code_to_type(daily_code),
-                        'label': weather_code_label(daily_code),
-                        'high': int(round(high)),
-                        'low': int(round(low))
-                    })
-        except: pass
-        last_weather_update = now
+    if now - last_weather_update > 1200 and not weather_updating:
+        weather_updating = True
+        threading.Thread(target=refresh_weather, daemon=True).start()
 
     if (
         active_page in ("system", "settings", "clock", "radio")
@@ -7542,7 +7632,7 @@ while True:
         pygame.draw.line(screen, UI_BLUE, XY(28, 58), XY(145, 58), S(2))
         pygame.draw.line(screen, UI_PURPLE, XY(175, 58), XY(292, 58), S(2))
 
-        btn_qr = R(15, 13, 42, 40)
+        btn_qr = inscribed_square(15, 13, 42, 40)
         qr_body = draw_modern_button(screen, btn_qr, UI_BLUE, UI_BLUE, 12)
         draw_centered_text(screen, f_sm, "QR", contrasting_text(qr_body), btn_qr)
 
@@ -7552,10 +7642,14 @@ while True:
             ip_surface = f_tiny.render(f"{current_ip}:8080", True, UI_MUTED)
             screen.blit(ip_surface, (X(160) - ip_surface.get_width() // 2, Y(43)))
 
-        btn_exit = R(268, 13, 37, 40)
-        draw_modern_button(screen, btn_exit, (75, 30, 55), UI_PINK, 12)
-        pygame.draw.line(screen, UI_TEXT, XY(279, 24), XY(294, 40), S(3))
-        pygame.draw.line(screen, UI_TEXT, XY(294, 24), XY(279, 40), S(3))
+        btn_exit = inscribed_square(268, 13, 37, 40)
+        exit_body = draw_modern_button(screen, btn_exit, (75, 30, 55), UI_PINK, 12)
+        draw_vector_icon(
+            screen, btn_exit.center, "close",
+            contrasting_text(exit_body),
+            radius=max(8, min(btn_exit.width, btn_exit.height) // 4),
+            width=S(3),
+        )
 
         home_slots = home_card_slots()
         for rect, kind, layout_x, layout_y, layout_w, layout_h in home_slots:
@@ -7563,23 +7657,6 @@ while True:
                 rect, kind, now,
                 layout_x=layout_x, layout_y=layout_y,
                 layout_w=layout_w, layout_h=layout_h
-            )
-        if len(home_slots) == 2:
-            seam_x = HOME_CARD_INSET + HOME_CARD_HALF_W
-            notch = 16
-            pygame.draw.rect(
-                screen, UI_SURFACE_RAISED,
-                R(seam_x - 2, HOME_CARD_TOP, 4, notch)
-            )
-            pygame.draw.rect(
-                screen, UI_SURFACE_RAISED,
-                R(seam_x - 2, HOME_CARD_TOP + HOME_CARD_HEIGHT - notch, 4, notch)
-            )
-            pygame.draw.line(
-                screen, (54, 75, 112),
-                XY(seam_x, HOME_CARD_TOP + 8),
-                XY(seam_x, HOME_CARD_TOP + HOME_CARD_HEIGHT - 8),
-                S(1)
             )
 
         # Volume and play controls stay on the now-playing card only.
