@@ -3442,7 +3442,7 @@ def home():
         ip_address=current_ip,
         vol_level=vol_level,
         current_idx=current_idx,
-        now_playing=meta_text if meta_text else stations[current_idx]['name'],
+        now_playing=current_display_track(),
         theme=current_theme,
         current_theme_key=current_theme_key,
         all_themes=THEMES,
@@ -3552,7 +3552,7 @@ def get_volume():
 
 @app.route('/api/nowplaying')
 def get_now_playing():
-    return jsonify({"text": meta_text if meta_text else stations[current_idx]['name']})
+    return jsonify({"text": current_display_track()})
 
 LISTEN_ALONG_PAGE = """<!DOCTYPE html>
 <html lang="en">
@@ -3617,7 +3617,7 @@ def listen_along():
 def api_listen():
     try:
         station = stations[current_idx]
-        playing = meta_text or station.get('name', '')
+        playing = current_display_track()
     except Exception:
         station = {}
         playing = ''
@@ -5428,11 +5428,10 @@ def begin_logo_update(url):
     with _logo_lock:
         _logo_request["token"] += 1
         token = _logo_request["token"]
+        # Drop the previous artwork immediately. The download fills it in later.
+        _logo_ready["token"] = token
+        _logo_ready["raw"] = None
     if not url:
-        with _logo_lock:
-            if _logo_request["token"] == token:
-                _logo_ready["token"] = token
-                _logo_ready["raw"] = None
         return
     def fetch_logo():
         raw = None
@@ -5507,6 +5506,22 @@ def paint_logo(raw):
             text_rect = text.get_rect(center=(LOGO_CENTER, LOGO_CENTER))
             logo.blit(text, text_rect)
 
+def youtube_display_title(station):
+    name = str((station or {}).get("name") or "").strip()
+    if name.upper().startswith("YT:"):
+        name = name[3:].strip()
+    return name or "YouTube"
+
+def current_display_track():
+    if stations and 0 <= current_idx < len(stations):
+        station = stations[current_idx]
+        if station.get("youtube_id"):
+            return youtube_display_title(station)
+        if meta_text:
+            return meta_text
+        return station.get("name") or "TCRADIOS"
+    return meta_text or "TCRADIOS"
+
 def play():
     global meta_text, scroll_x, saver_scroll_x, saved_station_url, saved_station_index
     global playback_should_run, playback_down_since
@@ -5518,6 +5533,10 @@ def play():
     if not station.get("url"):
         meta_text = "LOADING STATIONS"
         return
+    if station.get("youtube_id"):
+        meta_text = youtube_display_title(station)
+    else:
+        meta_text = style_now_playing(station.get("name") or "")
     try:
         playback_should_run = True
         playback_down_since = 0
@@ -6699,8 +6718,12 @@ def draw_home_card(
 
     if preview:
         if kind == "now_playing":
-            station = stations[current_idx]['name'] if stations else "TCRADIOS"
-            blit_lines(sanitize_text(meta_text) or station, station, layout_y + 24)
+            station_obj = stations[current_idx] if stations else {}
+            station = station_obj.get("name") or "TCRADIOS"
+            if station_obj.get("youtube_id"):
+                blit_lines(youtube_display_title(station_obj), "YOUTUBE", layout_y + 24)
+            else:
+                blit_lines(sanitize_text(meta_text) or station, station, layout_y + 24)
         elif kind == "weather":
             blit_lines(
                 f"{current_temp}°C" if current_temp else "--°C",
@@ -6790,11 +6813,14 @@ def draw_home_card(
                     )
 
     if kind == "now_playing":
-        station = stations[current_idx]['name'] if stations else "TCRADIOS"
-        playing = sanitize_text(meta_text) or station
-        genre = ""
-        if stations:
-            genre = str(stations[current_idx].get('genre') or "").strip()
+        station_obj = stations[current_idx] if stations else {}
+        station = station_obj.get("name") or "TCRADIOS"
+        if station_obj.get("youtube_id"):
+            playing = youtube_display_title(station_obj)
+            genre = "YouTube"
+        else:
+            playing = sanitize_text(meta_text) or station
+            genre = str(station_obj.get("genre") or "").strip()
         show_station = bool(station) and not same_label(playing, station)
         show_genre = bool(genre) and not same_label(genre, playing) and not same_label(genre, station)
         text_h = 22 + (20 if show_station else 0) + (18 if show_genre else 0)
@@ -8080,19 +8106,31 @@ while True:
         if now - last_meta_check > 2:
             last_meta_check = now
             media = None
+            station_now = (
+                stations[current_idx]
+                if stations and 0 <= current_idx < len(stations) else {}
+            )
             try:
-                media = player.get_media()
-                if media:
-                    try:
-                        m = media.get_meta(vlc.Meta.NowPlaying)
-                        if m:
-                            meta_text = style_now_playing(m)
-                        else:
-                            meta_text = style_now_playing(stations[current_idx]['name'])
-                    except Exception:
-                        meta_text = style_now_playing(stations[current_idx]['name'])
+                if station_now.get("youtube_id"):
+                    # VLC keeps the previous radio title on a YouTube stream.
+                    meta_text = youtube_display_title(station_now)
+                else:
+                    media = player.get_media()
+                    if media:
+                        try:
+                            m = media.get_meta(vlc.Meta.NowPlaying)
+                            if m:
+                                meta_text = style_now_playing(m)
+                            else:
+                                meta_text = style_now_playing(station_now.get("name") or "")
+                        except Exception:
+                            meta_text = style_now_playing(station_now.get("name") or "")
             except Exception:
-                meta_text = style_now_playing(stations[current_idx]['name'])
+                meta_text = style_now_playing(
+                    youtube_display_title(station_now)
+                    if station_now.get("youtube_id")
+                    else (station_now.get("name") or "")
+                )
             finally:
                 if media is not None:
                     try:
