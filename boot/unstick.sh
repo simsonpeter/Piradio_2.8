@@ -16,9 +16,21 @@ fi
 USER_HOME="$(getent passwd "${USER_NAME}" | cut -d: -f6)"
 
 timeout 2 plymouth quit >/dev/null 2>&1 || true
-pkill -9 -f touch_radio.py >/dev/null 2>&1 || true
-sleep 0.3
-rm -f /tmp/tcradios-*.lock
+# Stop the app and its launcher. Killing only the Python file left the
+# launcher free to start a second player, so old and new audio overlapped.
+for pid in $(pgrep -f '[t]ouch_radio.py' || true); do
+    cmd="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+    base="${cmd%% *}"
+    base="${base##*/}"
+    case "${base}" in
+        python|python3|python3.*)
+            kill -9 "${pid}" >/dev/null 2>&1 || true
+            ;;
+    esac
+done
+pkill -9 -f '[t]cradios-start' >/dev/null 2>&1 || true
+sleep 0.4
+rm -f /tmp/tcradios-*.lock /tmp/tcradios-player.lock
 
 rm -f /usr/local/bin/tcradios-session \
       /usr/share/wayland-sessions/tcradios.desktop \

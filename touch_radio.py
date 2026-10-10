@@ -4155,7 +4155,8 @@ def youtube_audio_url(video_id, timeout=40):
                 return candidate, None
     return '', err or 'Could not extract audio URL'
 
-_playback_lock = threading.Lock()
+_playback_lock = threading.RLock()
+_retired_players = []
 
 def cancel_background_playback():
     """Ignore a YouTube resume or fetch that has not taken over the speakers."""
@@ -4202,10 +4203,40 @@ def publish_youtube_pending(item, epoch):
         return True
 
 def stop_audio_output():
-    try:
-        player.stop()
-    except Exception:
-        pass
+    """Drop the current decoder. A second play() must not keep the old stream."""
+    global player
+    with _playback_lock:
+        old = None
+        try:
+            old = player
+        except NameError:
+            old = None
+        try:
+            fresh = instance.media_player_new()
+        except Exception:
+            fresh = None
+        if old is not None:
+            try:
+                old.stop()
+            except Exception:
+                pass
+            try:
+                old.set_media(None)
+            except Exception:
+                pass
+        if fresh is not None:
+            player = fresh
+            try:
+                player.audio_set_volume(vol_level)
+            except Exception:
+                pass
+        if old is not None and old is not player:
+            _retired_players.append(old)
+            del _retired_players[:-1]
+            try:
+                old.release()
+            except Exception:
+                pass
 
 def pause_playback_now():
     """Pause the radio and drop a YouTube restore that has not started yet."""
@@ -4300,14 +4331,63 @@ def serve_static(filename):
     return "Not found", 404
 
 def run_flask():
-    try:
-        app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False, threaded=True)
-    except:
+    for _attempt in range(20):
         try:
-            app.run(host='0.0.0.0', port=8081, debug=False, use_reloader=False, threaded=True)
-        except:
-            pass
+            app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False, threaded=True)
+            return
+        except OSError as error:
+            print(f"Web remote port 8080 busy: {error}", flush=True)
+            time.sleep(0.25)
+    print("Web remote could not listen on port 8080", flush=True)
 
+def _python_running_radio(pid):
+    """True when pid is a Python process executing this app."""
+    try:
+        raw = open(f"/proc/{pid}/cmdline", "rb").read()
+    except OSError:
+        return False
+    parts = [part.decode(errors="replace") for part in raw.split(b"\0") if part]
+    if not parts or not any(part.endswith("touch_radio.py") for part in parts):
+        return False
+    executable = os.path.basename(parts[0])
+    return executable == "python" or executable.startswith("python")
+
+def end_other_players():
+    """One app owns the speakers. An older copy must not keep playing underneath."""
+    import fcntl
+    my_pid = os.getpid()
+    stopped = False
+    try:
+        listed = os.listdir("/proc")
+    except OSError:
+        listed = []
+    for token in listed:
+        if not token.isdigit():
+            continue
+        pid = int(token)
+        if pid <= 1 or pid == my_pid or not _python_running_radio(pid):
+            continue
+        try:
+            os.kill(pid, 9)
+            stopped = True
+            print(f"Stopped older TCRADIOS process {pid}", flush=True)
+        except OSError:
+            pass
+    if stopped:
+        time.sleep(0.3)
+    handle = open("/tmp/tcradios-player.lock", "a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("TCRADIOS is already running.", flush=True)
+        os._exit(0)
+    handle.seek(0)
+    handle.truncate()
+    handle.write(str(my_pid))
+    handle.flush()
+    globals()["_player_lock_handle"] = handle
+
+end_other_players()
 threading.Thread(target=run_flask, daemon=True).start()
 
 # --- PYGAME SETUP ---
@@ -5637,11 +5717,14 @@ def play(epoch=None):
     else:
         meta_text = style_now_playing(station.get("name") or "")
     try:
-        media = instance.media_new(station['url'])
-        player.set_media(media)
         with _playback_lock:
             if epoch is not None and epoch != playback_epoch:
                 return False
+            stop_audio_output()
+            if epoch is not None and epoch != playback_epoch:
+                return False
+            media = instance.media_new(station['url'])
+            player.set_media(media)
             playback_should_run = True
             playback_down_since = 0
             player.play()
@@ -6438,7 +6521,7 @@ def toggle_playback():
         stop_playback_now()
         return
     if state == vlc.State.Playing:
-        pause_playback_now()
+        stop_playback_now()
         return
     if state == vlc.State.Paused:
         playback_should_run = True
