@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import pygame, vlc, requests, time, os, io, math, socket, sys, threading, qrcode, json, base64, random, re, shutil, signal
+import pygame, vlc, requests, time, os, io, math, socket, sys, threading, qrcode, json, base64, random, re, shutil, signal, traceback, gc, ctypes
 from urllib.request import urlopen
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
@@ -82,6 +82,17 @@ print(f"   curl -fsSL https://tailscale.com/install.sh | sh")
 print(f"   sudo tailscale up")
 print(f"{'='*50}\n")
 
+def log_uncaught_exception(exc_type, exc, tb):
+    text = "".join(traceback.format_exception(exc_type, exc, tb))
+    print(f"TC RADIOS crash:\n{text}", flush=True)
+    try:
+        with open(os.path.expanduser("~/.tcradios-crash.log"), "a") as handle:
+            handle.write(f"{datetime.now().isoformat()}\n{text}\n")
+    except OSError:
+        pass
+
+sys.excepthook = log_uncaught_exception
+
 # --- AUDIO OUTPUT MANAGER ---
 class AudioOutputManager:
     def __init__(self):
@@ -91,6 +102,7 @@ class AudioOutputManager:
         self.bluetooth_lock = threading.Lock()
         self.settings_file = os.path.expanduser('~/.radio_audio')
         self.default_bluetooth_address = None
+        self.active_sink = None
         self.load_settings()
         self.scan_outputs()
         if self.default_bluetooth_address:
@@ -224,6 +236,60 @@ class AudioOutputManager:
             )
         )
 
+    def _discovered_bluetooth_devices(self, output):
+        discovered = []
+        seen = set()
+        for line in output.splitlines():
+            match = re.search(
+                r'\[NEW\] Device ((?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s+(.+)$',
+                line.strip()
+            )
+            if not match:
+                continue
+            address = match.group(1).upper()
+            if address in seen:
+                continue
+            seen.add(address)
+            discovered.append({
+                'address': address,
+                'name': match.group(2).strip()
+            })
+        return discovered
+
+    def _merge_bluetooth_scan(self, discovered):
+        known = {device['address']: device for device in self.get_bluetooth_devices()}
+        ordered = []
+        seen = set()
+
+        def add(address, fallback_name=None):
+            if address in seen:
+                return
+            seen.add(address)
+            device = known.get(address)
+            if device is None:
+                device = {
+                    'address': address,
+                    'name': fallback_name or address,
+                    'paired': False,
+                    'connected': False,
+                    'default': address == self.default_bluetooth_address
+                }
+            elif fallback_name and device['name'] == device['address']:
+                device = {**device, 'name': fallback_name}
+            ordered.append(device)
+
+        for device in known.values():
+            if device.get('connected'):
+                add(device['address'])
+        for device in known.values():
+            if device.get('paired'):
+                add(device['address'])
+        for item in discovered:
+            add(item['address'], item.get('name'))
+        for device in known.values():
+            add(device['address'])
+        return ordered
+
     def scan_bluetooth(self):
         with self.bluetooth_lock:
             power_result = self._run(['bluetoothctl', 'power', 'on'])
@@ -231,27 +297,114 @@ class AudioOutputManager:
                 error = power_result.stderr.strip() or power_result.stdout.strip()
                 raise RuntimeError(error or 'Could not power on Bluetooth')
             # bluetoothctl performs discovery until its timeout expires.
-            self._run(['bluetoothctl', '--timeout', '8', 'scan', 'on'], timeout=12)
-            return self.get_bluetooth_devices()
+            scan_result = self._run(
+                ['bluetoothctl', '--timeout', '8', 'scan', 'on'],
+                timeout=12
+            )
+            discovered = self._discovered_bluetooth_devices(
+                scan_result.stdout + '\n' + scan_result.stderr
+            )
+            return self._merge_bluetooth_scan(discovered)
 
-    def _find_bluetooth_sink(self, address):
-        result = self._run(['pactl', 'list', 'sinks', 'short'])
-        address_token = address.replace(':', '_').lower()
-        for line in result.stdout.splitlines():
+    @staticmethod
+    def sink_name_for_address(listing, address):
+        tokens = []
+        if address:
+            lowered = str(address).lower()
+            tokens = [
+                lowered.replace(':', '_'),
+                lowered.replace(':', '-'),
+                lowered,
+            ]
+        bluetooth_sinks = []
+        for line in (listing or '').splitlines():
             parts = line.split()
-            if len(parts) >= 2 and address_token in parts[1].lower():
+            if len(parts) < 2:
+                continue
+            name = parts[1]
+            lowered_name = name.lower()
+            if tokens and any(token in lowered_name for token in tokens):
+                return name
+            if 'bluez' in lowered_name or 'bluetooth' in lowered_name:
+                bluetooth_sinks.append(name)
+        if not tokens and bluetooth_sinks:
+            return bluetooth_sinks[0]
+        if len(bluetooth_sinks) == 1:
+            return bluetooth_sinks[0]
+        return None
+
+    @staticmethod
+    def card_name_for_address(listing, address):
+        token = str(address or '').replace(':', '_').lower()
+        if not token:
+            return None
+        for line in (listing or '').splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and 'bluez' in parts[1].lower() and token in parts[1].lower():
                 return parts[1]
         return None
 
+    def _find_bluetooth_sink(self, address):
+        result = self._run(['pactl', 'list', 'sinks', 'short'])
+        return self.sink_name_for_address(result.stdout, address)
+
+    def _pulse_status(self):
+        try:
+            result = self._run(['pactl', 'info'], timeout=4)
+        except Exception as error:
+            return False, str(error)
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip()
+            return False, detail or 'Audio service is not running'
+        return True, ''
+
+    def _enable_bluetooth_audio_profile(self, address):
+        """Ask PipeWire or PulseAudio for the music profile, not the headset mic."""
+        try:
+            cards = self._run(['pactl', 'list', 'cards', 'short'], timeout=5)
+        except Exception as error:
+            print(f"Bluetooth card lookup failed: {error}")
+            return False
+        card = self.card_name_for_address(cards.stdout, address)
+        if not card:
+            return False
+        for profile in ('a2dp-sink', 'a2dp_sink'):
+            result = self._run(
+                ['pactl', 'set-card-profile', card, profile],
+                timeout=8,
+            )
+            if result.returncode == 0:
+                return True
+        return False
+
     def _make_sink_default(self, address):
+        self._enable_bluetooth_audio_profile(address)
+        restarted = False
         sink_name = None
-        for _ in range(12):
-            sink_name = self._find_bluetooth_sink(address)
+        for attempt in range(16):
+            try:
+                sink_name = self._find_bluetooth_sink(address)
+            except Exception as error:
+                raise RuntimeError(str(error)) from error
             if sink_name:
                 break
-            time.sleep(0.5)
+            if attempt == 6 and not restarted:
+                restarted = True
+                try:
+                    self._restart_bluetooth_audio_profile()
+                except Exception as error:
+                    print(f"Bluetooth audio restart failed: {error}")
+                self._enable_bluetooth_audio_profile(address)
+            time.sleep(0.4)
         if not sink_name:
-            raise RuntimeError('Connected, but no Bluetooth audio output appeared')
+            ready, detail = self._pulse_status()
+            if not ready:
+                raise RuntimeError(
+                    detail or 'Bluetooth is connected, but the audio service is not available'
+                )
+            raise RuntimeError(
+                'Bluetooth is connected, but the speaker has no audio channel yet'
+            )
 
         result = self._run(['pactl', 'set-default-sink', sink_name])
         if result.returncode != 0:
@@ -263,6 +416,7 @@ class AudioOutputManager:
             parts = line.split()
             if parts and parts[0].isdigit():
                 self._run(['pactl', 'move-sink-input', parts[0], sink_name])
+        self.active_sink = sink_name
         return sink_name
 
     def connect_bluetooth(self, address):
@@ -347,10 +501,13 @@ class AudioOutputManager:
             sink_name = self._make_sink_default(address)
             self.default_bluetooth_address = address
             self.current_output = 'bluetooth'
+            self.active_sink = sink_name
             self.save_settings()
             self.scan_outputs()
             self.current_output = 'bluetooth'
-            return sink_name
+            self.active_sink = sink_name
+        reroute_playback_after_output_change()
+        return sink_name
 
     def _restore_bluetooth_default(self):
         try:
@@ -414,32 +571,59 @@ class AudioOutputManager:
         if output_name == 'auto':
             os.system("amixer cset numid=3 0")
             self.current_output = output_name
+            self.active_sink = None
+            reroute_playback_after_output_change()
             return True
         elif output_name == 'analog':
             os.system("amixer cset numid=3 1")
+            self._prefer_local_sink(('analog', 'headphone', 'bcm2835'))
             self.current_output = output_name
+            reroute_playback_after_output_change()
             return True
         elif output_name == 'hdmi':
             os.system("amixer cset numid=3 2")
+            self._prefer_local_sink(('hdmi',))
             self.current_output = output_name
+            reroute_playback_after_output_change()
             return True
         elif output_name == 'bluetooth':
             try:
                 if self.default_bluetooth_address:
                     self._make_sink_default(self.default_bluetooth_address)
                     self.current_output = output_name
+                    reroute_playback_after_output_change()
                     return True
                 result = self._run(['pactl', 'list', 'sinks', 'short'])
-                for line in result.stdout.splitlines():
-                    parts = line.split()
-                    if len(parts) >= 2 and 'bluez' in parts[1].lower():
-                        self._run(['pactl', 'set-default-sink', parts[1]])
-                        self.current_output = output_name
-                        return True
+                sink_name = self.sink_name_for_address(result.stdout, '')
+                if sink_name:
+                    self._run(['pactl', 'set-default-sink', sink_name])
+                    self.active_sink = sink_name
+                    self.current_output = output_name
+                    reroute_playback_after_output_change()
+                    return True
             except Exception as e:
                 print(f"Bluetooth switch error: {e}")
                 return False
         return False
+
+    def _prefer_local_sink(self, needles):
+        try:
+            result = self._run(['pactl', 'list', 'sinks', 'short'], timeout=4)
+        except Exception:
+            self.active_sink = None
+            return
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            lowered = parts[1].lower()
+            if 'bluez' in lowered or 'bluetooth' in lowered:
+                continue
+            if any(needle in lowered for needle in needles):
+                self._run(['pactl', 'set-default-sink', parts[1]])
+                self.active_sink = parts[1]
+                return
+        self.active_sink = None
     
     def enable_multi_output(self, outputs_list):
         if not outputs_list or len(outputs_list) < 2:
@@ -490,9 +674,59 @@ class AudioOutputManager:
             print(f"Volume error: {e}")
             return False
 
+def reroute_playback_after_output_change():
+    """Start the current station again so it follows the selected speaker."""
+    try:
+        media_player = player
+        play_now = play
+        epoch = playback_epoch
+        should_run = playback_should_run
+    except NameError:
+        return
+    try:
+        state = media_player.get_state()
+        active = state in (
+            vlc.State.Playing,
+            vlc.State.Opening,
+            vlc.State.Buffering,
+            vlc.State.Paused,
+        )
+    except Exception:
+        return
+    if not should_run or not active:
+        return
+    try:
+        play_now(epoch)
+    except Exception as error:
+        print(f"Could not move playback to the new speaker: {error}", flush=True)
+
 audio_manager = AudioOutputManager()
 vol_level = 80
 last_unmuted_volume = 80
+
+_hw_volume_lock = threading.Lock()
+_hw_volume = {"pending": None, "running": False}
+
+def _hardware_volume_worker():
+    while True:
+        with _hw_volume_lock:
+            level = _hw_volume["pending"]
+            _hw_volume["pending"] = None
+            if level is None:
+                _hw_volume["running"] = False
+                return
+        try:
+            audio_manager.set_volume(level)
+        except Exception as error:
+            print(f"Volume error: {error}")
+
+def request_hardware_volume(level):
+    with _hw_volume_lock:
+        _hw_volume["pending"] = int(level)
+        if _hw_volume["running"]:
+            return
+        _hw_volume["running"] = True
+    threading.Thread(target=_hardware_volume_worker, daemon=True).start()
 
 def apply_live_volume(level):
     global vol_level, last_unmuted_volume
@@ -503,10 +737,7 @@ def apply_live_volume(level):
         player.audio_set_volume(vol_level)
     except Exception:
         pass
-    try:
-        audio_manager.set_volume(vol_level)
-    except Exception as error:
-        print(f"Volume error: {error}")
+    request_hardware_volume(vol_level)
     try:
         save_playback_state()
     except NameError:
@@ -515,6 +746,10 @@ def apply_live_volume(level):
 def skip_playback(step):
     global current_idx
     try:
+        epoch = user_select_playback()
+    except NameError:
+        epoch = None
+    try:
         if current_youtube_id() and continue_youtube_queue(step, user=True):
             return
     except NameError:
@@ -522,7 +757,7 @@ def skip_playback(step):
     try:
         if stations:
             current_idx = (current_idx + step) % len(stations)
-            play()
+            play(epoch)
     except (NameError, ZeroDivisionError):
         pass
 
@@ -793,6 +1028,12 @@ THEMES = {
     'golden_hour': dark_theme('Golden Hour', '#f0c03a', '#ff9a3d', '#3ee6c7'),
     'mint_fresh': dark_theme('Mint Fresh', '#3ee6c7', '#7ae0e8', '#8bb4ff'),
     'crimson_red': dark_theme('Crimson Red', '#ff5a73', '#f0c45a', '#3ee6c7'),
+    'cobalt_blue': dark_theme('Cobalt', '#4c7dff', '#9eb6ff', '#ffd56a'),
+    'rose_gold': dark_theme('Rose', '#ff7aa2', '#ffd0a8', '#ffe08a'),
+    'lime_glow': dark_theme('Lime', '#c6f54a', '#7dffb3', '#fff4a8'),
+    'amber_night': dark_theme('Amber', '#ffbf3c', '#ff8a3d', '#fff1b8'),
+    'violet_dusk': dark_theme('Violet', '#b388ff', '#7c6bff', '#ffd6f2'),
+    'coral_reef': dark_theme('Coral', '#ff6b57', '#ffb199', '#ffe08a'),
 }
 
 current_theme = THEMES['true_black']
@@ -833,6 +1074,69 @@ BLACK = (0, 0, 0)
 BACKGROUND = current_theme.pygame_background
 
 # --- WEATHER, DISPLAY & POWER SETTINGS ---
+HOME_CARD_KINDS = (
+    "now_playing",
+    "favorites",
+    "forecast",
+    "clock",
+    "alarm",
+    "system",
+    "languages",
+    "settings",
+    "youtube",
+    "weather",
+    "bluetooth",
+)
+HOME_CARD_LABELS = {
+    "now_playing": "NOW PLAYING",
+    "favorites": "FAVORITES",
+    "forecast": "FORECAST",
+    "clock": "CLOCK",
+    "alarm": "ALARM",
+    "system": "SYSTEM",
+    "languages": "LANGUAGES",
+    "settings": "SETTINGS",
+    "youtube": "YOUTUBE",
+    "weather": "WEATHER",
+    "bluetooth": "BLUETOOTH",
+}
+DEFAULT_HOME_CARDS = ["now_playing", "weather"]
+HOME_CARD_LAYOUTS = ("single", "bubble")
+DEFAULT_HOME_CARD_LAYOUT = "bubble"
+# Title bar and PAGES stay outside this band. Two cards with a small gap.
+HOME_CARD_TOP = 64
+HOME_CARD_HEIGHT = 352
+HOME_CARD_INSET = 8
+HOME_CARD_FULL_W = 304
+HOME_CARD_GAP = 8
+HOME_CARD_HALF_W = (HOME_CARD_FULL_W - HOME_CARD_GAP) // 2
+
+
+def normalize_home_cards(raw):
+    cards = []
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            if item in HOME_CARD_LABELS and item not in cards:
+                cards.append(item)
+    for kind in DEFAULT_HOME_CARDS:
+        if len(cards) >= 2:
+            break
+        if kind not in cards:
+            cards.append(kind)
+    for kind in HOME_CARD_KINDS:
+        if len(cards) >= 2:
+            break
+        if kind not in cards:
+            cards.append(kind)
+    return cards[:2]
+
+
+def normalize_home_card_layout(raw):
+    if raw in HOME_CARD_LAYOUTS:
+        return raw
+    return DEFAULT_HOME_CARD_LAYOUT
+
+
 class DeviceSettingsManager:
     def __init__(self):
         self.settings_file = os.path.expanduser("~/.radio_device_settings")
@@ -844,6 +1148,8 @@ class DeviceSettingsManager:
         self.auto_dim_enabled = False
         self.auto_dim_minutes = 5
         self.dim_brightness = 25
+        self.home_cards = list(DEFAULT_HOME_CARDS)
+        self.home_card_layout = DEFAULT_HOME_CARD_LAYOUT
         self.applied_brightness = None
         self.hardware_brightness_available = False
         self.load()
@@ -880,6 +1186,10 @@ class DeviceSettingsManager:
                     data.get("dim_brightness", self.dim_brightness)
                 ))
             )
+            self.home_cards = normalize_home_cards(data.get("home_cards"))
+            self.home_card_layout = normalize_home_card_layout(
+                data.get("home_card_layout")
+            )
         except (OSError, ValueError, TypeError):
             pass
 
@@ -892,7 +1202,9 @@ class DeviceSettingsManager:
             "brightness": self.brightness,
             "auto_dim_enabled": self.auto_dim_enabled,
             "auto_dim_minutes": self.auto_dim_minutes,
-            "dim_brightness": self.dim_brightness
+            "dim_brightness": self.dim_brightness,
+            "home_cards": list(self.home_cards),
+            "home_card_layout": self.home_card_layout
         }
         try:
             with open(self.settings_file, "w", encoding="utf-8") as settings:
@@ -974,7 +1286,9 @@ class DeviceSettingsManager:
             "brightness": self.brightness,
             "auto_dim_enabled": self.auto_dim_enabled,
             "auto_dim_minutes": self.auto_dim_minutes,
-            "dim_brightness": self.dim_brightness
+            "dim_brightness": self.dim_brightness,
+            "home_cards": list(self.home_cards),
+            "home_card_layout": self.home_card_layout
         }
 
 device_settings = DeviceSettingsManager()
@@ -995,6 +1309,11 @@ youtube_queue = []
 youtube_queue_index = -1
 youtube_skip_ids = set()
 youtube_touch_offset = 0
+youtube_touch_busy = False
+youtube_touch_pending = None
+playback_epoch = 0
+playback_should_run = True
+playback_down_since = 0
 _youtube_was_playing = False
 _youtube_ended_handled = False
 _youtube_play_started_at = 0
@@ -2542,7 +2861,13 @@ HTML_TEMPLATE = """
             'cyberpunk': { bg: '#000000', primary: '#ff4ec8', secondary: '#2ee6e0', accent: '#ffb347', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ff4ec8', buttonHover: '#2ee6e0', gradientStart: '#000000', gradientEnd: '#ff4ec8' },
             'golden_hour': { bg: '#000000', primary: '#f0c03a', secondary: '#ff9a3d', accent: '#3ee6c7', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#f0c03a', buttonHover: '#ff9a3d', gradientStart: '#000000', gradientEnd: '#f0c03a' },
             'mint_fresh': { bg: '#000000', primary: '#3ee6c7', secondary: '#7ae0e8', accent: '#8bb4ff', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#3ee6c7', buttonHover: '#7ae0e8', gradientStart: '#000000', gradientEnd: '#3ee6c7' },
-            'crimson_red': { bg: '#000000', primary: '#ff5a73', secondary: '#f0c45a', accent: '#3ee6c7', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ff5a73', buttonHover: '#f0c45a', gradientStart: '#000000', gradientEnd: '#ff5a73' }
+            'crimson_red': { bg: '#000000', primary: '#ff5a73', secondary: '#f0c45a', accent: '#3ee6c7', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ff5a73', buttonHover: '#f0c45a', gradientStart: '#000000', gradientEnd: '#ff5a73' },
+            'cobalt_blue': { bg: '#000000', primary: '#4c7dff', secondary: '#9eb6ff', accent: '#ffd56a', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#4c7dff', buttonHover: '#9eb6ff', gradientStart: '#000000', gradientEnd: '#4c7dff' },
+            'rose_gold': { bg: '#000000', primary: '#ff7aa2', secondary: '#ffd0a8', accent: '#ffe08a', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ff7aa2', buttonHover: '#ffd0a8', gradientStart: '#000000', gradientEnd: '#ff7aa2' },
+            'lime_glow': { bg: '#000000', primary: '#c6f54a', secondary: '#7dffb3', accent: '#fff4a8', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#c6f54a', buttonHover: '#7dffb3', gradientStart: '#000000', gradientEnd: '#c6f54a' },
+            'amber_night': { bg: '#000000', primary: '#ffbf3c', secondary: '#ff8a3d', accent: '#fff1b8', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ffbf3c', buttonHover: '#ff8a3d', gradientStart: '#000000', gradientEnd: '#ffbf3c' },
+            'violet_dusk': { bg: '#000000', primary: '#b388ff', secondary: '#7c6bff', accent: '#ffd6f2', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#b388ff', buttonHover: '#7c6bff', gradientStart: '#000000', gradientEnd: '#b388ff' },
+            'coral_reef': { bg: '#000000', primary: '#ff6b57', secondary: '#ffb199', accent: '#ffe08a', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ff6b57', buttonHover: '#ffb199', gradientStart: '#000000', gradientEnd: '#ff6b57' }
         };
         
         function applyTheme(themeKey) {
@@ -2675,21 +3000,17 @@ HTML_TEMPLATE = """
         }
         
         function adjustVolume(delta) {
-            const newVol = Math.max(0, Math.min(100, currentVolume + delta));
-            fetch(apiBase + '/api/volume/set/' + newVol).then(() => {
-                currentVolume = newVol;
-                updateVolumeUI();
-            });
+            currentVolume = Math.max(0, Math.min(100, currentVolume + delta));
+            updateVolumeUI();
+            fetch(apiBase + '/api/volume/set/' + currentVolume).catch(() => {});
         }
         
         function setVolume(e) {
             const rect = e.currentTarget.getBoundingClientRect();
             const pct = (e.clientX - rect.left) / rect.width;
-            const newVol = Math.round(pct * 100);
-            fetch(apiBase + '/api/volume/set/' + newVol).then(() => {
-                currentVolume = newVol;
-                updateVolumeUI();
-            });
+            currentVolume = Math.round(Math.max(0, Math.min(1, pct)) * 100);
+            updateVolumeUI();
+            fetch(apiBase + '/api/volume/set/' + currentVolume).catch(() => {});
         }
         
         function updateVolumeUI() {
@@ -3281,7 +3602,7 @@ def home():
         ip_address=current_ip,
         vol_level=vol_level,
         current_idx=current_idx,
-        now_playing=meta_text if meta_text else stations[current_idx]['name'],
+        now_playing=current_display_track(),
         theme=current_theme,
         current_theme_key=current_theme_key,
         all_themes=THEMES,
@@ -3345,7 +3666,7 @@ def remote_action(action):
         elif action == 'voldown':
             apply_live_volume(max(vol_level - 10, 0))
         elif action == 'toggle':
-            player.pause()
+            toggle_playback()
         elif action == 'mute':
             apply_live_volume(0 if vol_level > 0 else last_unmuted_volume)
         return "OK"
@@ -3356,8 +3677,9 @@ def remote_action(action):
 def play_index(idx):
     global current_idx
     try:
+        epoch = user_select_playback()
         current_idx = idx % len(stations)
-        play()
+        play(epoch)
         return "OK"
     except Exception as e:
         return f"Error: {str(e)}", 500
@@ -3391,7 +3713,7 @@ def get_volume():
 
 @app.route('/api/nowplaying')
 def get_now_playing():
-    return jsonify({"text": meta_text if meta_text else stations[current_idx]['name']})
+    return jsonify({"text": current_display_track()})
 
 LISTEN_ALONG_PAGE = """<!DOCTYPE html>
 <html lang="en">
@@ -3456,7 +3778,7 @@ def listen_along():
 def api_listen():
     try:
         station = stations[current_idx]
-        playing = meta_text or station.get('name', '')
+        playing = current_display_track()
     except Exception:
         station = {}
         playing = ''
@@ -3615,7 +3937,7 @@ def add_link():
             }
             stations.append(station)
             current_idx = len(stations) - 1
-            play()
+            play(user_select_playback())
             return jsonify({"success": True, "link": result})
         else:
             return jsonify({"success": False, "error": result})
@@ -3633,7 +3955,7 @@ def play_link(link_id):
             for i, s in enumerate(stations):
                 if s.get('direct_link_id') == link_id:
                     current_idx = i
-                    play()
+                    play(user_select_playback())
                     return jsonify({"success": True})
             
             # Add new
@@ -3646,7 +3968,7 @@ def play_link(link_id):
             }
             stations.append(station)
             current_idx = len(stations) - 1
-            play()
+            play(user_select_playback())
             return jsonify({"success": True})
         return jsonify({"success": False, "error": "Link not found"})
     except Exception as e:
@@ -3984,6 +4306,139 @@ def youtube_audio_url(video_id, timeout=40):
                 return candidate, None
     return '', err or 'Could not extract audio URL'
 
+_playback_lock = threading.RLock()
+_retired_players = []
+
+def cancel_background_playback():
+    """Ignore a YouTube resume or fetch that has not taken over the speakers."""
+    global playback_epoch, youtube_touch_busy, youtube_touch_pending
+    with _playback_lock:
+        playback_epoch += 1
+        youtube_touch_busy = False
+        youtube_touch_pending = None
+        return playback_epoch
+
+def user_select_playback():
+    """The listener picked something else. Drop the restored YouTube item."""
+    global playback_should_run, playback_down_since
+    epoch = cancel_background_playback()
+    with _playback_lock:
+        playback_should_run = True
+        playback_down_since = 0
+    return epoch
+
+def claim_youtube_fetch():
+    """Own the next YouTube start so a restore cannot speak over it."""
+    global playback_epoch, youtube_touch_busy, youtube_touch_pending
+    global playback_should_run, playback_down_since
+    with _playback_lock:
+        playback_epoch += 1
+        youtube_touch_pending = None
+        youtube_touch_busy = True
+        playback_should_run = False
+        playback_down_since = 0
+        return playback_epoch
+
+def release_youtube_busy(epoch):
+    global youtube_touch_busy
+    with _playback_lock:
+        if epoch == playback_epoch:
+            youtube_touch_busy = False
+
+def publish_youtube_pending(item, epoch):
+    global youtube_touch_pending
+    with _playback_lock:
+        if epoch is not None and epoch != playback_epoch:
+            return False
+        youtube_touch_pending = item
+        return True
+
+def prepare_player_audio(media_player):
+    """Send this player to Pulse/PipeWire, then to the Bluetooth speaker when one is selected."""
+    if media_player is None:
+        return
+    try:
+        media_player.audio_output_set('pulse')
+    except Exception:
+        pass
+    sink = ''
+    try:
+        sink = audio_manager.active_sink or ''
+        if not sink and audio_manager.current_output == 'bluetooth':
+            sink = audio_manager.outputs.get('bluetooth', {}).get('device') or ''
+    except Exception:
+        sink = ''
+    if sink:
+        try:
+            media_player.audio_output_device_set('pulse', sink)
+        except TypeError:
+            try:
+                media_player.audio_output_device_set(sink)
+            except Exception:
+                pass
+        except Exception:
+            pass
+    try:
+        media_player.audio_set_volume(vol_level)
+    except Exception:
+        pass
+
+def stop_audio_output():
+    """Drop the current decoder. A second play() must not keep the old stream."""
+    global player
+    with _playback_lock:
+        old = None
+        try:
+            old = player
+        except NameError:
+            old = None
+        try:
+            fresh = instance.media_player_new()
+        except Exception:
+            fresh = None
+        if old is not None:
+            try:
+                old.stop()
+            except Exception:
+                pass
+            try:
+                old.set_media(None)
+            except Exception:
+                pass
+        if fresh is not None:
+            player = fresh
+            prepare_player_audio(player)
+        if old is not None and old is not player:
+            _retired_players.append(old)
+            del _retired_players[:-1]
+            try:
+                old.release()
+            except Exception:
+                pass
+
+def pause_playback_now():
+    """Pause the radio and drop a YouTube restore that has not started yet."""
+    global playback_should_run, playback_down_since
+    cancel_background_playback()
+    with _playback_lock:
+        playback_should_run = False
+        playback_down_since = 0
+    try:
+        player.pause()
+    except Exception:
+        pass
+
+def stop_playback_now():
+    global playback_epoch, youtube_touch_busy, youtube_touch_pending
+    global playback_should_run, playback_down_since
+    with _playback_lock:
+        playback_epoch += 1
+        youtube_touch_busy = False
+        youtube_touch_pending = None
+        playback_should_run = False
+        playback_down_since = 0
+        stop_audio_output()
+
 # YouTube API Routes
 @app.route('/api/youtube/search', methods=['POST'])
 def youtube_search():
@@ -4001,18 +4456,30 @@ def youtube_search():
 
 @app.route('/api/youtube/play', methods=['POST'])
 def youtube_play():
+    epoch = None
     try:
         data = request.get_json(silent=True) or {}
         video_id = str(data.get('video_id', '')).strip()
         title = str(data.get('title') or 'YouTube Audio')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{6,32}', video_id):
+            return jsonify({'success': False, 'error': 'No video ID'}), 400
+        epoch = claim_youtube_fetch()
+        stop_audio_output()
+        stage_youtube_choice(video_id, title, epoch)
         audio_url, err = youtube_audio_url(video_id)
+        if epoch != playback_epoch:
+            return jsonify({'success': False, 'error': 'Cancelled'})
         if not audio_url:
             return jsonify({'success': False, 'error': err}), 502
         remember_youtube_queue(video_id, title)
-        play_youtube_station(video_id, title, audio_url)
+        if not play_youtube_station(video_id, title, audio_url, epoch):
+            return jsonify({'success': False, 'error': 'Cancelled'})
         return jsonify({'success': True, 'message': f'Playing: {title}'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if epoch is not None:
+            release_youtube_busy(epoch)
 
 @app.route('/static/<path:filename>')
 def serve_static(filename):
@@ -4042,14 +4509,63 @@ def serve_static(filename):
     return "Not found", 404
 
 def run_flask():
-    try:
-        app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False, threaded=True)
-    except:
+    for _attempt in range(20):
         try:
-            app.run(host='0.0.0.0', port=8081, debug=False, use_reloader=False, threaded=True)
-        except:
-            pass
+            app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False, threaded=True)
+            return
+        except OSError as error:
+            print(f"Web remote port 8080 busy: {error}", flush=True)
+            time.sleep(0.25)
+    print("Web remote could not listen on port 8080", flush=True)
 
+def _python_running_radio(pid):
+    """True when pid is a Python process executing this app."""
+    try:
+        raw = open(f"/proc/{pid}/cmdline", "rb").read()
+    except OSError:
+        return False
+    parts = [part.decode(errors="replace") for part in raw.split(b"\0") if part]
+    if not parts or not any(part.endswith("touch_radio.py") for part in parts):
+        return False
+    executable = os.path.basename(parts[0])
+    return executable == "python" or executable.startswith("python")
+
+def end_other_players():
+    """One app owns the speakers. An older copy must not keep playing underneath."""
+    import fcntl
+    my_pid = os.getpid()
+    stopped = False
+    try:
+        listed = os.listdir("/proc")
+    except OSError:
+        listed = []
+    for token in listed:
+        if not token.isdigit():
+            continue
+        pid = int(token)
+        if pid <= 1 or pid == my_pid or not _python_running_radio(pid):
+            continue
+        try:
+            os.kill(pid, 9)
+            stopped = True
+            print(f"Stopped older TCRADIOS process {pid}", flush=True)
+        except OSError:
+            pass
+    if stopped:
+        time.sleep(0.3)
+    handle = open("/tmp/tcradios-player.lock", "a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("TCRADIOS is already running.", flush=True)
+        os._exit(0)
+    handle.seek(0)
+    handle.truncate()
+    handle.write(str(my_pid))
+    handle.flush()
+    globals()["_player_lock_handle"] = handle
+
+end_other_players()
 threading.Thread(target=run_flask, daemon=True).start()
 
 # --- PYGAME SETUP ---
@@ -4060,6 +4576,71 @@ try:
     pygame.mouse.set_cursor((8, 8), (0, 0), (0,) * 8, (0,) * 8)
 except Exception:
     pass
+
+# Layout is authored at 320x480 and filled to the live screen. Positions
+# and boxes follow X/Y so the 7-inch panel is used fully. Circles that
+# must sit on that layout (glow, artwork) are drawn as matching ellipses.
+BASE_W, BASE_H = 320, 480
+OFFICIAL_7_W, OFFICIAL_7_H = 720, 1280
+_Rect = pygame.Rect
+
+def _open_touchscreen():
+    flags = pygame.FULLSCREEN | pygame.NOFRAME
+    try:
+        surface = pygame.display.set_mode((0, 0), flags)
+        width, height = surface.get_size()
+        if width >= 640 and height >= 480:
+            return surface, width, height
+    except Exception:
+        pass
+    try:
+        surface = pygame.display.set_mode((OFFICIAL_7_W, OFFICIAL_7_H), flags)
+        return surface, surface.get_width(), surface.get_height()
+    except Exception:
+        surface = pygame.display.set_mode((OFFICIAL_7_W, OFFICIAL_7_H))
+        return surface, surface.get_width(), surface.get_height()
+
+screen, SCREEN_W, SCREEN_H = _open_touchscreen()
+SCALE_X = SCREEN_W / float(BASE_W)
+SCALE_Y = SCREEN_H / float(BASE_H)
+SCALE = min(SCALE_X, SCALE_Y)
+
+def X(value):
+    return int(round(value * SCALE_X))
+
+def Y(value):
+    return int(round(value * SCALE_Y))
+
+def S(value):
+    return max(1, int(round(value * SCALE)))
+
+def R(x, y, w, h):
+    return _Rect(X(x), Y(y), max(1, X(w)), max(1, Y(h)))
+
+def XY(x, y):
+    return (X(x), Y(y))
+
+def E(cx, cy, radius):
+    return R(cx - radius, cy - radius, radius * 2, radius * 2)
+
+def inscribed_square(x, y, w, h):
+    box = R(x, y, w, h)
+    side = min(box.width, box.height)
+    return _Rect(box.centerx - side // 2, box.centery - side // 2, side, side)
+
+def square_around(cx, cy, radius):
+    r = max(1, S(radius))
+    x, y = X(cx), Y(cy)
+    return _Rect(x - r, y - r, r * 2, r * 2)
+
+def header_edge_buttons(header):
+    side = max(1, header.height - S(6))
+    top = header.y + (header.height - side) // 2
+    qr = _Rect(header.x, top, side, side)
+    close = _Rect(header.right - side, top, side, side)
+    return qr, close
+
+print(f"Touchscreen {SCREEN_W}x{SCREEN_H} (fill {SCALE_X:.2f}x{SCALE_Y:.2f})")
 
 # --- UNICODE FONT SETUP (Tamil Support) ---
 TAMIL_RANGE = range(0x0B80, 0x0BFF + 1)
@@ -4465,39 +5046,34 @@ def get_unicode_font(size, bold=False):
 
 # Load Unicode fonts
 try:
-    f_lg = get_unicode_font(24, bold=True)
-    f_sm = get_unicode_font(16, bold=True)
-    f_xl = get_unicode_font(80, bold=True)
-    f_med = get_unicode_font(24, bold=True)
-    f_tiny = get_unicode_font(12, bold=True)
-    f_weather = get_unicode_font(42, bold=True)
+    f_lg = get_unicode_font(S(24), bold=True)
+    f_sm = get_unicode_font(S(16), bold=True)
+    f_xl = get_unicode_font(S(80), bold=True)
+    f_med = get_unicode_font(S(24), bold=True)
+    f_tiny = get_unicode_font(S(12), bold=True)
+    f_weather = get_unicode_font(S(42), bold=True)
     tamil_loaded = tamil_font_path() or 'missing'
     print(f"Unicode fonts loaded. Tamil font: {tamil_loaded}")
     if tamil_loaded == 'missing':
         print("Tamil names will show as boxes until NotoSansTamil-Regular.ttf is installed.")
 except Exception as e:
     print(f"Font error: {e}, using defaults")
-    f_lg = pygame.font.Font(None, 24)
-    f_sm = pygame.font.Font(None, 16)
-    f_xl = pygame.font.Font(None, 80)
-    f_med = pygame.font.Font(None, 24)
-    f_tiny = pygame.font.Font(None, 12)
-    f_weather = pygame.font.Font(None, 42)
-
-try:
-    screen = pygame.display.set_mode((320, 480), pygame.FULLSCREEN | pygame.NOFRAME)
-except:
-    screen = pygame.display.set_mode((320, 480))
+    f_lg = pygame.font.Font(None, S(24))
+    f_sm = pygame.font.Font(None, S(16))
+    f_xl = pygame.font.Font(None, S(80))
+    f_med = pygame.font.Font(None, S(24))
+    f_tiny = pygame.font.Font(None, S(12))
+    f_weather = pygame.font.Font(None, S(42))
 
 # Cover application initialization with the same branding as the boot splash.
 screen.fill((0, 0, 0))
-splash_title_font = get_unicode_font(38, bold=True)
-splash_subtitle_font = get_unicode_font(16)
+splash_title_font = get_unicode_font(S(38), bold=True)
+splash_subtitle_font = get_unicode_font(S(16))
 splash_title = splash_title_font.render("TCRADIOS", True, (235, 242, 255))
 splash_subtitle = splash_subtitle_font.render("by JayathaSoft", True, (214, 224, 240))
-screen.blit(splash_title, splash_title.get_rect(center=(160, 218)))
-screen.blit(splash_subtitle, splash_subtitle.get_rect(center=(160, 257)))
-pygame.draw.line(screen, (38, 150, 210), (100, 282), (220, 282), 2)
+screen.blit(splash_title, splash_title.get_rect(center=XY(160, 218)))
+screen.blit(splash_subtitle, splash_subtitle.get_rect(center=XY(160, 257)))
+pygame.draw.line(screen, (38, 150, 210), XY(100, 282), XY(220, 282), S(2))
 pygame.display.flip()
 pygame.mouse.set_visible(False)
 splash_started_at = time.time()
@@ -4553,19 +5129,19 @@ def ensure_bright(color, minimum=125):
     return mix_colors(color, (255, 255, 255), amount)
 
 def create_ui_background():
-    background = pygame.Surface((320, 480))
-    for y in range(480):
-        ratio = y / 479
+    background = pygame.Surface((SCREEN_W, SCREEN_H))
+    for y in range(SCREEN_H):
+        ratio = y / max(1, SCREEN_H - 1)
         color = tuple(
             int(UI_BG_TOP[i] + (UI_BG_BOTTOM[i] - UI_BG_TOP[i]) * ratio)
             for i in range(3)
         )
-        pygame.draw.line(background, color, (0, y), (319, y))
+        pygame.draw.line(background, color, (0, y), (SCREEN_W - 1, y))
 
-    glow = pygame.Surface((320, 480), pygame.SRCALPHA)
-    pygame.draw.circle(glow, (*UI_BLUE, 28), (292, 108), 120)
-    pygame.draw.circle(glow, (*UI_PURPLE, 26), (12, 360), 140)
-    pygame.draw.circle(glow, (*UI_AMBER, 16), (160, 24), 90)
+    glow = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+    pygame.draw.ellipse(glow, (*UI_BLUE, 34), E(286, 96, 128))
+    pygame.draw.ellipse(glow, (*UI_PURPLE, 20), E(18, 340, 130))
+    pygame.draw.ellipse(glow, (*UI_AMBER, 16), E(40, 180, 70))
     background.blit(glow, (0, 0))
     return background
 
@@ -4574,17 +5150,18 @@ def refresh_ui_palette():
     global UI_TEXT, UI_MUTED, UI_BLUE, UI_PURPLE, UI_AMBER, UI_PINK, UI_GREEN
     global ui_background, ui_palette_theme
 
-    UI_BLUE = ensure_bright(current_theme.pygame_primary, 155)
-    UI_PURPLE = ensure_bright(current_theme.pygame_secondary, 145)
-    UI_AMBER = ensure_bright(current_theme.pygame_accent, 155)
-    UI_PINK = ensure_bright(mix_colors((255, 78, 160), UI_PURPLE, 0.22), 155)
-    UI_GREEN = ensure_bright(mix_colors((52, 220, 150), UI_BLUE, 0.22), 155)
+    UI_BLUE = ensure_bright(current_theme.pygame_primary, 165)
+    UI_PURPLE = ensure_bright(current_theme.pygame_secondary, 155)
+    UI_AMBER = ensure_bright(current_theme.pygame_accent, 165)
+    # Pink and green stay saturated so the screen is not one blue wash.
+    UI_PINK = (255, 118, 158)
+    UI_GREEN = (72, 214, 168)
     UI_TEXT = (255, 255, 255)
     UI_BG_TOP = (0, 0, 0)
-    UI_BG_BOTTOM = mix_colors((0, 0, 0), UI_BLUE, 0.08)
-    UI_SURFACE = mix_colors((10, 12, 16), UI_BLUE, 0.12)
-    UI_SURFACE_RAISED = mix_colors((16, 18, 24), UI_BLUE, 0.2)
-    UI_MUTED = (230, 234, 244)
+    UI_BG_BOTTOM = mix_colors((5, 8, 18), UI_BLUE, 0.06)
+    UI_SURFACE = mix_colors((10, 14, 24), UI_PURPLE, 0.06)
+    UI_SURFACE_RAISED = mix_colors((16, 20, 32), UI_BLUE, 0.08)
+    UI_MUTED = (186, 196, 214)
     ui_background = create_ui_background()
     ui_palette_theme = current_theme.name
 
@@ -4699,7 +5276,27 @@ def draw_circle_icon_button(surface, rect, fill, kind):
 
 def draw_modern_button(surface, rect, fill, border, radius=14, border_width=0):
     body = border if (border[0] + border[1] + border[2]) > 90 else fill
-    pygame.draw.rect(surface, body, rect, border_radius=radius)
+    pygame.draw.rect(surface, body, rect, border_radius=S(radius))
+    gloss = mix_colors(body, (255, 255, 255), 0.16)
+    inset = max(4, rect.width // 8)
+    shine = _Rect(
+        rect.x + inset,
+        rect.y + max(2, rect.height // 7),
+        max(1, rect.width - inset * 2),
+        max(1, min(S(2), rect.height // 10)),
+    )
+    if shine.width > 6 and shine.bottom < rect.centery:
+        pygame.draw.rect(
+            surface, gloss, shine, border_radius=max(1, shine.height // 2)
+        )
+    return body
+
+def draw_quiet_button(surface, rect, accent, radius=16):
+    body = mix_colors(UI_SURFACE_RAISED, accent, 0.16)
+    pygame.draw.rect(surface, body, rect, border_radius=S(radius))
+    pygame.draw.rect(
+        surface, accent, rect, max(1, S(2)), border_radius=S(radius)
+    )
     return body
 
 def labeled_button(surface, rect, fill, font, text, radius=14, border=None):
@@ -4708,68 +5305,164 @@ def labeled_button(surface, rect, fill, font, text, radius=14, border=None):
     return body
 
 def draw_info_card(surface, rect, accent, radius=16):
-    body = UI_SURFACE_RAISED
-    pygame.draw.rect(surface, body, rect, border_radius=radius)
-    pygame.draw.rect(surface, accent, rect, 2, border_radius=radius)
+    body = mix_colors(UI_SURFACE_RAISED, accent, 0.22)
+    pygame.draw.rect(surface, body, rect, border_radius=S(radius))
+    pygame.draw.rect(
+        surface, accent, rect, max(2, S(2)), border_radius=S(radius)
+    )
     return body
+
+_glass_overlays = {}
+
+def draw_glass_card(surface, rect, accent, radius=22):
+    key = (rect.width, rect.height)
+    overlay = _glass_overlays.get(key)
+    if overlay is None:
+        if len(_glass_overlays) > 6:
+            _glass_overlays.clear()
+        overlay = pygame.Surface(key, pygame.SRCALPHA)
+        _glass_overlays[key] = overlay
+    overlay.fill((0, 0, 0, 0))
+    body = UI_SURFACE_RAISED
+    tint = mix_colors(body, accent, 0.14)
+    bounds = overlay.get_rect()
+    pygame.draw.rect(
+        overlay, (*tint, 150), bounds, border_radius=S(radius)
+    )
+    shine = _Rect(
+        S(16), S(8),
+        max(1, bounds.width - S(32)),
+        max(1, S(2)),
+    )
+    pygame.draw.rect(overlay, (*accent, 70), shine, border_radius=S(2))
+    pygame.draw.rect(
+        overlay, (*accent, 210), bounds, max(1, S(2)),
+        border_radius=S(radius)
+    )
+    surface.blit(overlay, rect.topleft)
+    return body
+
+_scaled_logo = {"key": None, "surface": None}
+_clock_faces = {}
+_dim_overlay = None
+
+def scaled_logo(width, height):
+    key = (id(logo), max(1, width), max(1, height))
+    if _scaled_logo["key"] == key and _scaled_logo["surface"] is not None:
+        return _scaled_logo["surface"]
+    surface = pygame.transform.smoothscale(logo, (key[1], key[2]))
+    _scaled_logo["key"] = key
+    _scaled_logo["surface"] = surface
+    return surface
+
+def scaled_clock_face(text, color, target_w, max_h):
+    key = (text, color, target_w, max_h)
+    cached = _clock_faces.get(key)
+    if cached is not None:
+        return cached
+    rendered = f_xl.render(text, True, color)
+    width = max(1, target_w)
+    height = int(rendered.get_height() * width / max(1, rendered.get_width()))
+    if max_h > 0 and height > max_h:
+        height = max(1, max_h)
+        width = max(1, int(rendered.get_width() * height / max(1, rendered.get_height())))
+    surface = pygame.transform.smoothscale(rendered, (width, max(1, height)))
+    if len(_clock_faces) > 16:
+        _clock_faces.clear()
+    _clock_faces[key] = surface
+    return surface
+
+def screen_dim():
+    global _dim_overlay
+    if _dim_overlay is None or _dim_overlay.get_size() != (SCREEN_W, SCREEN_H):
+        _dim_overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+        _dim_overlay.fill((0, 0, 0, 150))
+    return _dim_overlay
+
+def release_spare_memory():
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+    try:
+        pages = int(open("/proc/self/statm").read().split()[1])
+        used = pages * os.sysconf("SC_PAGE_SIZE") // (1024 * 1024)
+        print(f"Radio memory {used} MB", flush=True)
+    except Exception:
+        pass
 
 def draw_animated_ui_glow(surface, now):
     ui_animation_layer.fill((0, 0, 0, 0))
     pulse = (math.sin(now * 1.1) + 1) / 2
-    blue_center = (
-        278 + int(math.sin(now * 0.35) * 18),
-        112 + int(math.cos(now * 0.42) * 16)
+    orbs = (
+        (278 + math.sin(now * 0.35) * 16, 100 + math.cos(now * 0.42) * 14, UI_BLUE, pulse),
+        (24 + math.cos(now * 0.28) * 14, 360 + math.sin(now * 0.34) * 12, UI_PURPLE, 1 - pulse),
+        (48 + math.sin(now * 0.22) * 10, 190 + math.cos(now * 0.26) * 8, UI_AMBER, pulse),
     )
-    purple_center = (
-        28 + int(math.cos(now * 0.3) * 20),
-        365 + int(math.sin(now * 0.38) * 18)
+    for cx, cy, color, phase in orbs:
+        for radius, alpha in ((96, 5), (54, 9)):
+            pygame.draw.ellipse(
+                ui_animation_layer,
+                (*color, min(18, alpha + int(phase * 5))),
+                E(cx, cy, radius)
+            )
+    surface.blit(ui_animation_layer, (0, 0))
+
+def draw_header_chrome(surface, rect):
+    pygame.draw.rect(surface, UI_SURFACE, rect, border_radius=S(17))
+    edge = mix_colors(UI_BLUE, UI_PURPLE, 0.35)
+    pygame.draw.rect(
+        surface, edge, rect, max(1, S(2)), border_radius=S(17)
     )
 
-    for radius, alpha in ((105, 3), (78, 5), (52, 7)):
-        pygame.draw.circle(
-            ui_animation_layer,
-            (*UI_BLUE, alpha + int(pulse * 3)),
-            blue_center,
-            radius
-        )
-    for radius, alpha in ((120, 3), (88, 5), (58, 7)):
-        pygame.draw.circle(
-            ui_animation_layer,
-            (*UI_PURPLE, alpha + int((1 - pulse) * 3)),
-            purple_center,
-            radius
-        )
-    surface.blit(ui_animation_layer, (0, 0))
+def draw_header_stripe(surface, left, right, y):
+    width = max(2, S(2))
+    y = int(y)
+    pygame.draw.line(surface, UI_BLUE, (int(left), y), (int(right), y), width)
 
 def draw_pulsing_border(surface, rect, color, now):
     ui_animation_layer.fill((0, 0, 0, 0))
     pulse = (math.sin(now * 2.2) + 1) / 2
-    outer = rect.inflate(8, 8)
-    inner = rect.inflate(4, 4)
+    outer = rect.inflate(X(4), Y(3))
+    inner = rect.inflate(X(2), Y(2))
     pygame.draw.rect(
         ui_animation_layer,
         (*color, 10 + int(pulse * 12)),
         outer,
-        2,
-        border_radius=22
+        S(2),
+        border_radius=S(22)
     )
     pygame.draw.rect(
         ui_animation_layer,
         (*color, 20 + int(pulse * 18)),
         inner,
-        2,
-        border_radius=20
+        S(2),
+        border_radius=S(20)
     )
     surface.blit(ui_animation_layer, (0, 0))
 
 ui_background = None
 ui_palette_theme = None
-ui_animation_layer = pygame.Surface((320, 480), pygame.SRCALPHA)
-brightness_overlay = pygame.Surface((320, 480), pygame.SRCALPHA)
+ui_animation_layer = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+brightness_overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
 refresh_ui_palette()
 
-instance = vlc.Instance('--no-video')
+def _vlc_uses_pulse():
+    try:
+        ready, _detail = audio_manager._pulse_status()
+        return ready
+    except Exception:
+        return False
+
+if _vlc_uses_pulse():
+    # The jack is owned by PipeWire. ALSA then reports an audio error and
+    # the Bluetooth speaker stays silent.
+    instance = vlc.Instance('--no-video', '--quiet', '--aout=pulse', '--intf=dummy')
+else:
+    instance = vlc.Instance('--no-video', '--quiet', '--intf=dummy')
 player = instance.media_player_new()
+prepare_player_audio(player)
 
 URL = "https://raw.githubusercontent.com/simsonpeter/Tcradios/refs/heads/main/stations.json"
 LANGUAGE_BASE_URL = (
@@ -4994,11 +5687,14 @@ saver_mode = False
 show_qr = False
 weather_str = f"{device_settings.weather_name.upper()}: --C"
 current_temp = 0
+current_wind = 0
 weather_type = "clear"
+weather_label = "Clear"
 weather_forecast = []
+weather_updating = False
 meta_text = ""
-scroll_x = 320
-saver_scroll_x = 320
+scroll_x = SCREEN_W
+saver_scroll_x = SCREEN_W
 alarm_fade_active = False
 alarm_fade_data = {}
 saver_active = False
@@ -5017,6 +5713,7 @@ system_stats_updating = False
 touch_bluetooth_devices = []
 touch_bluetooth_status = "Tap Search to find nearby devices"
 touch_bluetooth_busy = False
+touch_bluetooth_offset = 0
 wifi_networks = []
 wifi_status_text = "Choose a network"
 wifi_busy = False
@@ -5034,8 +5731,9 @@ language_stream_busy = False
 language_stream_offset = 0
 
 # Logo setup
-LOGO_SIZE = 112
+LOGO_SIZE = S(112)
 LOGO_CENTER = LOGO_SIZE // 2
+logo_rect = R(104, 72, 112, 112)
 logo = pygame.Surface((LOGO_SIZE, LOGO_SIZE), pygame.SRCALPHA)
 logo.fill((0, 0, 0, 0))
 pygame.draw.circle(logo, (40, 40, 40), (LOGO_CENTER, LOGO_CENTER), LOGO_CENTER)
@@ -5046,7 +5744,7 @@ text_rect = text.get_rect(center=(LOGO_CENTER, LOGO_CENTER))
 logo.blit(text, text_rect)
 
 qr_target = ""
-qr_surface = pygame.Surface((240, 240))
+qr_surface = pygame.Surface((S(240), S(240)))
 qr_surface.fill((0, 0, 0))
 last_ip_check = time.time()
 
@@ -5061,29 +5759,76 @@ def rebuild_qr_surface():
     try:
         qr_img = qrcode.make(target).convert('RGB')
         qr_surface = pygame.image.fromstring(qr_img.tobytes(), qr_img.size, 'RGB')
-        qr_surface = pygame.transform.scale(qr_surface, (240, 240))
+        qr_surface = pygame.transform.scale(qr_surface, (S(240), S(240)))
         qr_target = target
     except Exception:
         pass
 
 rebuild_qr_surface()
 
+_ip_lookup = {"busy": False, "value": None}
+
 def update_qr_code():
     global current_ip, last_ip_check
+    found = _ip_lookup["value"]
+    if found:
+        _ip_lookup["value"] = None
+        if found != current_ip:
+            current_ip = found
     now = time.time()
-    if now - last_ip_check > 30:
-        new_ip = get_local_ip()
-        if new_ip != current_ip:
-            current_ip = new_ip
+    if now - last_ip_check > 30 and not _ip_lookup["busy"]:
         last_ip_check = now
+        _ip_lookup["busy"] = True
+        def lookup():
+            try:
+                _ip_lookup["value"] = get_local_ip()
+            finally:
+                _ip_lookup["busy"] = False
+        threading.Thread(target=lookup, daemon=True).start()
     rebuild_qr_surface()
 
-def update_logo(url):
+_logo_lock = threading.Lock()
+_logo_request = {"token": 0}
+_logo_ready = {"token": 0, "raw": None}
+
+def begin_logo_update(url):
+    url = str(url or "").strip()
+    with _logo_lock:
+        _logo_request["token"] += 1
+        token = _logo_request["token"]
+        # Drop the previous artwork immediately. The download fills it in later.
+        _logo_ready["token"] = token
+        _logo_ready["raw"] = None
+    if not url:
+        return
+    def fetch_logo():
+        raw = None
+        try:
+            raw = urlopen(url, timeout=2).read()
+        except Exception:
+            raw = None
+        with _logo_lock:
+            if _logo_request["token"] != token:
+                return
+            _logo_ready["token"] = token
+            _logo_ready["raw"] = raw
+    threading.Thread(target=fetch_logo, daemon=True).start()
+
+def apply_pending_logo():
+    with _logo_lock:
+        token = _logo_ready["token"]
+        if not token:
+            return
+        raw = _logo_ready["raw"]
+        _logo_ready["token"] = 0
+        _logo_ready["raw"] = None
+    paint_logo(raw)
+
+def paint_logo(raw):
     global logo
     try:
-        if not url:
-            raise ValueError("No logo URL")
-        raw = urlopen(url, timeout=2).read()
+        if not raw:
+            raise ValueError("No logo")
         img = pygame.image.load(io.BytesIO(raw)).convert_alpha()
         img = pygame.transform.smoothscale(img, (LOGO_SIZE, LOGO_SIZE))
         
@@ -5129,28 +5874,61 @@ def update_logo(url):
             text_rect = text.get_rect(center=(LOGO_CENTER, LOGO_CENTER))
             logo.blit(text, text_rect)
 
-def play():
+def youtube_display_title(station):
+    name = str((station or {}).get("name") or "").strip()
+    if name.upper().startswith("YT:"):
+        name = name[3:].strip()
+    return name or "YouTube"
+
+def current_display_track():
+    if stations and 0 <= current_idx < len(stations):
+        station = stations[current_idx]
+        if station.get("youtube_id"):
+            return youtube_display_title(station)
+        if meta_text:
+            return meta_text
+        return station.get("name") or "TCRADIOS"
+    return meta_text or "TCRADIOS"
+
+def play(epoch=None):
     global meta_text, scroll_x, saver_scroll_x, saved_station_url, saved_station_index
-    scroll_x = 320
-    saver_scroll_x = 320
+    global playback_should_run, playback_down_since
+    scroll_x = SCREEN_W
+    saver_scroll_x = SCREEN_W
+    if epoch is not None and epoch != playback_epoch:
+        return False
     if not stations:
-        return
+        return False
     station = stations[current_idx]
     if not station.get("url"):
         meta_text = "LOADING STATIONS"
-        return
+        return False
+    if station.get("youtube_id"):
+        meta_text = youtube_display_title(station)
+    else:
+        meta_text = style_now_playing(station.get("name") or "")
     try:
-        player.set_media(instance.media_new(station['url']))
-        player.play()
+        with _playback_lock:
+            if epoch is not None and epoch != playback_epoch:
+                return False
+            stop_audio_output()
+            if epoch is not None and epoch != playback_epoch:
+                return False
+            media = instance.media_new(station['url'])
+            player.set_media(media)
+            playback_should_run = True
+            playback_down_since = 0
+            player.play()
         player.audio_set_volume(vol_level)
-        audio_manager.set_volume(vol_level)
-        update_logo(station.get('logo', ''))
+        request_hardware_volume(vol_level)
+        begin_logo_update(station.get('logo', ''))
         saved_station_url = station.get("url", "")
         saved_station_index = current_idx
         save_playback_state(force=True)
         rebuild_qr_surface()
-    except:
-        pass
+        return True
+    except Exception:
+        return False
 
 def apply_github_station_list(loaded):
     global current_idx, base_stations, stations_waiting_for_github
@@ -5187,7 +5965,8 @@ def apply_github_station_list(loaded):
     current_idx = choose_station_index(stations)
     stations_waiting_for_github = False
     load_favorite_indices()
-    play()
+    if playback_should_run:
+        play(playback_epoch)
 
 def retry_github_stations():
     for _attempt in range(24):
@@ -5234,9 +6013,45 @@ def remember_youtube_queue(video_id, title=""):
     )
     youtube_touch_offset = (max(0, youtube_queue_index) // 4) * 4
 
-def play_youtube_station(video_id, title, audio_url):
+def stage_youtube_choice(video_id, title, epoch=None):
+    """Show the chosen video at once, before its audio address is ready."""
+    global current_idx, meta_text
+    shown = str(title or "YouTube").strip() or "YouTube"
+    station = {
+        'name': f"YT: {shown[:40]}",
+        'url': '',
+        'genre': 'YouTube',
+        'logo': f'https://img.youtube.com/vi/{video_id}/mqdefault.jpg',
+        'youtube_id': video_id,
+    }
+    with _playback_lock:
+        if epoch is not None and epoch != playback_epoch:
+            return False
+        meta_text = shown
+        existing = next(
+            (
+                index for index, item in enumerate(stations)
+                if item.get('youtube_id') == video_id
+            ),
+            None
+        )
+        if existing is None:
+            stations.append(station)
+            current_idx = len(stations) - 1
+        else:
+            stations[existing] = station
+            current_idx = existing
+    try:
+        begin_logo_update(station['logo'])
+    except Exception:
+        pass
+    return True
+
+def play_youtube_station(video_id, title, audio_url, epoch=None):
     global current_idx, _youtube_play_started_at, _youtube_ended_handled
     global _youtube_was_playing
+    if not audio_url:
+        return False
     station = {
         'name': f"YT: {str(title)[:40]}",
         'url': audio_url,
@@ -5244,25 +6059,30 @@ def play_youtube_station(video_id, title, audio_url):
         'logo': f'https://img.youtube.com/vi/{video_id}/mqdefault.jpg',
         'youtube_id': video_id,
     }
-    existing = next(
-        (
-            index for index, item in enumerate(stations)
-            if item.get('youtube_id') == video_id
-        ),
-        None
-    )
-    if existing is None:
-        stations.append(station)
-        current_idx = len(stations) - 1
-    else:
-        stations[existing] = station
-        current_idx = existing
+    with _playback_lock:
+        if epoch is not None and epoch != playback_epoch:
+            return False
+        existing = next(
+            (
+                index for index, item in enumerate(stations)
+                if item.get('youtube_id') == video_id
+            ),
+            None
+        )
+        if existing is None:
+            stations.append(station)
+            current_idx = len(stations) - 1
+        else:
+            stations[existing] = station
+            current_idx = existing
     remember_youtube_queue(video_id, title)
     youtube_skip_ids.discard(video_id)
+    if epoch is not None and epoch != playback_epoch:
+        return False
     _youtube_play_started_at = time.time()
     _youtube_ended_handled = False
     _youtube_was_playing = False
-    play()
+    return bool(play(epoch))
 
 def save_favorites():
     try:
@@ -5324,13 +6144,29 @@ def refresh_system_stats():
     finally:
         system_stats_updating = False
 
+BLUETOOTH_PAGE_SIZE = 4
+
+
+def bluetooth_last_page_offset(count):
+    if count <= BLUETOOTH_PAGE_SIZE:
+        return 0
+    return ((count - 1) // BLUETOOTH_PAGE_SIZE) * BLUETOOTH_PAGE_SIZE
+
+
+def visible_bluetooth_devices():
+    return touch_bluetooth_devices[
+        touch_bluetooth_offset:touch_bluetooth_offset + BLUETOOTH_PAGE_SIZE
+    ]
+
+
 def scan_touch_bluetooth():
     global touch_bluetooth_devices, touch_bluetooth_status
-    global touch_bluetooth_busy
+    global touch_bluetooth_busy, touch_bluetooth_offset
     try:
         touch_bluetooth_status = "Searching for nearby devices…"
         touch_bluetooth_devices = audio_manager.scan_bluetooth()
         count = len(touch_bluetooth_devices)
+        touch_bluetooth_offset = bluetooth_last_page_offset(count)
         touch_bluetooth_status = (
             f"{count} device{'s' if count != 1 else ''} found"
         )
@@ -5547,13 +6383,158 @@ def handle_wifi_key(value):
         wifi_password_text += typed
         wifi_shift = False
 
+def set_home_card_layout(layout):
+    device_settings.home_card_layout = normalize_home_card_layout(layout)
+    device_settings.save()
+
+
+def assign_home_card(slot, kind):
+    if kind not in HOME_CARD_KINDS or slot not in (0, 1):
+        return
+    cards = list(normalize_home_cards(device_settings.home_cards))
+    if (
+        device_settings.home_card_layout == "bubble"
+        and cards[1 - slot] == kind
+    ):
+        cards[slot], cards[1 - slot] = cards[1 - slot], cards[slot]
+    else:
+        cards[slot] = kind
+    device_settings.home_cards = normalize_home_cards(cards)
+    device_settings.save()
+
+
+def cycle_home_card(slot, direction):
+    if slot not in (0, 1):
+        return
+    kinds = list(HOME_CARD_KINDS)
+    cards = list(device_settings.home_cards)
+    current = cards[slot]
+    index = kinds.index(current) if current in kinds else 0
+    other = cards[1 - slot]
+    for _ in kinds:
+        index = (index + direction) % len(kinds)
+        candidate = kinds[index]
+        if (
+            device_settings.home_card_layout == "single"
+            or candidate != other
+        ):
+            cards[slot] = candidate
+            break
+    device_settings.home_cards = normalize_home_cards(cards)
+    device_settings.save()
+
+
+def swap_home_cards():
+    cards = list(device_settings.home_cards)
+    device_settings.home_cards = [cards[1], cards[0]]
+    device_settings.save()
+
+
+def home_card_slots(top=HOME_CARD_TOP, height=HOME_CARD_HEIGHT):
+    cards = normalize_home_cards(device_settings.home_cards)
+    if device_settings.home_card_layout == "single":
+        return [(
+            R(HOME_CARD_INSET, top, HOME_CARD_FULL_W, height),
+            cards[0], HOME_CARD_INSET, top, HOME_CARD_FULL_W, height
+        )]
+    left_x = HOME_CARD_INSET
+    right_x = HOME_CARD_INSET + HOME_CARD_HALF_W + HOME_CARD_GAP
+    return [
+        (R(left_x, top, HOME_CARD_HALF_W, height), cards[0], left_x, top, HOME_CARD_HALF_W, height),
+        (R(right_x, top, HOME_CARD_HALF_W, height), cards[1], right_x, top, HOME_CARD_HALF_W, height),
+    ]
+
+
+def playback_card_box():
+    for slot in home_card_slots():
+        if slot[1] == "now_playing":
+            return slot
+    return None
+
+
+def hidden_playback_controls():
+    hidden = R(-200, -200, 1, 1)
+    return {
+        "vol_minus": hidden,
+        "vol_plus": hidden,
+        "vol_bar": hidden,
+        "pct_x": -200,
+        "pct_y": -200,
+        "prev": hidden,
+        "toggle": hidden,
+        "next": hidden,
+        "compact": True,
+        "visible": False,
+    }
+
+
+def transport_buttons(x, btn_y, w, height, margin, gap, middle_extra):
+    """Three transport buttons with a real gap so play never touches next."""
+    inner = w - margin * 2 - gap * 2
+    side = max(24, (inner - middle_extra) // 3)
+    middle = max(side, inner - side * 2)
+    prev_x = x + margin
+    toggle_x = prev_x + side + gap
+    next_x = toggle_x + middle + gap
+    return (
+        R(prev_x, btn_y, side, height),
+        R(toggle_x, btn_y, middle, height),
+        R(next_x, btn_y, max(24, x + w - margin - next_x), height),
+    )
+
+def playback_control_layout():
+    box = playback_card_box()
+    if box is None:
+        return hidden_playback_controls()
+    _rect, _kind, x, y, w, h = box
+    if w < 220:
+        vol_y = y + h - 136
+        btn_y = y + h - 78
+        prev, toggle, nxt = transport_buttons(
+            x, btn_y, w, 46, margin=6, gap=8, middle_extra=8
+        )
+        return {
+            "vol_minus": inscribed_square(x + 6, vol_y, 30, 36),
+            "vol_plus": inscribed_square(x + w - 36, vol_y, 30, 36),
+            "vol_bar": R(x + 40, vol_y + 12, w - 80, 12),
+            "pct_x": x + w // 2,
+            "pct_y": vol_y + 32,
+            "prev": prev,
+            "toggle": toggle,
+            "next": nxt,
+            "compact": True,
+            "visible": True,
+        }
+    vol_y = y + h - 132
+    btn_y = y + h - 74
+    prev, toggle, nxt = transport_buttons(
+        x, btn_y, w, 52, margin=10, gap=12, middle_extra=14
+    )
+    return {
+        "vol_minus": inscribed_square(x + 10, vol_y, 46, 46),
+        "vol_plus": inscribed_square(x + w - 56, vol_y, 46, 46),
+        "vol_bar": R(x + 64, vol_y + 14, w - 128, 14),
+        "pct_x": x + w // 2,
+        "pct_y": vol_y + 34,
+        "prev": prev,
+        "toggle": toggle,
+        "next": nxt,
+        "compact": False,
+        "visible": True,
+    }
+
+
 def connect_touch_bluetooth(address, name):
     global touch_bluetooth_devices, touch_bluetooth_status
-    global touch_bluetooth_busy
+    global touch_bluetooth_busy, touch_bluetooth_offset
     try:
         touch_bluetooth_status = f"Connecting to {name}…"
         audio_manager.connect_bluetooth(address)
         touch_bluetooth_devices = audio_manager.get_bluetooth_devices()
+        touch_bluetooth_offset = min(
+            touch_bluetooth_offset,
+            bluetooth_last_page_offset(len(touch_bluetooth_devices))
+        )
         touch_bluetooth_status = f"Connected to {name}"
     except Exception as error:
         touch_bluetooth_status = str(error)
@@ -5611,43 +6592,60 @@ def play_language_stream(stream):
         current_idx = len(stations) - 1
     else:
         current_idx = existing_index
-    play()
+    play(user_select_playback())
 
 def resume_last_playback():
-    global current_idx
-    youtube_id = str(saved_playback.get("youtube_id") or "").strip()
-    if youtube_id:
-        title = str(saved_playback.get("name") or "YouTube")
-        if title.startswith("YT: "):
-            title = title[4:]
-        audio_url, err = youtube_audio_url(youtube_id, timeout=18)
-        if audio_url:
-            play_youtube_station(youtube_id, title, audio_url)
+    global current_idx, youtube_touch_busy
+    with _playback_lock:
+        if playback_epoch != 0:
+            print("Playback restore skipped", flush=True)
             return
-        print(f"Could not restore YouTube item: {err}")
-    saved_url = str(saved_station_url or "").strip()
-    if youtube_id:
-        saved_url = ""
-    if saved_url and all(station.get("url") != saved_url for station in stations):
-        restored = {
-            "name": saved_playback.get("name") or "Last played",
-            "url": saved_url,
-            "genre": saved_playback.get("genre") or "Radio",
-            "logo": saved_playback.get("logo") or "",
-        }
-        for key in ("language", "direct_link_id"):
-            value = saved_playback.get(key)
-            if value not in (None, ""):
-                restored[key] = value
-        stations.append(restored)
-        current_idx = len(stations) - 1
-    play()
+        epoch = playback_epoch
+        youtube_touch_busy = True
+    try:
+        youtube_id = str(saved_playback.get("youtube_id") or "").strip()
+        if youtube_id:
+            title = str(saved_playback.get("name") or "YouTube")
+            if title.startswith("YT: "):
+                title = title[4:]
+            audio_url, err = youtube_audio_url(youtube_id, timeout=18)
+            if playback_epoch != epoch:
+                print("YouTube restore cancelled", flush=True)
+                return
+            if audio_url:
+                play_youtube_station(youtube_id, title, audio_url, epoch)
+                return
+            print(f"Could not restore YouTube item: {err}")
+        if playback_epoch != epoch:
+            print("Playback restore cancelled", flush=True)
+            return
+        saved_url = str(saved_station_url or "").strip()
+        if youtube_id:
+            saved_url = ""
+        if saved_url and all(station.get("url") != saved_url for station in stations):
+            restored = {
+                "name": saved_playback.get("name") or "Last played",
+                "url": saved_url,
+                "genre": saved_playback.get("genre") or "Radio",
+                "logo": saved_playback.get("logo") or "",
+            }
+            for key in ("language", "direct_link_id"):
+                value = saved_playback.get(key)
+                if value not in (None, ""):
+                    restored[key] = value
+            stations.append(restored)
+            current_idx = len(stations) - 1
+        if playback_epoch != epoch:
+            return
+        play(epoch)
+    finally:
+        release_youtube_busy(epoch)
 
 splash_remaining = 5.0 - (time.time() - splash_started_at)
 if splash_remaining > 0:
     time.sleep(splash_remaining)
 
-resume_last_playback()
+threading.Thread(target=resume_last_playback, daemon=True).start()
 if stations_waiting_for_github:
     threading.Thread(target=retry_github_stations, daemon=True).start()
 ip_display_time = 0
@@ -5674,7 +6672,9 @@ def handle_alarm_fade():
         alarm_fade_data = {}
 
 def handle_sleep_timer():
+    global playback_should_run
     if alarm_system.check_sleep_timer():
+        playback_should_run = False
         if alarm_system.sleep_volume_fade:
             for i in range(10, 0, -1):
                 player.audio_set_volume(vol_level * i // 10)
@@ -5683,6 +6683,109 @@ def handle_sleep_timer():
             player.pause()
         elif alarm_system.sleep_stop_method == "stop":
             player.stop()
+
+def toggle_playback():
+    global playback_should_run, playback_down_since
+    try:
+        state = player.get_state()
+    except Exception:
+        state = None
+    youtube = False
+    try:
+        youtube = bool(current_youtube_id())
+    except Exception:
+        youtube = False
+    if youtube:
+        if not playback_should_run:
+            playback_should_run = True
+            playback_down_since = 0
+            restart_playback("play button", playback_epoch)
+            return
+        if state == vlc.State.Paused:
+            playback_should_run = True
+            playback_down_since = 0
+            try:
+                player.play()
+            except Exception:
+                restart_playback("play button", playback_epoch)
+            return
+        stop_playback_now()
+        return
+    if state == vlc.State.Playing:
+        stop_playback_now()
+        return
+    if state == vlc.State.Paused:
+        playback_should_run = True
+        playback_down_since = 0
+        try:
+            player.pause()
+        except Exception:
+            pass
+        return
+    playback_should_run = True
+    playback_down_since = 0
+    restart_playback("play button", playback_epoch)
+
+def restart_playback(reason, epoch=None):
+    if epoch is not None and epoch != playback_epoch:
+        return
+    video_id = current_youtube_id() if stations else ""
+    print(f"Restarting playback ({reason})", flush=True)
+    if video_id:
+        title = stations[current_idx].get("name", "YouTube")
+        if title.upper().startswith("YT:"):
+            title = title[3:].strip()
+        begin_youtube_play(
+            {"id": video_id, "title": title or "YouTube"}, auto=True
+        )
+        return
+    play(epoch)
+
+def keep_playback_alive(now):
+    global playback_down_since, playback_retry_after, playback_retry_wait
+    global playback_stall_since
+    epoch = playback_epoch
+    if (
+        not playback_should_run
+        or alarm_fade_active
+        or youtube_touch_busy
+        or not stations
+    ):
+        playback_down_since = 0
+        playback_stall_since = 0
+        return
+    try:
+        state = player.get_state()
+    except Exception:
+        return
+    if state == vlc.State.Playing:
+        playback_down_since = 0
+        playback_stall_since = 0
+        playback_retry_wait = 8
+        return
+    if state == vlc.State.Paused:
+        return
+    if state in (vlc.State.Opening, vlc.State.Buffering):
+        if playback_stall_since == 0:
+            playback_stall_since = now
+        if now - playback_stall_since < 45:
+            return
+    else:
+        playback_stall_since = 0
+        if playback_down_since == 0:
+            playback_down_since = now
+            return
+        if now - playback_down_since < 8:
+            return
+    if now < playback_retry_after:
+        return
+    playback_retry_after = now + playback_retry_wait
+    playback_retry_wait = min(300, max(15, playback_retry_wait * 2))
+    playback_down_since = now
+    playback_stall_since = 0
+    if epoch != playback_epoch or not playback_should_run:
+        return
+    restart_playback(getattr(state, "name", state), epoch)
 
 def target_display_brightness(now):
     if (
@@ -5712,6 +6815,7 @@ def request_touch_shutdown():
     threading.Thread(target=perform_safe_shutdown, daemon=True).start()
 
 def draw_weather_icon(surface, x, y, type, size=30, dimmed=True, on_background=None):
+    x, y, size = X(x), Y(y), S(size)
     line_width = max(2, size // 8)
     if dimmed:
         sun_color = tuple(int(channel * 0.3) for channel in GOLD)
@@ -5775,16 +6879,92 @@ def weather_code_label(code):
         return "Thunder"
     return "Mixed"
 
+
+def first_weather_series(mapping, *names):
+    for name in names:
+        values = mapping.get(name)
+        if isinstance(values, list) and values:
+            return values
+    return []
+
+
+def parse_weather_forecast(daily):
+    if not isinstance(daily, dict):
+        return []
+    dates = first_weather_series(daily, "time")
+    codes = first_weather_series(daily, "weather_code", "weathercode")
+    highs = first_weather_series(daily, "temperature_2m_max")
+    lows = first_weather_series(daily, "temperature_2m_min")
+    parsed = []
+    for date, daily_code, high, low in zip(dates, codes, highs, lows):
+        try:
+            date_text = str(date)
+            if len(date_text) >= 10:
+                day = datetime.strptime(date_text[:10], "%Y-%m-%d").strftime("%a")
+            else:
+                day = date_text[:3]
+            parsed.append({
+                "day": day,
+                "type": weather_code_to_type(int(daily_code)),
+                "label": weather_code_label(int(daily_code)),
+                "high": int(round(float(high))),
+                "low": int(round(float(low))),
+            })
+        except (TypeError, ValueError, OverflowError):
+            continue
+    return parsed
+
+
+def refresh_weather():
+    global current_temp, current_wind, weather_type, weather_label
+    global weather_forecast, last_weather_update, weather_updating
+    try:
+        response = requests.get(device_settings.weather_url(), timeout=12)
+        response.raise_for_status()
+        weather_data = response.json()
+        current = (
+            weather_data.get("current_weather")
+            or weather_data.get("current")
+            or {}
+        )
+        if current:
+            temperature = current.get("temperature", current.get("temperature_2m"))
+            if temperature is not None:
+                current_temp = int(round(float(temperature)))
+            code = current.get("weathercode", current.get("weather_code", 0))
+            weather_type = weather_code_to_type(int(code or 0))
+            weather_label = weather_code_label(int(code or 0))
+            wind = current.get("windspeed", current.get("wind_speed_10m"))
+            if wind is not None:
+                current_wind = int(round(float(wind)))
+        parsed = parse_weather_forecast(weather_data.get("daily") or {})
+        if parsed:
+            weather_forecast = parsed
+        last_weather_update = time.time()
+        print(
+            f"Weather updated: {current_temp}°C {weather_label}, "
+            f"{len(weather_forecast)} forecast days",
+            flush=True
+        )
+    except Exception as error:
+        print(f"Weather update error: {error}", flush=True)
+        last_weather_update = time.time() - 1170
+    finally:
+        weather_updating = False
+
 def draw_forecast_screen(now):
     screen.blit(ui_background, (0, 0))
     draw_animated_ui_glow(screen, now)
 
-    header_rect = pygame.Rect(8, 7, 304, 52)
-    pygame.draw.rect(screen, UI_SURFACE, header_rect, border_radius=17)
-    pygame.draw.rect(screen, (54, 75, 112), header_rect, 1, border_radius=17)
+    header_rect = R(8, 7, 304, 52)
+    draw_header_chrome(screen, header_rect)
+    draw_header_stripe(
+        screen, header_rect.x + S(18), header_rect.right - S(18),
+        header_rect.bottom - S(8)
+    )
     draw_centered_text(screen, f_lg, "5-DAY FORECAST", UI_TEXT, header_rect)
 
-    current_rect = pygame.Rect(14, 72, 292, 84)
+    current_rect = R(14, 72, 292, 84)
     body = draw_info_card(screen, current_rect, UI_BLUE, 18)
     draw_weather_icon(
         screen, 65, 111, weather_type, 25, dimmed=False, on_background=body
@@ -5792,40 +6972,40 @@ def draw_forecast_screen(now):
     current_surface = f_weather.render(
         f"{current_temp}°C", True, ink_on(body)
     )
-    screen.blit(current_surface, (103, 82))
+    screen.blit(current_surface, XY(103, 82))
     location_label = fit_label(device_settings.weather_name.upper(), 18)
     now_surface = f_tiny.render(
         f"{location_label}  •  NOW", True, muted_ink_on(body)
     )
-    screen.blit(now_surface, (106, 127))
+    screen.blit(now_surface, XY(106, 127))
 
     if weather_forecast:
         for index, forecast in enumerate(weather_forecast[:5]):
-            row = pygame.Rect(14, 166 + index * 52, 292, 45)
+            row = R(14, 166 + index * 52, 292, 45)
             accent = UI_PURPLE if index == 0 else (72, 80, 98)
             body = draw_info_card(screen, row, accent, 13)
 
             day_surface = f_sm.render(
                 forecast['day'].upper(), True, ink_on(body)
             )
-            screen.blit(day_surface, (29, row.y + 7))
+            screen.blit(day_surface, (X(29), row.y + Y(7)))
             label_surface = f_tiny.render(
                 forecast['label'], True, muted_ink_on(body)
             )
-            screen.blit(label_surface, (29, row.y + 25))
+            screen.blit(label_surface, (X(29), row.y + Y(25)))
 
             draw_weather_icon(
-                screen, 196, row.centery - 2,
+                screen, 196, 166 + index * 52 + 22,
                 forecast['type'], 12, dimmed=False, on_background=body
             )
             temperature = f"{forecast['high']}° / {forecast['low']}°"
             temperature_surface = f_sm.render(temperature, True, ink_on(body))
             screen.blit(
                 temperature_surface,
-                (292 - temperature_surface.get_width(), row.y + 14)
+                (X(292) - temperature_surface.get_width(), row.y + Y(14))
             )
     else:
-        loading_rect = pygame.Rect(14, 166, 292, 253)
+        loading_rect = R(14, 166, 292, 253)
         body = draw_info_card(screen, loading_rect, (72, 80, 98), 16)
         draw_centered_text(
             screen, f_sm, "Forecast unavailable", muted_ink_on(body), loading_rect
@@ -5836,14 +7016,17 @@ def draw_forecast_screen(now):
 def draw_page_base(title, now):
     screen.blit(ui_background, (0, 0))
     draw_animated_ui_glow(screen, now)
-    header = pygame.Rect(8, 7, 304, 52)
-    pygame.draw.rect(screen, UI_SURFACE, header, border_radius=17)
-    pygame.draw.rect(screen, (54, 75, 112), header, 1, border_radius=17)
+    header = R(8, 7, 304, 52)
+    draw_header_chrome(screen, header)
+    draw_header_stripe(
+        screen, header.x + S(18), header.right - S(18),
+        header.bottom - S(8)
+    )
     draw_centered_text(screen, f_lg, title, UI_TEXT, header)
 
 def draw_pages_button():
-    body = draw_modern_button(screen, btn_pages, UI_BLUE, UI_BLUE, 16)
-    draw_centered_text(screen, f_sm, "PAGES", contrasting_text(body), btn_pages)
+    body = draw_quiet_button(screen, btn_pages, UI_BLUE, 16)
+    draw_centered_text(screen, f_sm, "PAGES", ink_on(body, UI_BLUE), btn_pages)
 
 def fit_label(text, length=16):
     return truncate_display(text, length)
@@ -5868,18 +7051,18 @@ def draw_menu_screen(now):
         rect = menu_card_rects[index]
         border = (
             UI_PINK if index == 8
-            else (UI_BLUE, UI_PURPLE, UI_AMBER)[index % 3]
+            else (UI_BLUE, UI_PINK, UI_AMBER, UI_GREEN, UI_PURPLE)[index % 5]
         )
-        body = draw_modern_button(screen, rect, border, border, 16)
-        title_surface = f_sm.render(title, True, contrasting_text(body))
-        screen.blit(
-            title_surface,
-            (rect.centerx - title_surface.get_width() // 2, rect.y + 12)
+        body = draw_glass_card(screen, rect, border, 16)
+        title_band = _Rect(rect.x, rect.y, rect.width, rect.height // 2)
+        subtitle_band = _Rect(
+            rect.x, rect.y + rect.height // 2, rect.width, rect.height // 2
         )
-        subtitle_surface = f_tiny.render(subtitle, True, contrasting_muted(body))
-        screen.blit(
-            subtitle_surface,
-            (rect.centerx - subtitle_surface.get_width() // 2, rect.y + 34)
+        draw_centered_text(
+            screen, f_sm, title, ink_on(body, border), title_band
+        )
+        draw_centered_text(
+            screen, f_tiny, subtitle, muted_ink_on(body), subtitle_band
         )
 def draw_favorites_screen(now):
     draw_page_base("FAVORITES", now)
@@ -5901,50 +7084,512 @@ def draw_favorites_screen(now):
             number = f_tiny.render(
                 f"{index + 1}", True, ink_on(body, UI_BLUE)
             )
-            screen.blit(number, (rect.x + 10, rect.y + 9))
+            screen.blit(number, (rect.x + X(10), rect.y + Y(9)))
             name = f_sm.render(
                 fit_label(station['name'], 15), True, ink_on(body)
             )
-            screen.blit(name, (rect.x + 10, rect.y + 31))
+            screen.blit(name, (rect.x + X(10), rect.y + Y(31)))
             genre = f_tiny.render(
                 fit_label(station.get('genre', 'Radio'), 18),
                 True, muted_ink_on(body)
             )
-            screen.blit(genre, (rect.x + 10, rect.y + 54))
+            screen.blit(genre, (rect.x + X(10), rect.y + Y(54)))
         else:
             body = draw_info_card(screen, rect, (72, 80, 98), 14)
             draw_centered_text(screen, f_tiny, "EMPTY", muted_ink_on(body), rect)
     draw_pages_button()
 
+_title_marquee = {"key": None, "surface": None, "started": 0.0}
+
+def blit_scrolling_title(target, font, text, color, y, clip, now):
+    """Scroll a track title when it is wider than the card."""
+    text = str(text or "")
+    key = (text, color, id(font))
+    if _title_marquee["key"] != key or _title_marquee["surface"] is None:
+        _title_marquee["key"] = key
+        _title_marquee["surface"] = font.render(text, True, color)
+        _title_marquee["started"] = now
+    rendered = _title_marquee["surface"]
+    if rendered.get_width() <= clip.width:
+        target.blit(
+            rendered,
+            (clip.centerx - rendered.get_width() // 2, int(y)),
+        )
+        return rendered
+    gap = S(32)
+    span = rendered.get_width() + gap
+    speed = max(20, S(46))
+    hold = 1.1
+    phase = (now - _title_marquee["started"]) % (hold + span / float(speed))
+    offset = 0 if phase < hold else int((phase - hold) * speed)
+    band = _Rect(clip.x, int(y), clip.width, max(clip.height, rendered.get_height()))
+    previous = target.get_clip()
+    target.set_clip(band)
+    x = band.x - offset
+    target.blit(rendered, (x, int(y)))
+    target.blit(rendered, (x + span, int(y)))
+    target.set_clip(previous)
+    return rendered
+
+def home_card_accent(kind):
+    accents = {
+        "now_playing": UI_BLUE,
+        "favorites": UI_PINK,
+        "forecast": UI_AMBER,
+        "clock": UI_AMBER,
+        "alarm": UI_PINK,
+        "system": mix_colors(UI_PURPLE, UI_PINK, 0.45),
+        "languages": UI_PURPLE,
+        "settings": UI_BLUE,
+        "youtube": UI_PINK,
+        "weather": mix_colors(UI_BLUE, UI_GREEN, 0.45),
+        "bluetooth": UI_GREEN,
+    }
+    return accents.get(kind, UI_BLUE)
+
+def draw_home_card(
+    rect, kind, now, layout_x=8, layout_y=64, layout_w=148, layout_h=200
+):
+    global logo_rect
+    accent = home_card_accent(kind)
+    half = layout_w < 220
+    preview = layout_h < 100
+    body = (
+        draw_info_card(screen, rect, accent, 14)
+        if preview else
+        draw_glass_card(screen, rect, accent, 22)
+    )
+    title = f_tiny.render(
+        HOME_CARD_LABELS.get(kind, "CARD"), True, muted_ink_on(body)
+    )
+    screen.blit(
+        title,
+        (rect.centerx - title.get_width() // 2, Y(layout_y + 6))
+    )
+    main_chars = 13 if half else 28
+    sub_chars = 15 if half else 32
+
+    def blit_centered(text, font, color, y_layout, chars):
+        surface = font.render(fit_label(text, chars), True, color)
+        screen.blit(
+            surface,
+            (rect.centerx - surface.get_width() // 2, Y(y_layout))
+        )
+        return surface
+
+    def blit_px(text, font, color, y_px, chars):
+        surface = font.render(fit_label(text, chars), True, color)
+        screen.blit(
+            surface,
+            (rect.centerx - surface.get_width() // 2, int(y_px))
+        )
+        return surface
+
+    def same_label(left, right):
+        def key(text):
+            return "".join(
+                char for char in str(text).upper() if char.isalnum()
+            )
+        a, b = key(left), key(right)
+        if not a or not b:
+            return False
+        short, long = (a, b) if len(a) <= len(b) else (b, a)
+        return long.startswith(short[:12]) or short[:12] in long
+
+    def blit_lines(main_text, sub_text, y_layout):
+        blit_centered(main_text, f_sm, ink_on(body), y_layout, main_chars)
+        blit_centered(
+            sub_text, f_tiny, muted_ink_on(body), y_layout + 20, sub_chars
+        )
+
+    def blit_rows(rows, start_y, step=36):
+        for index, (label, value) in enumerate(rows):
+            row_top = Y(start_y + index * step)
+            label_surf = f_tiny.render(label, True, muted_ink_on(body))
+            value_surf = f_sm.render(
+                fit_label(str(value), main_chars), True, ink_on(body)
+            )
+            screen.blit(label_surf, (rect.x + X(12), row_top))
+            screen.blit(
+                value_surf,
+                (rect.x + X(12), row_top + label_surf.get_height() + S(4))
+            )
+
+    if preview:
+        if kind == "now_playing":
+            station_obj = stations[current_idx] if stations else {}
+            station = station_obj.get("name") or "TCRADIOS"
+            if station_obj.get("youtube_id"):
+                blit_lines(youtube_display_title(station_obj), "YOUTUBE", layout_y + 24)
+            else:
+                blit_lines(sanitize_text(meta_text) or station, station, layout_y + 24)
+        elif kind == "weather":
+            blit_lines(
+                f"{current_temp}°C" if current_temp else "--°C",
+                device_settings.weather_name.upper(),
+                layout_y + 24
+            )
+        elif kind == "forecast":
+            today = weather_forecast[0] if weather_forecast else None
+            blit_lines(
+                f"{today['high']}° / {today['low']}°" if today else "No forecast",
+                today['label'] if today else "yet",
+                layout_y + 24
+            )
+        elif kind == "alarm":
+            blit_lines(
+                alarm_system.alarm_time,
+                "ON" if alarm_system.alarm_enabled else "OFF",
+                layout_y + 24
+            )
+        elif kind == "system":
+            blit_lines(
+                f"CPU {system_stats['cpu_temp']}",
+                f"IP {current_ip}",
+                layout_y + 24
+            )
+        elif kind == "clock":
+            temp_bit = f"{current_temp}°C" if current_temp else "--°C"
+            blit_lines(
+                datetime.now().strftime("%H:%M"),
+                f"{datetime.now().strftime('%A').upper()}  {temp_bit}",
+                layout_y + 24
+            )
+        elif kind == "favorites":
+            count = len(favorite_indices)
+            blit_lines(f"{count} SAVED", "STATIONS", layout_y + 24)
+        elif kind == "youtube":
+            blit_lines(youtube_touch_status, "YOUTUBE", layout_y + 24)
+        elif kind == "languages":
+            blit_lines(str(len(LANGUAGE_STREAMS)), "LANGUAGES", layout_y + 24)
+        elif kind == "settings":
+            blit_lines(current_theme.name.upper(), f"{device_settings.brightness}%", layout_y + 24)
+        else:
+            blit_lines(HOME_CARD_LABELS.get(kind, "CARD"), "", layout_y + 24)
+        return body
+
+    inner_top = layout_y + 26
+    inner_bottom = layout_y + layout_h - (148 if kind == "now_playing" else 10)
+    inner_h = max(80, inner_bottom - inner_top)
+
+    def draw_forecast_rows(rows, top, bottom):
+        count = 5
+        top_px, bottom_px = Y(top), Y(bottom)
+        span = max(1, bottom_px - top_px)
+        step = max(1, span // count)
+        if not rows:
+            blit_px(
+                "Updating forecast…", f_sm, muted_ink_on(body),
+                top_px + S(4), 20
+            )
+            return
+        for index, forecast in enumerate(rows[:count]):
+            row_top = top_px + index * step
+            day = f_tiny.render(forecast["day"].upper(), True, ink_on(body))
+            hi_lo = f_tiny.render(
+                f"{forecast['high']}°/{forecast['low']}°", True, ink_on(body)
+            )
+            line_y = row_top + max(0, (step - day.get_height()) // 2)
+            if line_y + day.get_height() > bottom_px:
+                break
+            screen.blit(day, (rect.x + X(8), line_y))
+            screen.blit(
+                hi_lo,
+                (rect.right - hi_lo.get_width() - X(8), line_y)
+            )
+            room = (
+                rect.width - day.get_width() - hi_lo.get_width() - X(28)
+            )
+            if room > S(36) and step >= day.get_height():
+                label = f_tiny.render(
+                    fit_label(forecast["label"], 10 if half else 16),
+                    True, muted_ink_on(body)
+                )
+                if label.get_width() <= room:
+                    screen.blit(
+                        label,
+                        (rect.x + X(8) + day.get_width() + X(8), line_y)
+                    )
+
+    if kind == "now_playing":
+        station_obj = stations[current_idx] if stations else {}
+        station = station_obj.get("name") or "TCRADIOS"
+        if station_obj.get("youtube_id"):
+            playing = youtube_display_title(station_obj)
+            genre = "YouTube"
+        else:
+            playing = sanitize_text(meta_text) or station
+            genre = str(station_obj.get("genre") or "").strip()
+        show_station = bool(station) and not same_label(playing, station)
+        show_genre = bool(genre) and not same_label(genre, playing) and not same_label(genre, station)
+        text_h = 22 + (20 if show_station else 0) + (18 if show_genre else 0)
+        logo_bottom = inner_bottom - text_h
+        avail_h = max(48, logo_bottom - inner_top)
+        radius = min(56 if half else 64, max(28, avail_h // 2))
+        cx = layout_x + layout_w // 2
+        cy = inner_top + avail_h // 2
+        center = XY(cx, cy)
+        pygame.draw.circle(
+            screen, mix_colors((8, 12, 22), accent, 0.28), center, S(radius)
+        )
+        pygame.draw.circle(screen, accent, center, S(radius - 2), max(1, S(2)))
+        inner_r = radius - 4
+        logo_rect = square_around(cx, cy, inner_r)
+        screen.blit(
+            scaled_logo(logo_rect.width, logo_rect.height),
+            logo_rect
+        )
+        try:
+            is_playing = player.get_state() == vlc.State.Playing
+        except Exception:
+            is_playing = False
+        if is_playing:
+            pulse = (math.sin(now * 3) + 1) / 2
+            pygame.draw.circle(
+                screen,
+                (
+                    int(UI_BLUE[0] * 0.75),
+                    int(UI_BLUE[1] * 0.75),
+                    int(UI_BLUE[2] * 0.75)
+                ),
+                center,
+                S(radius - 2 + pulse * 4),
+                S(2)
+            )
+        text_y = Y(logo_bottom + 4)
+        title_font = f_sm if half else f_lg
+        title = blit_scrolling_title(
+            screen, title_font, playing, ink_on(body), text_y,
+            _Rect(
+                rect.x + S(8), text_y,
+                max(1, rect.width - S(16)),
+                title_font.get_height(),
+            ),
+            now,
+        )
+        next_y = text_y + title.get_height() + S(4)
+        if show_station:
+            station_line = blit_px(
+                station, f_tiny, muted_ink_on(body), next_y, sub_chars
+            )
+            next_y += station_line.get_height() + S(2)
+        if show_genre:
+            blit_px(genre, f_tiny, muted_ink_on(body), next_y, sub_chars)
+    elif kind == "weather":
+        icon_size = 26 if half else 34
+        icon_y = inner_top + 4 + icon_size // 2
+        draw_weather_icon(
+            screen, layout_x + layout_w // 2, icon_y,
+            weather_type, icon_size,
+            dimmed=False, on_background=body
+        )
+        y = Y(icon_y) + S(icon_size) // 2 + S(8)
+        temp_text = f"{current_temp}°C" if current_temp else "--°C"
+        temp = blit_px(temp_text, f_weather, ink_on(body), y, 8)
+        y += temp.get_height() + S(6)
+        condition = blit_px(
+            weather_label.upper(), f_sm, ink_on(body), y, main_chars
+        )
+        y += condition.get_height() + S(4)
+        city = blit_px(
+            device_settings.weather_name.upper(),
+            f_tiny, muted_ink_on(body), y, sub_chars
+        )
+        y += city.get_height() + S(10)
+        forecast_top = max(inner_top + 120, int(round(y / max(SCALE_Y, 0.01))))
+        draw_forecast_rows(
+            weather_forecast, forecast_top, inner_bottom
+        )
+    elif kind == "forecast":
+        if current_temp:
+            blit_centered(
+                f"NOW {current_temp}°C  {weather_label.upper()}",
+                f_tiny, muted_ink_on(body), inner_top, 28
+            )
+            draw_forecast_rows(
+                weather_forecast, inner_top + 22, inner_bottom
+            )
+        else:
+            draw_forecast_rows(weather_forecast, inner_top, inner_bottom)
+    elif kind == "alarm":
+        blit_centered(
+            alarm_system.alarm_time, f_weather, ink_on(body),
+            inner_top + inner_h // 4, 8
+        )
+        blit_centered(
+            "ALARM ON" if alarm_system.alarm_enabled else "ALARM OFF",
+            f_sm,
+            ink_on(body) if alarm_system.alarm_enabled else muted_ink_on(body),
+            inner_top + inner_h // 2, 14
+        )
+        sleep_text = (
+            f"SLEEP {alarm_system.get_sleep_remaining()} MIN"
+            if alarm_system.sleep_timer_enabled else "SLEEP TIMER OFF"
+        )
+        blit_centered(
+            sleep_text, f_tiny, muted_ink_on(body),
+            inner_top + inner_h * 2 // 3, 18
+        )
+    elif kind == "system":
+        rows = (
+            ("WI-FI", system_stats['wifi']),
+            ("IP", current_ip),
+            ("CPU", system_stats['cpu_temp']),
+            ("STORAGE", system_stats['disk_free']),
+        )
+        blit_rows(rows, inner_top, max(40, inner_h // len(rows)))
+    elif kind == "bluetooth":
+        blit_centered("SPEAKER", f_tiny, muted_ink_on(body), inner_top + 8, 12)
+        blit_centered(
+            system_stats['bluetooth'], f_lg if not half else f_sm,
+            ink_on(body), inner_top + inner_h // 3, main_chars
+        )
+        blit_centered(
+            touch_bluetooth_status, f_tiny, muted_ink_on(body),
+            inner_top + inner_h * 2 // 3, sub_chars
+        )
+    elif kind == "clock":
+        clock_now = datetime.now()
+        temp_bit = f"{current_temp}°C" if current_temp else "--°C"
+        condition = weather_label.upper() if weather_label else ""
+        top_px = Y(inner_top) + S(4)
+        bottom_px = Y(inner_bottom) - S(6)
+        meta_h = (
+            f_sm.get_height() + S(4)
+            + f_tiny.get_height() + S(4)
+            + f_tiny.get_height()
+        )
+        gaps = S(8) + S(8)
+        room = max(S(48), bottom_px - top_px - meta_h - gaps)
+        time_surf = scaled_clock_face(
+            clock_now.strftime("%H:%M"),
+            ink_on(body),
+            int(rect.width * 0.9),
+            max(S(28), int(room / 1.75)),
+        )
+        temp_h = max(S(20), int(time_surf.get_height() * 3 / 4))
+        temp_surf = scaled_clock_face(
+            temp_bit,
+            ink_on(body, accent),
+            max(rect.width, temp_h * 4),
+            temp_h,
+        )
+        y = top_px
+        screen.blit(
+            time_surf,
+            (rect.centerx - time_surf.get_width() // 2, y)
+        )
+        y += time_surf.get_height() + S(8)
+        screen.blit(
+            temp_surf,
+            (rect.centerx - temp_surf.get_width() // 2, y)
+        )
+        y += temp_surf.get_height() + S(8)
+        day = blit_px(
+            clock_now.strftime("%A").upper(), f_sm, ink_on(body), y, 16
+        )
+        y += day.get_height() + S(4)
+        date = blit_px(
+            clock_now.strftime("%d %B %Y"), f_tiny, muted_ink_on(body), y, 22
+        )
+        if condition:
+            blit_px(
+                condition, f_tiny, muted_ink_on(body),
+                y + date.get_height() + S(4), 18 if half else 24
+            )
+    elif kind == "favorites":
+        saved = [
+            stations[index]['name']
+            for index in favorite_indices
+            if 0 <= index < len(stations)
+        ][:6]
+        if not saved:
+            blit_centered(
+                "NO FAVORITES YET", f_sm, muted_ink_on(body),
+                inner_top + inner_h // 3, 18
+            )
+        else:
+            step = max(28, inner_h // max(1, len(saved)))
+            for index, name in enumerate(saved):
+                blit_centered(
+                    name, f_sm, ink_on(body),
+                    inner_top + index * step, main_chars
+                )
+    elif kind == "languages":
+        names = list(LANGUAGE_STREAMS)
+        step = max(24, inner_h // max(1, len(names)))
+        for index, name in enumerate(names):
+            chosen = name == selected_language
+            blit_centered(
+                name.upper(), f_sm if not half else f_tiny,
+                ink_on(body) if chosen else muted_ink_on(body),
+                inner_top + index * step, 16
+            )
+    elif kind == "youtube":
+        playing = ""
+        if stations and current_youtube_id():
+            playing = stations[current_idx].get('name', '')
+        blit_centered(
+            playing or youtube_touch_status, f_sm, ink_on(body),
+            inner_top, main_chars
+        )
+        titles = [
+            video.get('title') or 'YouTube'
+            for video in youtube_results_cache[:4]
+        ]
+        if not titles:
+            blit_centered(
+                "OPEN PAGES TO SEARCH", f_tiny, muted_ink_on(body),
+                inner_top + 36, 22
+            )
+        else:
+            for index, title in enumerate(titles):
+                blit_centered(
+                    title, f_tiny, muted_ink_on(body),
+                    inner_top + 40 + index * (inner_h // 5), sub_chars
+                )
+    elif kind == "settings":
+        blit_rows(
+            (
+                ("SOUND", str(audio_manager.current_output).upper()),
+                ("BRIGHTNESS", f"{device_settings.brightness}%"),
+                ("THEME", current_theme.name.upper()),
+                ("AUTO DIM", "ON" if device_settings.auto_dim_enabled else "OFF"),
+            ),
+            inner_top, max(40, inner_h // 4)
+        )
+    return body
+
+
 def draw_clock_screen(now):
     draw_page_base("CLOCK", now)
     current_time = datetime.now()
     time_surface = f_xl.render(current_time.strftime("%H:%M"), True, UI_TEXT)
-    screen.blit(time_surface, (160 - time_surface.get_width() // 2, 82))
+    screen.blit(time_surface, (X(160) - time_surface.get_width() // 2, Y(82)))
     date_surface = f_med.render(
         current_time.strftime("%A").upper(), True, ink_on(UI_BG_TOP, UI_BLUE)
     )
-    screen.blit(date_surface, (160 - date_surface.get_width() // 2, 177))
+    screen.blit(date_surface, (X(160) - date_surface.get_width() // 2, Y(177)))
     full_date = f_sm.render(
         current_time.strftime("%d %B %Y"), True, muted_ink_on(UI_BG_TOP)
     )
-    screen.blit(full_date, (160 - full_date.get_width() // 2, 213))
+    screen.blit(full_date, (X(160) - full_date.get_width() // 2, Y(213)))
 
-    weather_card = pygame.Rect(28, 252, 264, 78)
+    weather_card = R(28, 252, 264, 78)
     body = draw_info_card(screen, weather_card, UI_PURPLE, 18)
     draw_weather_icon(
-        screen, 76, weather_card.centery, weather_type, 22,
+        screen, 76, 291, weather_type, 22,
         dimmed=False, on_background=body
     )
     temp = f_weather.render(f"{current_temp}°C", True, ink_on(body))
-    screen.blit(temp, (112, weather_card.y + 11))
+    screen.blit(temp, (X(112), weather_card.y + Y(11)))
     city = f_tiny.render(
         fit_label(device_settings.weather_name.upper(), 18),
         True, muted_ink_on(body)
     )
-    screen.blit(city, (116, weather_card.y + 53))
+    screen.blit(city, (X(116), weather_card.y + Y(53)))
 
-    station_card = pygame.Rect(28, 344, 264, 58)
+    station_card = R(28, 344, 264, 58)
     body = draw_info_card(screen, station_card, (72, 80, 98), 15)
     draw_centered_text(
         screen, f_sm, fit_label(stations[current_idx]['name'], 28),
@@ -5954,7 +7599,7 @@ def draw_clock_screen(now):
 
 def draw_alarm_screen(now):
     draw_page_base("ALARM & SLEEP", now)
-    alarm_card = pygame.Rect(18, 75, 284, 115)
+    alarm_card = R(18, 75, 284, 115)
     body = draw_info_card(
         screen, alarm_card,
         UI_AMBER if alarm_system.alarm_enabled else (72, 80, 98), 18
@@ -5964,7 +7609,10 @@ def draw_alarm_screen(now):
     )
     screen.blit(
         alarm_label,
-        (alarm_card.centerx - alarm_label.get_width() // 2, 91)
+        (
+            alarm_card.centerx - alarm_label.get_width() // 2,
+            alarm_card.y + Y(16)
+        )
     )
     state = "ALARM ON" if alarm_system.alarm_enabled else "ALARM OFF"
     state_surface = f_sm.render(
@@ -5974,7 +7622,10 @@ def draw_alarm_screen(now):
     )
     screen.blit(
         state_surface,
-        (alarm_card.centerx - state_surface.get_width() // 2, 150)
+        (
+            alarm_card.centerx - state_surface.get_width() // 2,
+            alarm_card.y + alarm_label.get_height() + Y(24)
+        )
     )
 
     for rect, label in (
@@ -5985,7 +7636,7 @@ def draw_alarm_screen(now):
         labeled_button(screen, rect, UI_BLUE, f_tiny, label, 13)
 
     sleep_title = f_sm.render("SLEEP TIMER", True, UI_TEXT)
-    screen.blit(sleep_title, (20, 261))
+    screen.blit(sleep_title, XY(20, 261))
     for rect, minutes in zip(btn_sleep_presets, (15, 30, 60)):
         active = (
             alarm_system.sleep_timer_enabled
@@ -6019,20 +7670,20 @@ def draw_system_screen(now):
     for rect, (label, value) in zip(system_card_rects, values):
         body = draw_info_card(screen, rect, (72, 80, 98), 16)
         label_surface = f_tiny.render(label, True, muted_ink_on(body))
-        screen.blit(label_surface, (rect.x + 14, rect.y + 15))
+        screen.blit(label_surface, (rect.x + X(14), rect.y + Y(15)))
         value_surface = f_sm.render(
             fit_label(value, 18), True, ink_on(body)
         )
-        screen.blit(value_surface, (rect.x + 14, rect.y + 43))
+        screen.blit(value_surface, (rect.x + X(14), rect.y + Y(43)))
 
-    bluetooth_card = pygame.Rect(18, 320, 284, 54)
+    bluetooth_card = R(18, 320, 284, 54)
     body = draw_info_card(screen, bluetooth_card, UI_BLUE, 16)
     bt_label = f_tiny.render("BLUETOOTH AUDIO", True, muted_ink_on(body))
-    screen.blit(bt_label, (34, bluetooth_card.y + 8))
+    screen.blit(bt_label, (X(34), bluetooth_card.y + Y(8)))
     bt_value = f_sm.render(
         fit_label(system_stats['bluetooth'], 28), True, ink_on(body)
     )
-    screen.blit(bt_value, (34, bluetooth_card.y + 28))
+    screen.blit(bt_value, (X(34), bluetooth_card.y + Y(28)))
 
     shutdown_armed = now <= shutdown_confirm_until
     shutdown_label = (
@@ -6051,7 +7702,7 @@ def draw_settings_screen(now):
     draw_page_base("SETTINGS", now)
 
     audio_title = f_sm.render("SOUND OUTPUT", True, UI_TEXT)
-    screen.blit(audio_title, (18, 67))
+    screen.blit(audio_title, XY(18, 67))
     audio_labels = ("AUTO", "JACK", "HDMI", "BLUETOOTH")
     audio_names = ("auto", "analog", "hdmi", "bluetooth")
     for rect, label, output_name in zip(
@@ -6076,7 +7727,7 @@ def draw_settings_screen(now):
     display_title = f_sm.render(
         f"DISPLAY  •  {device_settings.brightness}%", True, UI_TEXT
     )
-    screen.blit(display_title, (18, 158))
+    screen.blit(display_title, XY(18, 158))
     labeled_button(screen, btn_brightness_minus, UI_BLUE, f_lg, "−", 13)
     labeled_button(
         screen, btn_auto_dim,
@@ -6091,8 +7742,8 @@ def draw_settings_screen(now):
     labeled_button(screen, btn_brightness_plus, UI_BLUE, f_lg, "+", 13)
 
     theme_title = f_sm.render("THEME", True, UI_TEXT)
-    screen.blit(theme_title, (18, 248))
-    current_theme_rect = pygame.Rect(78, 274, 164, 58)
+    screen.blit(theme_title, XY(18, 248))
+    current_theme_rect = R(78, 274, 164, 58)
     labeled_button(
         screen, current_theme_rect, UI_AMBER, f_sm,
         current_theme.name.upper(), 14
@@ -6101,7 +7752,66 @@ def draw_settings_screen(now):
     labeled_button(screen, btn_theme_next, UI_BLUE, f_lg, "›", 14)
     labeled_button(screen, btn_wifi_setup, UI_GREEN, f_tiny, "WI-FI", 14)
     labeled_button(screen, btn_wifi_qr, UI_PURPLE, f_tiny, "WEB QR", 14)
+    labeled_button(screen, btn_home_cards, UI_AMBER, f_tiny, "CARDS", 14)
     draw_pages_button()
+
+def draw_home_cards_settings_screen(now):
+    global home_card_choice_rects, home_card_edit_slot
+    draw_page_base("HOME CARDS", now)
+    layout_title = f_tiny.render("LAYOUT", True, UI_MUTED)
+    screen.blit(layout_title, XY(18, 62))
+    bubble = device_settings.home_card_layout == "bubble"
+    labeled_button(
+        screen, btn_card_layout_single,
+        UI_GREEN if not bubble else (55, 61, 77),
+        f_tiny, "1 FULL", 13
+    )
+    labeled_button(
+        screen, btn_card_layout_bubble,
+        UI_GREEN if bubble else (55, 61, 77),
+        f_tiny, "2 HALVES", 13
+    )
+
+    if not bubble:
+        home_card_edit_slot = 0
+    labeled_button(
+        screen, btn_card_slot_left,
+        UI_GREEN if home_card_edit_slot == 0 else (55, 61, 77),
+        f_tiny,
+        f"LEFT  {HOME_CARD_LABELS[device_settings.home_cards[0]]}"
+        if bubble else f"CARD  {HOME_CARD_LABELS[device_settings.home_cards[0]]}",
+        12
+    )
+    if bubble:
+        labeled_button(
+            screen, btn_card_slot_right,
+            UI_GREEN if home_card_edit_slot == 1 else (55, 61, 77),
+            f_tiny,
+            f"RIGHT  {HOME_CARD_LABELS[device_settings.home_cards[1]]}",
+            12
+        )
+
+    pick_title = f_tiny.render("TAP A CARD", True, UI_MUTED)
+    screen.blit(pick_title, XY(18, 168))
+    home_card_choice_rects = []
+    selected = device_settings.home_cards[home_card_edit_slot]
+    columns = 3
+    for index, kind in enumerate(HOME_CARD_KINDS):
+        rect = R(
+            10 + (index % columns) * 102,
+            186 + (index // columns) * 54,
+            96, 48
+        )
+        home_card_choice_rects.append(rect)
+        fill = UI_GREEN if kind == selected else home_card_accent(kind)
+        labeled_button(
+            screen, rect, fill, f_tiny, HOME_CARD_LABELS[kind], 12
+        )
+
+    labeled_button(
+        screen, btn_home_cards_back, UI_BLUE, f_sm, "‹  SETTINGS", 16
+    )
+
 
 def draw_bluetooth_screen(now):
     draw_page_base("BLUETOOTH", now)
@@ -6117,14 +7827,12 @@ def draw_bluetooth_screen(now):
     )
     screen.blit(
         status_surface,
-        (160 - status_surface.get_width() // 2, 124)
+        (X(160) - status_surface.get_width() // 2, Y(118))
     )
 
-    if touch_bluetooth_devices:
-        for index, rect in enumerate(bluetooth_device_rects):
-            if index >= len(touch_bluetooth_devices):
-                break
-            device = touch_bluetooth_devices[index]
+    visible = visible_bluetooth_devices()
+    if visible:
+        for device, rect in zip(visible, bluetooth_device_rects):
             connected = device.get('connected', False)
             accent = UI_GREEN if connected else (72, 80, 98)
             body = draw_info_card(screen, rect, accent, 13)
@@ -6132,7 +7840,7 @@ def draw_bluetooth_screen(now):
                 fit_label(device.get('name', 'Bluetooth device'), 23),
                 True, ink_on(body)
             )
-            screen.blit(name_surface, (rect.x + 13, rect.y + 5))
+            screen.blit(name_surface, (rect.x + X(13), rect.y + Y(5)))
             state = (
                 "CONNECTED" if connected
                 else ("PAIRED • TAP TO CONNECT" if device.get('paired')
@@ -6141,14 +7849,32 @@ def draw_bluetooth_screen(now):
             state_surface = f_tiny.render(
                 state, True, muted_ink_on(body, UI_GREEN if connected else None)
             )
-            screen.blit(state_surface, (rect.x + 13, rect.y + 24))
+            screen.blit(state_surface, (rect.x + X(13), rect.y + Y(24)))
     else:
-        empty_rect = pygame.Rect(18, 142, 284, 272)
+        empty_rect = R(18, 142, 284, 208)
         body = draw_info_card(screen, empty_rect, (72, 80, 98), 16)
         draw_centered_text(
             screen, f_sm, "No devices loaded", muted_ink_on(body), empty_rect
         )
 
+    count = len(touch_bluetooth_devices)
+    page_number = touch_bluetooth_offset // BLUETOOTH_PAGE_SIZE + 1
+    page_count = max(1, math.ceil(count / BLUETOOTH_PAGE_SIZE))
+    labeled_button(
+        screen, btn_bluetooth_previous,
+        UI_BLUE if touch_bluetooth_offset > 0 else (55, 61, 77),
+        f_tiny, "PREV", 13
+    )
+    draw_centered_text(
+        screen, f_sm, f"{page_number} / {page_count}", UI_MUTED,
+        R(118, 360, 84, 44)
+    )
+    has_next = touch_bluetooth_offset + BLUETOOTH_PAGE_SIZE < count
+    labeled_button(
+        screen, btn_bluetooth_next,
+        UI_BLUE if has_next else (55, 61, 77),
+        f_tiny, "NEXT", 13
+    )
     labeled_button(
         screen, btn_bluetooth_back, UI_BLUE, f_sm, "‹  SETTINGS", 16
     )
@@ -6177,7 +7903,7 @@ def draw_wifi_screen(now):
     if wifi_password_open and wifi_target:
         name = fit_label(wifi_target.get('ssid', 'Wi-Fi'), 28)
         status = f_tiny.render(name, True, UI_MUTED)
-        screen.blit(status, (160 - status.get_width() // 2, 64))
+        screen.blit(status, (X(160) - status.get_width() // 2, Y(64)))
         body = draw_modern_button(
             screen, btn_wifi_password_field, UI_PURPLE, UI_PURPLE, 14
         )
@@ -6202,7 +7928,7 @@ def draw_wifi_screen(now):
         return
 
     status = f_tiny.render(fit_label(wifi_status_label(), 42), True, UI_MUTED)
-    screen.blit(status, (160 - status.get_width() // 2, 64))
+    screen.blit(status, (X(160) - status.get_width() // 2, Y(64)))
     labeled_button(
         screen, btn_wifi_scan,
         UI_PURPLE if wifi_busy else UI_BLUE, f_sm,
@@ -6219,13 +7945,13 @@ def draw_wifi_screen(now):
                 fit_label(f"{lock}{network['ssid']}", 22),
                 True, contrasting_text(body)
             )
-            screen.blit(name, (rect.x + 12, rect.y + 6))
+            screen.blit(name, (rect.x + X(12), rect.y + Y(6)))
             meta = f_tiny.render(
                 f"{network['signal']}%", True, contrasting_muted(body)
             )
-            screen.blit(meta, (rect.x + 12, rect.y + 26))
+            screen.blit(meta, (rect.x + X(12), rect.y + Y(26)))
     else:
-        empty = pygame.Rect(16, 142, 288, 200)
+        empty = R(16, 142, 288, 200)
         body = draw_info_card(screen, empty, (72, 80, 98), 16)
         draw_centered_text(
             screen, f_sm, "Tap SCAN to find Wi-Fi", muted_ink_on(body), empty
@@ -6241,7 +7967,7 @@ def draw_languages_screen(now):
     for index, (language, rect) in enumerate(
         zip(LANGUAGE_STREAMS, language_card_rects)
     ):
-        border = (UI_BLUE, UI_PURPLE, UI_AMBER)[index % 3]
+        border = (UI_BLUE, UI_PURPLE, UI_AMBER, UI_PINK, UI_GREEN)[index % 5]
         labeled_button(screen, rect, border, f_sm, language.upper(), 15)
     draw_pages_button()
 
@@ -6254,7 +7980,7 @@ def draw_language_stations_screen(now):
     )
     screen.blit(
         status_surface,
-        (160 - status_surface.get_width() // 2, 67)
+        (X(160) - status_surface.get_width() // 2, Y(67))
     )
 
     streams = language_stream_cache.get(selected_language, [])
@@ -6262,7 +7988,7 @@ def draw_language_stations_screen(now):
         language_stream_offset:language_stream_offset + 5
     ]
     if language_stream_busy:
-        loading_rect = pygame.Rect(18, 89, 284, 257)
+        loading_rect = R(18, 89, 284, 257)
         body = draw_info_card(screen, loading_rect, (72, 80, 98), 16)
         draw_centered_text(
             screen, f_sm, "Loading stations…", muted_ink_on(body), loading_rect
@@ -6273,14 +7999,14 @@ def draw_language_stations_screen(now):
             name_surface = f_sm.render(
                 fit_label(stream['name'], 28), True, ink_on(body)
             )
-            screen.blit(name_surface, (rect.x + 13, rect.y + 7))
+            screen.blit(name_surface, (rect.x + X(13), rect.y + Y(7)))
             genre_surface = f_tiny.render(
                 fit_label(stream.get('genre', 'Radio'), 34),
                 True, muted_ink_on(body)
             )
-            screen.blit(genre_surface, (rect.x + 13, rect.y + 29))
+            screen.blit(genre_surface, (rect.x + X(13), rect.y + Y(29)))
     elif selected_language:
-        empty_rect = pygame.Rect(18, 89, 284, 257)
+        empty_rect = R(18, 89, 284, 257)
         body = draw_info_card(screen, empty_rect, (72, 80, 98), 16)
         draw_centered_text(
             screen, f_sm, "No stations available", muted_ink_on(body), empty_rect
@@ -6293,7 +8019,7 @@ def draw_language_stations_screen(now):
         UI_BLUE if language_stream_offset > 0 else (55, 61, 77),
         f_tiny, "PREV", 13
     )
-    page_rect = pygame.Rect(118, 360, 84, 44)
+    page_rect = R(118, 360, 84, 44)
     draw_centered_text(
         screen, f_sm, f"{page_number} / {page_count}", UI_MUTED, page_rect
     )
@@ -6318,7 +8044,7 @@ def draw_youtube_search_bar():
     screen.blit(
         text,
         (
-            btn_youtube_search_field.x + 12,
+            btn_youtube_search_field.x + X(12),
             btn_youtube_search_field.centery - text.get_height() // 2,
         ),
     )
@@ -6346,7 +8072,7 @@ def draw_youtube_screen(now):
     status_surface = f_tiny.render(fit_label(status, 42), True, UI_MUTED)
     screen.blit(
         status_surface,
-        (160 - status_surface.get_width() // 2, 116)
+        (X(160) - status_surface.get_width() // 2, Y(116))
     )
     for (label, query), rect in zip(YOUTUBE_PRESETS, youtube_preset_rects):
         selected = youtube_touch_query == query and not youtube_touch_busy
@@ -6376,7 +8102,7 @@ def draw_youtube_screen(now):
 
     visible = youtube_results_cache[youtube_touch_offset:youtube_touch_offset + 4]
     if youtube_touch_busy and not visible:
-        waiting = pygame.Rect(16, 232, 288, 184)
+        waiting = R(16, 232, 288, 184)
         body = draw_info_card(screen, waiting, (72, 80, 98), 16)
         draw_centered_text(
             screen, f_sm, "Searching YouTube…", muted_ink_on(body), waiting
@@ -6393,7 +8119,7 @@ def draw_youtube_screen(now):
                 fit_label(now_prefix + (video.get('title') or 'YouTube'), 28),
                 True, ink_on(body)
             )
-            screen.blit(title, (rect.x + 12, rect.y + 4))
+            screen.blit(title, (rect.x + X(12), rect.y + Y(4)))
             meta = f_tiny.render(
                 fit_label(
                     f"{video.get('uploader', '')} • {video.get('duration', '')}",
@@ -6401,21 +8127,64 @@ def draw_youtube_screen(now):
                 ),
                 True, muted_ink_on(body)
             )
-            screen.blit(meta, (rect.x + 12, rect.y + 22))
+            screen.blit(meta, (rect.x + X(12), rect.y + Y(22)))
     else:
-        empty = pygame.Rect(16, 232, 288, 184)
+        empty = R(16, 232, 288, 184)
         body = draw_info_card(screen, empty, (72, 80, 98), 16)
         draw_centered_text(
             screen, f_sm, "Type in the search bar", muted_ink_on(body), empty
         )
     draw_pages_button()
 
+SAVER_IDLE_SECONDS = 120
+
 def draw_screensaver():
-    # Lantern clock: huge dim time and a weather icon only.
+    """Full black clock. Time is largest, then temperature, title, date, track."""
     screen.fill((0, 0, 0))
-    time_surf = f_xl.render(datetime.now().strftime("%H:%M"), True, (58, 58, 58))
-    screen.blit(time_surf, time_surf.get_rect(center=(160, 200)))
-    draw_weather_icon(screen, 160, 332, weather_type, 36)
+    clock_now = datetime.now()
+    height = max(1, SCREEN_H)
+    width = max(1, SCREEN_W)
+    side = max(S(12), int(width * 0.05))
+    usable = max(40, width - side * 2)
+    title_h = max(S(28), int(height * 0.11))
+    time_h = max(S(64), int(height * 0.34))
+    date_h = max(S(14), int(height * 0.05))
+    temp_h = max(S(36), int(height * 0.16))
+    track_h = max(S(12), int(height * 0.04))
+    gap = max(S(6), int(height * 0.02))
+    stack = title_h + time_h + date_h + temp_h + track_h + gap * 4
+    y = max(gap, (height - stack) // 2)
+    title_color = current_theme.pygame_primary
+    title = scaled_clock_face("TC RADIOS", title_color, usable, title_h)
+    clock_face = scaled_clock_face(
+        clock_now.strftime("%H:%M"), (255, 255, 255), usable, time_h
+    )
+    date_line = scaled_clock_face(
+        clock_now.strftime("%A  %d %B %Y").upper(),
+        (186, 196, 214),
+        int(usable * 0.92),
+        date_h,
+    )
+    temp_text = f"{current_temp}°C" if current_temp else "--°C"
+    temp_face = scaled_clock_face(
+        temp_text, (255, 210, 60), int(usable * 0.72), temp_h
+    )
+
+    def place(surface):
+        nonlocal y
+        screen.blit(surface, (width // 2 - surface.get_width() // 2, y))
+        y += surface.get_height() + gap
+
+    place(title)
+    place(clock_face)
+    place(date_line)
+    place(temp_face)
+    track = current_display_track() or "TCRADIOS"
+    track_font = f_sm if f_sm.get_height() <= track_h else f_tiny
+    clip = pygame.Rect(side, y, usable, max(track_h, track_font.get_height()))
+    blit_scrolling_title(
+        screen, track_font, track, (214, 220, 232), y, clip, time.time()
+    )
 
 def greeting_phrases():
     hour = datetime.now().hour
@@ -6445,19 +8214,19 @@ def draw_house_greeting():
     station = sanitize_text(stations[current_idx]['name'] if stations else "TCRADIOS")
     temp = f"{current_temp}°C" if current_temp else "--°C"
     time_surf = f_xl.render(datetime.now().strftime("%H:%M"), True, UI_TEXT)
-    screen.blit(time_surf, time_surf.get_rect(center=(160, 92)))
+    screen.blit(time_surf, time_surf.get_rect(center=XY(160, 92)))
     draw_weather_icon(
         screen, 118, 168, weather_type, 22, dimmed=False, on_background=(0, 0, 0)
     )
     temp_surf = f_weather.render(temp, True, UI_TEXT)
-    screen.blit(temp_surf, (148, 146))
+    screen.blit(temp_surf, XY(148, 146))
     tamil_line = f_sm.render(f"{tamil}. {station} தயார்.", True, UI_TEXT)
-    screen.blit(tamil_line, tamil_line.get_rect(center=(160, 250)))
+    screen.blit(tamil_line, tamil_line.get_rect(center=XY(160, 250)))
     english_line = f_tiny.render(
         f"{english}. {temp}. {fit_label(station, 18)} is ready.",
         True, UI_MUTED
     )
-    screen.blit(english_line, english_line.get_rect(center=(160, 286)))
+    screen.blit(english_line, english_line.get_rect(center=XY(160, 286)))
 
 adjusting_volume = False
 show_volume_bar = False
@@ -6469,20 +8238,20 @@ PAGE_ORDER = [
     "radio", "favorites", "forecast", "clock",
     "alarm", "system", "languages", "settings", "youtube"
 ]
-btn_open_pages = pygame.Rect(16, 422, 228, 46)
+btn_open_pages = R(16, 422, 228, 46)
 fab_open = False
-btn_fab = pygame.Rect(256, 416, 54, 54)
-btn_sleep = pygame.Rect(16, 248, 140, 52)
-btn_saver = pygame.Rect(164, 248, 140, 52)
-btn_alarm = pygame.Rect(16, 308, 140, 52)
-btn_mute = pygame.Rect(164, 308, 140, 52)
-vol_rect = pygame.Rect(0, 0, 0, 0)
-btn_pages = pygame.Rect(70, 430, 180, 38)
+btn_fab = R(256, 416, 54, 54)
+btn_sleep = R(16, 248, 140, 52)
+btn_saver = R(164, 248, 140, 52)
+btn_alarm = R(16, 308, 140, 52)
+btn_mute = R(164, 308, 140, 52)
+vol_rect = R(0, 0, 0, 0)
+btn_pages = R(70, 430, 180, 38)
 menu_card_rects = [
-    pygame.Rect(16 + (index % 2) * 152, 68 + (index // 2) * 70, 136, 62)
+    R(12 + (index % 2) * 154, 66 + (index // 2) * 82, 142, 74)
     for index in range(8)
 ]
-menu_card_rects.append(pygame.Rect(16, 348, 288, 62))
+menu_card_rects.append(R(12, 394, 296, 74))
 YOUTUBE_PRESETS = (
     ("LOFI", "lofi hip hop radio"),
     ("JAZZ", "smooth jazz radio"),
@@ -6491,27 +8260,25 @@ YOUTUBE_PRESETS = (
     ("POP", "pop hits radio"),
     ("CLASSICAL", "classical music radio"),
 )
-btn_youtube_search_field = pygame.Rect(16, 68, 220, 42)
-btn_youtube_search_go = pygame.Rect(244, 68, 60, 42)
+btn_youtube_search_field = R(16, 68, 220, 42)
+btn_youtube_search_go = R(244, 68, 60, 42)
 youtube_preset_rects = [
-    pygame.Rect(16 + (index % 3) * 102, 134 + (index // 3) * 36, 92, 32)
+    R(16 + (index % 3) * 102, 134 + (index // 3) * 36, 92, 32)
     for index in range(6)
 ]
-btn_youtube_prev = pygame.Rect(16, 210, 52, 28)
-btn_youtube_next = pygame.Rect(252, 210, 52, 28)
-youtube_page_rect = pygame.Rect(74, 210, 172, 28)
+btn_youtube_prev = R(16, 210, 52, 28)
+btn_youtube_next = R(252, 210, 52, 28)
+youtube_page_rect = R(74, 210, 172, 28)
 youtube_result_rects = [
-    pygame.Rect(16, 246 + index * 44, 288, 40)
+    R(16, 246 + index * 44, 288, 40)
     for index in range(4)
 ]
-btn_youtube_keyboard_close = pygame.Rect(70, 372, 180, 40)
+btn_youtube_keyboard_close = R(70, 372, 180, 40)
 youtube_keyboard_open = False
 youtube_keyboard_text = ""
 youtube_touch_query = ""
 youtube_touch_status = "Choose a station or search"
-youtube_touch_busy = False
 youtube_touch_offset = 0
-youtube_touch_pending = None
 
 def build_youtube_keys():
     keys = []
@@ -6529,14 +8296,14 @@ def build_youtube_keys():
             keys.append((
                 character.upper(),
                 character,
-                pygame.Rect(x, y, key_w, key_h)
+                R(x, y, key_w, key_h)
             ))
             x += key_w + gap
         if row == "zxcvbnm":
-            keys.append(("⌫", "backspace", pygame.Rect(x + 3, y, 46, key_h)))
+            keys.append(("⌫", "backspace", R(x + 3, y, 46, key_h)))
         y += 42
-    keys.append(("SPACE", "space", pygame.Rect(16, y, 140, 40)))
-    keys.append(("SEARCH", "search", pygame.Rect(164, y, 140, 40)))
+    keys.append(("SPACE", "space", R(16, y, 140, 40)))
+    keys.append(("SEARCH", "search", R(164, y, 140, 40)))
     return keys
 
 youtube_key_rects = build_youtube_keys()
@@ -6549,20 +8316,24 @@ def fetch_youtube_search(query):
     except Exception as error:
         youtube_touch_pending = ('results', [], str(error))
 
-def fetch_youtube_audio(video, auto=False):
-    global youtube_touch_pending
+def fetch_youtube_audio(video, auto=False, epoch=None):
     video_id = str(video.get('id', '')).strip()
     title = video.get('title') or 'YouTube Audio'
     try:
         audio_url, err = youtube_audio_url(video_id)
         if audio_url:
-            youtube_touch_pending = ('play', video_id, title, audio_url, auto)
+            publish_youtube_pending(
+                ('play', video_id, title, audio_url, auto, epoch), epoch
+            )
         else:
-            youtube_touch_pending = (
-                'error', err or 'Could not extract audio URL', auto, video_id
+            publish_youtube_pending(
+                ('error', err or 'Could not extract audio URL', auto, video_id, epoch),
+                epoch,
             )
     except Exception as error:
-        youtube_touch_pending = ('error', str(error), auto, video_id)
+        publish_youtube_pending(
+            ('error', str(error), auto, video_id, epoch), epoch
+        )
 
 def begin_youtube_search(query):
     global youtube_touch_busy, youtube_touch_status, youtube_touch_query
@@ -6584,21 +8355,29 @@ def begin_youtube_search(query):
 
 def begin_youtube_play(video, auto=False):
     global youtube_touch_busy, youtube_touch_status
-    if youtube_touch_busy or not video.get('id'):
+    if not video.get('id'):
         return False
-    if not auto:
+    if auto:
+        with _playback_lock:
+            if youtube_touch_busy or not playback_should_run:
+                return False
+            epoch = playback_epoch
+            youtube_touch_busy = True
+    else:
+        epoch = claim_youtube_fetch()
+        stop_audio_output()
         youtube_skip_ids.clear()
+        stage_youtube_choice(video.get('id'), video.get('title') or '', epoch)
         remember_youtube_queue(video.get('id'), video.get('title') or '')
-    youtube_touch_busy = True
     youtube_touch_status = "Opening next…" if auto else "Opening audio…"
     threading.Thread(
-        target=fetch_youtube_audio, args=(video, auto), daemon=True
+        target=fetch_youtube_audio, args=(video, auto, epoch), daemon=True
     ).start()
     return True
 
 def continue_youtube_queue(step=1, user=False):
     global youtube_queue_index
-    if youtube_touch_busy:
+    if youtube_touch_busy and not user:
         return True
     if len(youtube_queue) <= 1:
         return False
@@ -6623,6 +8402,8 @@ def youtube_queue_status():
 
 def maybe_advance_youtube_queue():
     global _youtube_was_playing, _youtube_ended_handled
+    if not playback_should_run:
+        return
     if not current_youtube_id() or len(youtube_queue) <= 1:
         return
     try:
@@ -6652,12 +8433,22 @@ def maybe_advance_youtube_queue():
 def apply_youtube_touch_result():
     global youtube_touch_pending, youtube_touch_busy, youtube_touch_status
     global youtube_touch_offset, youtube_results_cache, active_page
-    pending = youtube_touch_pending
-    if not pending:
-        return
-    youtube_touch_pending = None
-    youtube_touch_busy = False
-    kind = pending[0]
+    with _playback_lock:
+        pending = youtube_touch_pending
+        if not pending:
+            return
+        kind = pending[0]
+        epoch = None
+        if kind == 'play' and len(pending) > 5:
+            epoch = pending[5]
+        elif kind == 'error' and len(pending) > 4:
+            epoch = pending[4]
+        if epoch is not None and epoch != playback_epoch:
+            if youtube_touch_pending is pending:
+                youtube_touch_pending = None
+            return
+        youtube_touch_pending = None
+        youtube_touch_busy = False
     if kind == 'results':
         videos, err = pending[1], pending[2]
         if err and not videos:
@@ -6676,11 +8467,17 @@ def apply_youtube_touch_result():
             pending[0], pending[1], pending[2], pending[3],
             pending[4] if len(pending) > 4 else False
         )
-        play_youtube_station(video_id, title, audio_url)
+        epoch = pending[5] if len(pending) > 5 else None
+        if epoch is not None and epoch != playback_epoch:
+            return
+        play_youtube_station(video_id, title, audio_url, epoch)
         youtube_touch_status = youtube_queue_status()
         if not auto:
             active_page = "radio"
     elif kind == 'error':
+        epoch = pending[4] if len(pending) > 4 else None
+        if epoch is not None and epoch != playback_epoch:
+            return
         youtube_touch_status = str(pending[1])[:80]
         auto = pending[2] if len(pending) > 2 else False
         video_id = pending[3] if len(pending) > 3 else ''
@@ -6700,39 +8497,40 @@ def handle_youtube_key(value):
         begin_youtube_search(youtube_keyboard_text)
     elif len(youtube_keyboard_text) < 60:
         youtube_keyboard_text += value
-btn_favorite_toggle = pygame.Rect(90, 67, 140, 34)
+btn_favorite_toggle = R(90, 67, 140, 34)
 favorite_card_rects = [
-    pygame.Rect(16 + (index % 2) * 152, 112 + (index // 2) * 96, 136, 86)
+    R(16 + (index % 2) * 152, 112 + (index // 2) * 96, 136, 86)
     for index in range(6)
 ]
-btn_alarm_minus = pygame.Rect(18, 204, 88, 42)
-btn_alarm_toggle_page = pygame.Rect(116, 204, 88, 42)
-btn_alarm_plus = pygame.Rect(214, 204, 88, 42)
+btn_alarm_minus = R(18, 204, 88, 42)
+btn_alarm_toggle_page = R(116, 204, 88, 42)
+btn_alarm_plus = R(214, 204, 88, 42)
 btn_sleep_presets = [
-    pygame.Rect(18 + index * 98, 282, 88, 48) for index in range(3)
+    R(18 + index * 98, 282, 88, 48) for index in range(3)
 ]
-btn_sleep_cancel = pygame.Rect(18, 344, 284, 54)
-btn_safe_shutdown = pygame.Rect(55, 383, 210, 36)
+btn_sleep_cancel = R(18, 344, 284, 54)
+btn_safe_shutdown = R(55, 383, 210, 36)
 system_card_rects = [
-    pygame.Rect(18 + (index % 2) * 146, 76 + (index // 2) * 126, 138, 110)
+    R(18 + (index % 2) * 146, 76 + (index // 2) * 126, 138, 110)
     for index in range(4)
 ]
 btn_audio_outputs = [
-    pygame.Rect(14 + index * 76, 88, 70, 56) for index in range(4)
+    R(14 + index * 76, 88, 70, 56) for index in range(4)
 ]
-btn_brightness_minus = pygame.Rect(18, 184, 50, 48)
-btn_auto_dim = pygame.Rect(78, 184, 164, 48)
-btn_brightness_plus = pygame.Rect(252, 184, 50, 48)
-btn_theme_previous = pygame.Rect(18, 274, 50, 58)
-btn_theme_next = pygame.Rect(252, 274, 50, 58)
-btn_wifi_setup = pygame.Rect(16, 353, 140, 50)
-btn_wifi_qr = pygame.Rect(164, 353, 140, 50)
-btn_wifi_scan = pygame.Rect(16, 86, 288, 40)
+btn_brightness_minus = R(18, 184, 50, 48)
+btn_auto_dim = R(78, 184, 164, 48)
+btn_brightness_plus = R(252, 184, 50, 48)
+btn_theme_previous = R(18, 274, 50, 58)
+btn_theme_next = R(252, 274, 50, 58)
+btn_wifi_setup = R(16, 353, 92, 50)
+btn_wifi_qr = R(114, 353, 92, 50)
+btn_home_cards = R(212, 353, 92, 50)
+btn_wifi_scan = R(16, 86, 288, 40)
 wifi_network_rects = [
-    pygame.Rect(16, 142 + index * 50, 288, 46) for index in range(4)
+    R(16, 142 + index * 50, 288, 46) for index in range(4)
 ]
-btn_wifi_skip = pygame.Rect(70, 352, 180, 42)
-btn_wifi_password_field = pygame.Rect(16, 86, 288, 40)
+btn_wifi_skip = R(70, 352, 180, 42)
+btn_wifi_password_field = R(16, 86, 288, 40)
 
 def build_wifi_keys():
     keys = []
@@ -6743,15 +8541,15 @@ def build_wifi_keys():
         row_w = len(row) * key_w + (len(row) - 1) * gap
         x = (320 - row_w) // 2
         for character in row:
-            keys.append((character, pygame.Rect(x, y, key_w, key_h)))
+            keys.append((character, R(x, y, key_w, key_h)))
             x += key_w + gap
         y += 38
     keys.extend((
-        ('shift', pygame.Rect(16, y, 70, 38)),
-        ('space', pygame.Rect(92, y, 70, 38)),
-        ('backspace', pygame.Rect(168, y, 52, 38)),
-        ('connect', pygame.Rect(226, y, 78, 38)),
-        ('cancel', pygame.Rect(70, 372, 180, 40)),
+        ('shift', R(16, y, 70, 38)),
+        ('space', R(92, y, 70, 38)),
+        ('backspace', R(168, y, 52, 38)),
+        ('connect', R(226, y, 78, 38)),
+        ('cancel', R(70, 372, 180, 40)),
     ))
     return keys
 
@@ -6760,21 +8558,37 @@ if not has_network_connection():
     wifi_setup_required = True
     active_page = "wifi"
     begin_wifi_scan()
-btn_bluetooth_search = pygame.Rect(70, 75, 180, 42)
+btn_bluetooth_search = R(70, 64, 180, 42)
 bluetooth_device_rects = [
-    pygame.Rect(18, 142 + index * 46, 284, 42) for index in range(6)
+    R(18, 142 + index * 52, 284, 46) for index in range(BLUETOOTH_PAGE_SIZE)
 ]
-btn_bluetooth_back = pygame.Rect(70, 430, 180, 38)
+btn_bluetooth_previous = R(18, 360, 88, 44)
+btn_bluetooth_next = R(214, 360, 88, 44)
+btn_bluetooth_back = R(70, 430, 180, 38)
+btn_card_layout_single = R(16, 76, 140, 40)
+btn_card_layout_bubble = R(164, 76, 140, 40)
+btn_card_left_prev = R(16, 132, 44, 44)
+btn_card_left_label = R(66, 132, 188, 44)
+btn_card_left_next = R(260, 132, 44, 44)
+btn_card_right_prev = R(16, 194, 44, 44)
+btn_card_right_label = R(66, 194, 188, 44)
+btn_card_right_next = R(260, 194, 44, 44)
+btn_card_swap = R(16, 248, 288, 40)
+btn_card_slot_left = R(16, 124, 140, 36)
+btn_card_slot_right = R(164, 124, 140, 36)
+home_card_choice_rects = []
+home_card_edit_slot = 0
+btn_home_cards_back = R(70, 430, 180, 38)
 language_card_rects = [
-    pygame.Rect(16 + (index % 2) * 152, 75 + (index // 2) * 83, 136, 70)
+    R(16 + (index % 2) * 152, 75 + (index // 2) * 83, 136, 70)
     for index in range(8)
 ]
 language_station_rects = [
-    pygame.Rect(18, 89 + index * 52, 284, 46) for index in range(5)
+    R(18, 89 + index * 52, 284, 46) for index in range(5)
 ]
-btn_language_previous = pygame.Rect(18, 360, 88, 44)
-btn_language_next = pygame.Rect(214, 360, 88, 44)
-btn_language_back = pygame.Rect(70, 430, 180, 38)
+btn_language_previous = R(18, 360, 88, 44)
+btn_language_next = R(214, 360, 88, 44)
+btn_language_back = R(70, 430, 180, 38)
 
 def adjust_volume(delta):
     global show_volume_bar, volume_bar_timer, last_interaction_time
@@ -6813,749 +8627,797 @@ def start_rotary_encoder():
 rotary_controls = []
 start_rotary_encoder()
 
+btn_qr, btn_exit = header_edge_buttons(R(8, 7, 304, 52))
+_playback_controls = playback_control_layout()
+vol_minus_rect = _playback_controls["vol_minus"]
+vol_plus_rect = _playback_controls["vol_plus"]
+vol_bar_rect = _playback_controls["vol_bar"]
+btn_prev = _playback_controls["prev"]
+btn_toggle = _playback_controls["toggle"]
+btn_next = _playback_controls["next"]
+
+playback_down_since = 0
+playback_stall_since = 0
+playback_retry_after = 0
+playback_retry_wait = 8
+last_meta_check = 0
+last_memory_trim = 0
+_radio_frame_error_at = 0
+ui_clock = pygame.time.Clock()
+
 while True:
     now = time.time()
-    update_qr_code()
-    
-    if alarm_system.check_alarm() and not alarm_fade_active:
-        alarm_fade_data = alarm_system.trigger_alarm(player, stations, current_idx, vol_level)
-        alarm_fade_active = True
-    
-    handle_alarm_fade()
-    handle_sleep_timer()
-    apply_youtube_touch_result()
-    maybe_advance_youtube_queue()
-    apply_wifi_result()
-    
-    if now - last_weather_update > 1200:
-        try:
-            r = requests.get(device_settings.weather_url(), timeout=5)
-            if r.status_code == 200:
-                weather_data = r.json()
-                data = weather_data['current_weather']
-                current_temp = int(round(data['temperature']))
-                code = data['weathercode']
-                weather_type = weather_code_to_type(code)
-
-                daily = weather_data.get('daily', {})
-                dates = daily.get('time', [])
-                codes = daily.get('weather_code', [])
-                highs = daily.get('temperature_2m_max', [])
-                lows = daily.get('temperature_2m_min', [])
-                weather_forecast = []
-                for date, daily_code, high, low in zip(
-                    dates, codes, highs, lows
-                ):
-                    forecast_date = datetime.strptime(date, "%Y-%m-%d")
-                    weather_forecast.append({
-                        'day': forecast_date.strftime("%a"),
-                        'type': weather_code_to_type(daily_code),
-                        'label': weather_code_label(daily_code),
-                        'high': int(round(high)),
-                        'low': int(round(low))
-                    })
-        except: pass
-        last_weather_update = now
-
-    if (
-        active_page in ("system", "settings")
-        and now - last_system_update > 10
-        and not system_stats_updating
-    ):
-        system_stats_updating = True
-        last_system_update = now
-        threading.Thread(target=refresh_system_stats, daemon=True).start()
-    
     try:
-        media = player.get_media()
-        if media:
-            try:
-                m = media.get_meta(vlc.Meta.NowPlaying)
-                if m:
-                    meta_text = style_now_playing(m)
-                else:
-                    meta_text = style_now_playing(stations[current_idx]['name'])
-            except: 
-                meta_text = style_now_playing(stations[current_idx]['name'])
-    except: 
-        meta_text = style_now_playing(stations[current_idx]['name'])
-    
-    if show_volume_bar and now - volume_bar_timer > 3:
-        show_volume_bar = False
-        adjusting_volume = False
-    
-    hide_mouse_pointer()
-    if saver_active:
-        draw_screensaver()
-    elif now < greeting_until:
-        draw_house_greeting()
-    else:
-        if ui_palette_theme != current_theme.name:
-            refresh_ui_palette()
-        screen.blit(ui_background, (0, 0))
-        draw_animated_ui_glow(screen, now)
+        keep_playback_alive(now)
+    except Exception as error:
+        print(f"Playback watchdog error: {error}", flush=True)
+    try:
+        frame_events = pygame.event.get()
+        apply_pending_logo()
+        update_qr_code()
 
-        # Compact header
-        header_rect = pygame.Rect(8, 7, 304, 52)
-        pygame.draw.rect(screen, UI_SURFACE, header_rect, border_radius=17)
-        pygame.draw.rect(screen, (54, 75, 112), header_rect, 1, border_radius=17)
-        pygame.draw.line(screen, UI_BLUE, (28, 58), (145, 58), 2)
-        pygame.draw.line(screen, UI_PURPLE, (175, 58), (292, 58), 2)
+        if alarm_system.check_alarm() and not alarm_fade_active:
+            alarm_fade_data = alarm_system.trigger_alarm(player, stations, current_idx, vol_level)
+            alarm_fade_active = True
 
-        btn_qr = pygame.Rect(15, 13, 42, 40)
-        qr_body = draw_modern_button(screen, btn_qr, UI_BLUE, UI_BLUE, 12)
-        draw_centered_text(screen, f_sm, "QR", contrasting_text(qr_body), btn_qr)
+        handle_alarm_fade()
+        handle_sleep_timer()
+        apply_youtube_touch_result()
+        maybe_advance_youtube_queue()
+        apply_wifi_result()
 
-        title_rect = pygame.Rect(65, 10, 190, 38)
-        draw_centered_text(screen, f_lg, "TC RADIOS", UI_TEXT, title_rect)
-        if show_startup_ip and now < ip_display_time:
-            ip_surface = f_tiny.render(f"{current_ip}:8080", True, UI_MUTED)
-            screen.blit(ip_surface, (160 - ip_surface.get_width() // 2, 43))
+        if now - last_weather_update > 1200 and not weather_updating:
+            weather_updating = True
+            threading.Thread(target=refresh_weather, daemon=True).start()
 
-        btn_exit = pygame.Rect(268, 13, 37, 40)
-        draw_modern_button(screen, btn_exit, (75, 30, 55), UI_PINK, 12)
-        pygame.draw.line(screen, UI_TEXT, (279, 24), (294, 40), 3)
-        pygame.draw.line(screen, UI_TEXT, (294, 24), (279, 40), 3)
-
-        try: is_playing = player.get_state() == vlc.State.Playing
-        except: is_playing = False
-
-        # Smaller artwork area leaves breathing room between sections
-        pygame.draw.circle(screen, (17, 31, 53), (160, 128), 60)
-        pygame.draw.circle(screen, (40, 58, 91), (160, 128), 58, 1)
-        logo_rect = pygame.Rect(104, 72, LOGO_SIZE, LOGO_SIZE)
-        screen.blit(logo, logo_rect)
-
-        if is_playing:
-            pulse = (math.sin(time.time() * 3) + 1) / 2
-            pulse_color = (
-                int(UI_BLUE[0] * 0.75),
-                int(UI_BLUE[1] * 0.75),
-                int(UI_BLUE[2] * 0.75)
-            )
-            pygame.draw.circle(screen, pulse_color, (160, 128), 58 + int(pulse * 4), 2)
-        else:
-            pygame.draw.circle(screen, UI_MUTED, (160, 128), 58, 1)
-
-        # Now-playing: Tamil on top, English transliteration under it
-        display_text = sanitize_text(meta_text)
-        roman_text = transliterate_tamil(display_text)
-        if roman_text:
-            name_area = pygame.Rect(16, 192, 288, 28)
-            roman_area = pygame.Rect(16, 220, 288, 20)
-            name_render = f_sm.render(display_text, True, UI_TEXT)
-            roman_render = f_tiny.render(
-                fit_label(roman_text, 34), True, UI_MUTED
-            )
-            screen.set_clip(name_area.inflate(-12, 0))
-            if name_render.get_width() <= name_area.width - 24:
-                name_x = name_area.centerx - name_render.get_width() // 2
-            else:
-                scroll_x -= 2
-                if scroll_x < -name_render.get_width():
-                    scroll_x = name_area.right
-                name_x = scroll_x
-            screen.blit(name_render, (name_x, name_area.y + 4))
-            screen.set_clip(None)
-            screen.blit(
-                roman_render,
-                (roman_area.centerx - roman_render.get_width() // 2, roman_area.y)
-            )
-        else:
-            name_area = pygame.Rect(16, 198, 288, 34)
-            name_render = f_lg.render(display_text, True, UI_TEXT)
-            screen.set_clip(name_area.inflate(-12, 0))
-            if name_render.get_width() <= name_area.width - 24:
-                name_x = name_area.centerx - name_render.get_width() // 2
-            else:
-                scroll_x -= 2
-                if scroll_x < -name_render.get_width():
-                    scroll_x = name_area.right
-                name_x = scroll_x
-            screen.blit(name_render, (name_x, name_area.y + 5))
-            screen.set_clip(None)
-
-        # Status chips appear only when active; controls remain in the dock
-        alarm_chip = pygame.Rect(18, 242, 128, 22)
-        sleep_chip = pygame.Rect(174, 242, 128, 22)
-        if alarm_system.alarm_enabled:
-            draw_modern_button(screen, alarm_chip, (57, 48, 31), (112, 88, 41), 10)
-            draw_centered_text(
-                screen, f_tiny, f"ALARM {alarm_system.alarm_time}",
-                UI_AMBER, alarm_chip
-            )
-        if alarm_system.sleep_timer_enabled:
-            rem = alarm_system.get_sleep_remaining()
-            sleep_label = f"SLEEP {rem} MIN"
-            sleep_color = UI_GREEN if rem > 5 else UI_PINK
-            draw_modern_button(screen, sleep_chip, (35, 40, 67), (75, 61, 126), 10)
-            draw_centered_text(screen, f_tiny, sleep_label, sleep_color, sleep_chip)
-
-        # Volume strip: circular vector − / + so glyphs never become boxes
-        vol_minus_rect = pygame.Rect(10, 270, 46, 46)
-        vol_plus_rect = pygame.Rect(264, 270, 46, 46)
-        vol_bar_rect = pygame.Rect(64, 284, 192, 14)
-        draw_circle_icon_button(screen, vol_minus_rect, UI_AMBER, "minus")
-        pygame.draw.rect(screen, (37, 48, 72), vol_bar_rect, border_radius=8)
-        fill_width = int(vol_bar_rect.width * vol_level / 100)
-        if fill_width > 0:
-            fill_rect = pygame.Rect(
-                vol_bar_rect.x, vol_bar_rect.y, max(14, fill_width), vol_bar_rect.height
-            )
-            pygame.draw.rect(screen, UI_BLUE, fill_rect, border_radius=8)
-        knob_x = vol_bar_rect.x + int(vol_bar_rect.width * vol_level / 100)
-        knob_x = max(vol_bar_rect.x + 8, min(vol_bar_rect.right - 8, knob_x))
-        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), 9, UI_TEXT)
-        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), 4, UI_BLUE)
-        vol_pct_surf = f_tiny.render(f"{vol_level}%", True, UI_TEXT)
-        screen.blit(vol_pct_surf, (160 - vol_pct_surf.get_width() // 2, 302))
-        draw_circle_icon_button(screen, vol_plus_rect, UI_GREEN, "plus")
-
-        # Primary transport controls
-        btn_prev = pygame.Rect(12, 329, 92, 53)
-        btn_toggle = pygame.Rect(114, 325, 92, 61)
-        btn_next = pygame.Rect(216, 329, 92, 53)
-        draw_pulsing_border(
-            screen,
-            btn_toggle,
-            UI_AMBER if is_playing else UI_GREEN,
-            now
-        )
-        prev_body = draw_modern_button(screen, btn_prev, UI_BLUE, UI_BLUE, 16)
-        toggle_color = UI_AMBER if is_playing else UI_GREEN
-        toggle_body = draw_modern_button(
-            screen, btn_toggle, toggle_color, toggle_color, 18
-        )
-        next_body = draw_modern_button(screen, btn_next, UI_PURPLE, UI_PURPLE, 16)
-        draw_centered_text(screen, f_sm, "PREV", contrasting_text(prev_body), btn_prev)
-        draw_centered_text(
-            screen, f_sm, "PAUSE" if is_playing else "PLAY",
-            contrasting_text(toggle_body),
-            btn_toggle
-        )
-        draw_centered_text(screen, f_sm, "NEXT", contrasting_text(next_body), btn_next)
-
-        pages_body = draw_modern_button(
-            screen, btn_open_pages, UI_BLUE, UI_BLUE, 16
-        )
-        draw_centered_text(
-            screen, f_sm, "PAGES", contrasting_text(pages_body), btn_open_pages
-        )
-
-        if fab_open:
-            dim = pygame.Surface((320, 480), pygame.SRCALPHA)
-            dim.fill((0, 0, 0, 150))
-            screen.blit(dim, (0, 0))
-            panel = pygame.Rect(8, 236, 304, 136)
-            pygame.draw.rect(screen, UI_SURFACE, panel, border_radius=18)
-            pygame.draw.rect(screen, (54, 64, 91), panel, 1, border_radius=18)
-            sleep_fill = UI_PURPLE if alarm_system.sleep_timer_enabled else UI_SURFACE_RAISED
-            moon_fill = UI_BLUE if saver_active else UI_SURFACE_RAISED
-            alarm_fill = UI_AMBER if alarm_system.alarm_enabled else UI_SURFACE_RAISED
-            mute_fill = UI_PINK if vol_level == 0 else UI_SURFACE_RAISED
-            labeled_button(screen, btn_sleep, sleep_fill, f_sm, "SLEEP", 14)
-            labeled_button(screen, btn_saver, moon_fill, f_sm, "MOON", 14)
-            labeled_button(screen, btn_alarm, alarm_fill, f_sm, "ALARM", 14)
-            labeled_button(
-                screen, btn_mute, mute_fill, f_sm,
-                "MUTE" if vol_level else "UNMUTE", 14
-            )
-
-        fab_fill = UI_PINK if fab_open else UI_PURPLE
-        draw_smooth_circle(screen, btn_fab.center, 26, fab_fill)
-        draw_vector_icon(
-            screen, btn_fab.center,
-            "close" if fab_open else "gear",
-            ink_on(fab_fill),
-            radius=11,
-            width=3,
-        )
         if (
-            not fab_open
-            and (
-                vol_level == 0
-                or alarm_system.alarm_enabled
-                or alarm_system.sleep_timer_enabled
-            )
+            active_page in ("system", "settings", "clock", "radio")
+            and now - last_system_update > 10
+            and not system_stats_updating
         ):
-            pygame.draw.circle(
-                screen,
-                UI_PINK if vol_level == 0 else UI_AMBER,
-                (btn_fab.centerx + 16, btn_fab.centery - 16),
-                5,
-            )
+            system_stats_updating = True
+            last_system_update = now
+            threading.Thread(target=refresh_system_stats, daemon=True).start()
 
-        if show_qr:
-            qr_panel = pygame.Rect(31, 78, 258, 278)
-            body = draw_info_card(screen, qr_panel, UI_BLUE, 18)
-            screen.blit(qr_surface, (40, 88))
-            draw_centered_text(
-                screen, f_tiny, "LISTEN ALONG", ink_on(body),
-                pygame.Rect(40, 328, 240, 16)
+        if now - last_meta_check > 2:
+            last_meta_check = now
+            media = None
+            station_now = (
+                stations[current_idx]
+                if stations and 0 <= current_idx < len(stations) else {}
             )
-            station_label = fit_label(
-                stations[current_idx]['name'] if stations else "TCRADIOS", 22
-            )
-            draw_centered_text(
-                screen, f_sm, station_label, muted_ink_on(body),
-                pygame.Rect(40, 344, 240, 18)
-            )
-
-        if not show_qr:
-            if active_page == "menu":
-                draw_menu_screen(now)
-            elif active_page == "favorites":
-                draw_favorites_screen(now)
-            elif active_page == "forecast":
-                draw_forecast_screen(now)
-            elif active_page == "clock":
-                draw_clock_screen(now)
-            elif active_page == "alarm":
-                draw_alarm_screen(now)
-            elif active_page == "system":
-                draw_system_screen(now)
-            elif active_page == "settings":
-                draw_settings_screen(now)
-            elif active_page == "bluetooth":
-                draw_bluetooth_screen(now)
-            elif active_page == "languages":
-                draw_languages_screen(now)
-            elif active_page == "language_stations":
-                draw_language_stations_screen(now)
-            elif active_page == "youtube":
-                draw_youtube_screen(now)
-            elif active_page == "wifi":
-                draw_wifi_screen(now)
-    
-    for event in pygame.event.get():
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            was_auto_dimmed = (
-                target_display_brightness(now) < device_settings.brightness
-            )
-            previous_interaction = last_interaction_time
-            last_interaction_time = now
-            morning_greeting = (
-                not wifi_setup_required
-                and should_show_house_greeting(previous_interaction, now)
-            )
-            if was_auto_dimmed:
-                device_settings.set_hardware_brightness(
-                    device_settings.brightness
-                )
-                if morning_greeting:
-                    greeting_until = now + 6
-                    greeting_shown_on = datetime.now().date()
-                continue
-            touch_start_pos = event.pos
-            touch_start_time = time.time()
-            if saver_active:
-                saver_active = False
-                if morning_greeting:
-                    greeting_until = now + 6
-                    greeting_shown_on = datetime.now().date()
-                continue
-            if now < greeting_until:
-                greeting_until = 0
-                continue
-            if morning_greeting:
-                greeting_until = now + 6
-                greeting_shown_on = datetime.now().date()
-                continue
-            if show_qr:
-                show_qr = False
-                continue
-            if active_page == "menu":
-                for page_index, card in enumerate(menu_card_rects):
-                    if card.collidepoint(event.pos):
-                        active_page = PAGE_ORDER[page_index]
-                        break
-                continue
-
-            if active_page == "wifi":
-                if btn_pages.collidepoint(event.pos):
-                    wifi_password_open = False
-                    wifi_setup_required = False
-                    active_page = "menu"
-                elif wifi_password_open:
-                    for value, rect in wifi_key_rects:
-                        if rect.collidepoint(event.pos):
-                            handle_wifi_key(value)
-                            break
-                elif btn_wifi_scan.collidepoint(event.pos):
-                    begin_wifi_scan()
-                elif btn_wifi_skip.collidepoint(event.pos):
-                    wifi_password_open = False
-                    if wifi_setup_required:
-                        wifi_setup_required = False
-                        active_page = "radio"
-                    else:
-                        active_page = "settings"
-                elif not wifi_busy:
-                    for network, rect in zip(wifi_networks[:4], wifi_network_rects):
-                        if rect.collidepoint(event.pos):
-                            begin_wifi_connect(network)
-                            break
-                continue
-
-            if active_page == "bluetooth":
-                if btn_bluetooth_back.collidepoint(event.pos):
-                    active_page = "settings"
-                elif (
-                    btn_bluetooth_search.collidepoint(event.pos)
-                    and not touch_bluetooth_busy
-                ):
-                    touch_bluetooth_busy = True
-                    threading.Thread(
-                        target=scan_touch_bluetooth, daemon=True
-                    ).start()
-                elif not touch_bluetooth_busy:
-                    for device_index, rect in enumerate(
-                        bluetooth_device_rects
-                    ):
-                        if (
-                            rect.collidepoint(event.pos)
-                            and device_index < len(touch_bluetooth_devices)
-                        ):
-                            device = touch_bluetooth_devices[device_index]
-                            touch_bluetooth_busy = True
-                            threading.Thread(
-                                target=connect_touch_bluetooth,
-                                args=(device['address'], device['name']),
-                                daemon=True
-                            ).start()
-                            break
-                continue
-
-            if active_page == "languages":
-                if btn_pages.collidepoint(event.pos):
-                    active_page = "menu"
+            try:
+                if station_now.get("youtube_id"):
+                    # VLC keeps the previous radio title on a YouTube stream.
+                    meta_text = youtube_display_title(station_now)
                 else:
-                    for language, rect in zip(
-                        LANGUAGE_STREAMS, language_card_rects
-                    ):
-                        if rect.collidepoint(event.pos):
-                            if (
-                                language_stream_busy
-                                and language not in language_stream_cache
-                            ):
+                    media = player.get_media()
+                    if media:
+                        try:
+                            m = media.get_meta(vlc.Meta.NowPlaying)
+                            if m:
+                                meta_text = style_now_playing(m)
+                            else:
+                                meta_text = style_now_playing(station_now.get("name") or "")
+                        except Exception:
+                            meta_text = style_now_playing(station_now.get("name") or "")
+            except Exception:
+                meta_text = style_now_playing(
+                    youtube_display_title(station_now)
+                    if station_now.get("youtube_id")
+                    else (station_now.get("name") or "")
+                )
+            finally:
+                if media is not None:
+                    try:
+                        media.release()
+                    except Exception:
+                        pass
+            if now - last_memory_trim > 600:
+                last_memory_trim = now
+                release_spare_memory()
+
+        if show_volume_bar and now - volume_bar_timer > 3:
+            show_volume_bar = False
+            adjusting_volume = False
+
+        if (
+            not saver_active
+            and not wifi_setup_required
+            and now - last_interaction_time >= SAVER_IDLE_SECONDS
+        ):
+            saver_active = True
+            saver_started_at = now
+
+        hide_mouse_pointer()
+        if saver_active:
+            draw_screensaver()
+        elif now < greeting_until:
+            draw_house_greeting()
+        else:
+            if ui_palette_theme != current_theme.name:
+                refresh_ui_palette()
+            screen.blit(ui_background, (0, 0))
+            draw_animated_ui_glow(screen, now)
+
+            try: is_playing = player.get_state() == vlc.State.Playing
+            except: is_playing = False
+
+            logo_rect = R(0, 0, 1, 1)
+
+            # Title bar stays its own strip. Cards fill the band under it.
+            header_rect = R(8, 7, 304, 52)
+            draw_header_chrome(screen, header_rect)
+
+            btn_qr, btn_exit = header_edge_buttons(header_rect)
+            draw_header_stripe(
+                screen,
+                btn_qr.right + S(8),
+                btn_exit.left - S(8),
+                header_rect.bottom - S(8),
+            )
+            qr_body = draw_quiet_button(screen, btn_qr, UI_BLUE, 12)
+            draw_centered_text(screen, f_sm, "QR", ink_on(qr_body, UI_BLUE), btn_qr)
+
+            title_rect = R(65, 10, 190, 38)
+            draw_centered_text(screen, f_lg, "TC RADIOS", UI_TEXT, title_rect)
+            if show_startup_ip and now < ip_display_time:
+                ip_surface = f_tiny.render(f"{current_ip}:8080", True, UI_MUTED)
+                screen.blit(ip_surface, (X(160) - ip_surface.get_width() // 2, Y(43)))
+
+            exit_body = draw_modern_button(screen, btn_exit, (75, 30, 55), UI_PINK, 12)
+            draw_vector_icon(
+                screen, btn_exit.center, "close",
+                contrasting_text(exit_body),
+                radius=max(8, min(btn_exit.width, btn_exit.height) // 4),
+                width=S(3),
+            )
+
+            home_slots = home_card_slots()
+            for rect, kind, layout_x, layout_y, layout_w, layout_h in home_slots:
+                draw_home_card(
+                    rect, kind, now,
+                    layout_x=layout_x, layout_y=layout_y,
+                    layout_w=layout_w, layout_h=layout_h
+                )
+
+            # Volume and play controls stay on the now-playing card only.
+            controls = playback_control_layout()
+            vol_minus_rect = controls["vol_minus"]
+            vol_plus_rect = controls["vol_plus"]
+            vol_bar_rect = controls["vol_bar"]
+            btn_prev = controls["prev"]
+            btn_toggle = controls["toggle"]
+            btn_next = controls["next"]
+            if controls["visible"]:
+                control_font = f_tiny if controls["compact"] else f_sm
+                draw_circle_icon_button(screen, vol_minus_rect, UI_AMBER, "minus")
+                pygame.draw.rect(
+                    screen,
+                    mix_colors(UI_SURFACE_RAISED, UI_PURPLE, 0.4),
+                    vol_bar_rect,
+                    border_radius=S(8),
+                )
+                fill_width = int(vol_bar_rect.width * vol_level / 100)
+                if fill_width > 0:
+                    fill_rect = _Rect(
+                        vol_bar_rect.x, vol_bar_rect.y, max(X(10), fill_width), vol_bar_rect.height
+                    )
+                    pygame.draw.rect(screen, UI_BLUE, fill_rect, border_radius=S(8))
+                knob_x = vol_bar_rect.x + int(vol_bar_rect.width * vol_level / 100)
+                knob_x = max(vol_bar_rect.x + X(6), min(vol_bar_rect.right - X(6), knob_x))
+                draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), S(8), UI_TEXT)
+                draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), S(4), UI_BLUE)
+                vol_pct_surf = f_tiny.render(f"{vol_level}%", True, UI_TEXT)
+                screen.blit(
+                    vol_pct_surf,
+                    (
+                        X(controls["pct_x"]) - vol_pct_surf.get_width() // 2,
+                        Y(controls["pct_y"])
+                    )
+                )
+                draw_circle_icon_button(screen, vol_plus_rect, UI_GREEN, "plus")
+
+                draw_pulsing_border(
+                    screen,
+                    btn_toggle,
+                    UI_AMBER if is_playing else UI_GREEN,
+                    now
+                )
+                prev_body = draw_quiet_button(screen, btn_prev, UI_BLUE, 16)
+                toggle_color = UI_AMBER if is_playing else UI_GREEN
+                toggle_body = draw_modern_button(
+                    screen, btn_toggle, toggle_color, toggle_color, 18
+                )
+                next_body = draw_quiet_button(screen, btn_next, UI_PURPLE, 16)
+                draw_centered_text(
+                    screen, control_font, "PREV", ink_on(prev_body, UI_BLUE), btn_prev
+                )
+                draw_centered_text(
+                    screen, control_font, "PAUSE" if is_playing else "PLAY",
+                    contrasting_text(toggle_body),
+                    btn_toggle
+                )
+                draw_centered_text(
+                    screen, control_font, "NEXT", ink_on(next_body, UI_PURPLE), btn_next
+                )
+
+            pages_body = draw_quiet_button(screen, btn_open_pages, UI_BLUE, 16)
+            draw_centered_text(
+                screen, f_sm, "PAGES", ink_on(pages_body, UI_BLUE), btn_open_pages
+            )
+
+            if fab_open:
+                screen.blit(screen_dim(), (0, 0))
+                panel = R(8, 236, 304, 136)
+                pygame.draw.rect(screen, UI_SURFACE, panel, border_radius=S(18))
+                pygame.draw.rect(
+                    screen, mix_colors(UI_BLUE, UI_PURPLE, 0.4), panel,
+                    max(1, S(2)), border_radius=S(18)
+                )
+                sleep_fill = UI_PURPLE if alarm_system.sleep_timer_enabled else UI_SURFACE_RAISED
+                moon_fill = UI_BLUE if saver_active else UI_SURFACE_RAISED
+                alarm_fill = UI_AMBER if alarm_system.alarm_enabled else UI_SURFACE_RAISED
+                mute_fill = UI_PINK if vol_level == 0 else UI_SURFACE_RAISED
+                labeled_button(screen, btn_sleep, sleep_fill, f_sm, "SLEEP", 14)
+                labeled_button(screen, btn_saver, moon_fill, f_sm, "SAVER", 14)
+                labeled_button(screen, btn_alarm, alarm_fill, f_sm, "ALARM", 14)
+                labeled_button(
+                    screen, btn_mute, mute_fill, f_sm,
+                    "MUTE" if vol_level else "UNMUTE", 14
+                )
+
+            fab_fill = UI_PINK if fab_open else UI_PURPLE
+            draw_smooth_circle(screen, btn_fab.center, S(26), fab_fill)
+            draw_vector_icon(
+                screen, btn_fab.center,
+                "close" if fab_open else "gear",
+                ink_on(fab_fill),
+                radius=S(11),
+                width=S(3),
+            )
+            if (
+                not fab_open
+                and (
+                    vol_level == 0
+                    or alarm_system.alarm_enabled
+                    or alarm_system.sleep_timer_enabled
+                )
+            ):
+                pygame.draw.circle(
+                    screen,
+                    UI_PINK if vol_level == 0 else UI_AMBER,
+                    (btn_fab.centerx + X(16), btn_fab.centery - Y(16)),
+                    S(5),
+                )
+
+            if show_qr:
+                qr_panel = R(31, 78, 258, 278)
+                body = draw_info_card(screen, qr_panel, UI_BLUE, 18)
+                screen.blit(qr_surface, XY(40, 88))
+                draw_centered_text(
+                    screen, f_tiny, "LISTEN ALONG", ink_on(body),
+                    R(40, 328, 240, 16)
+                )
+                station_label = fit_label(
+                    stations[current_idx]['name'] if stations else "TCRADIOS", 22
+                )
+                draw_centered_text(
+                    screen, f_sm, station_label, muted_ink_on(body),
+                    R(40, 344, 240, 18)
+                )
+
+            if not show_qr:
+                if active_page == "menu":
+                    draw_menu_screen(now)
+                elif active_page == "favorites":
+                    draw_favorites_screen(now)
+                elif active_page == "forecast":
+                    draw_forecast_screen(now)
+                elif active_page == "clock":
+                    draw_clock_screen(now)
+                elif active_page == "alarm":
+                    draw_alarm_screen(now)
+                elif active_page == "system":
+                    draw_system_screen(now)
+                elif active_page == "settings":
+                    draw_settings_screen(now)
+                elif active_page == "home_cards":
+                    draw_home_cards_settings_screen(now)
+                elif active_page == "bluetooth":
+                    draw_bluetooth_screen(now)
+                elif active_page == "languages":
+                    draw_languages_screen(now)
+                elif active_page == "language_stations":
+                    draw_language_stations_screen(now)
+                elif active_page == "youtube":
+                    draw_youtube_screen(now)
+                elif active_page == "wifi":
+                    draw_wifi_screen(now)
+
+        for event in frame_events:
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                was_auto_dimmed = (
+                    target_display_brightness(now) < device_settings.brightness
+                )
+                previous_interaction = last_interaction_time
+                last_interaction_time = now
+                morning_greeting = (
+                    not wifi_setup_required
+                    and should_show_house_greeting(previous_interaction, now)
+                )
+                if was_auto_dimmed:
+                    device_settings.set_hardware_brightness(
+                        device_settings.brightness
+                    )
+                    if morning_greeting:
+                        greeting_until = now + 6
+                        greeting_shown_on = datetime.now().date()
+                    continue
+                touch_start_pos = event.pos
+                touch_start_time = time.time()
+                if saver_active:
+                    saver_active = False
+                    if morning_greeting:
+                        greeting_until = now + 6
+                        greeting_shown_on = datetime.now().date()
+                    continue
+                if now < greeting_until:
+                    greeting_until = 0
+                    continue
+                if morning_greeting:
+                    greeting_until = now + 6
+                    greeting_shown_on = datetime.now().date()
+                    continue
+                if show_qr:
+                    show_qr = False
+                    continue
+                if active_page == "menu":
+                    for page_index, card in enumerate(menu_card_rects):
+                        if card.collidepoint(event.pos):
+                            active_page = PAGE_ORDER[page_index]
+                            break
+                    continue
+
+                if active_page == "wifi":
+                    if btn_pages.collidepoint(event.pos):
+                        wifi_password_open = False
+                        wifi_setup_required = False
+                        active_page = "menu"
+                    elif wifi_password_open:
+                        for value, rect in wifi_key_rects:
+                            if rect.collidepoint(event.pos):
+                                handle_wifi_key(value)
                                 break
-                            selected_language = language
-                            language_stream_offset = 0
-                            active_page = "language_stations"
-                            if language in language_stream_cache:
-                                count = len(language_stream_cache[language])
-                                language_stream_status = (
-                                    f"{count} station"
-                                    f"{'s' if count != 1 else ''}"
-                                )
-                            elif not language_stream_busy:
-                                language_stream_busy = True
-                                language_stream_status = "Loading stations…"
+                    elif btn_wifi_scan.collidepoint(event.pos):
+                        begin_wifi_scan()
+                    elif btn_wifi_skip.collidepoint(event.pos):
+                        wifi_password_open = False
+                        if wifi_setup_required:
+                            wifi_setup_required = False
+                            active_page = "radio"
+                        else:
+                            active_page = "settings"
+                    elif not wifi_busy:
+                        for network, rect in zip(wifi_networks[:4], wifi_network_rects):
+                            if rect.collidepoint(event.pos):
+                                begin_wifi_connect(network)
+                                break
+                    continue
+
+                if active_page == "bluetooth":
+                    if btn_bluetooth_back.collidepoint(event.pos):
+                        active_page = "settings"
+                    elif (
+                        btn_bluetooth_search.collidepoint(event.pos)
+                        and not touch_bluetooth_busy
+                    ):
+                        touch_bluetooth_busy = True
+                        threading.Thread(
+                            target=scan_touch_bluetooth, daemon=True
+                        ).start()
+                    elif btn_bluetooth_previous.collidepoint(event.pos):
+                        if touch_bluetooth_offset > 0:
+                            touch_bluetooth_offset = max(
+                                0, touch_bluetooth_offset - BLUETOOTH_PAGE_SIZE
+                            )
+                    elif btn_bluetooth_next.collidepoint(event.pos):
+                        if (
+                            touch_bluetooth_offset + BLUETOOTH_PAGE_SIZE
+                            < len(touch_bluetooth_devices)
+                        ):
+                            touch_bluetooth_offset += BLUETOOTH_PAGE_SIZE
+                    elif not touch_bluetooth_busy:
+                        for device, rect in zip(
+                            visible_bluetooth_devices(), bluetooth_device_rects
+                        ):
+                            if rect.collidepoint(event.pos):
+                                touch_bluetooth_busy = True
                                 threading.Thread(
-                                    target=load_language_streams,
-                                    args=(language,),
+                                    target=connect_touch_bluetooth,
+                                    args=(device['address'], device['name']),
                                     daemon=True
                                 ).start()
-                            break
-                continue
+                                break
+                    continue
 
-            if active_page == "language_stations":
-                streams = language_stream_cache.get(selected_language, [])
-                if btn_language_back.collidepoint(event.pos):
-                    active_page = "languages"
-                elif (
-                    btn_language_previous.collidepoint(event.pos)
-                    and language_stream_offset > 0
-                ):
-                    language_stream_offset = max(
-                        0, language_stream_offset - 5
-                    )
-                elif (
-                    btn_language_next.collidepoint(event.pos)
-                    and language_stream_offset + 5 < len(streams)
-                ):
-                    language_stream_offset += 5
-                elif not language_stream_busy:
-                    visible_streams = streams[
-                        language_stream_offset:language_stream_offset + 5
-                    ]
-                    for stream, rect in zip(
-                        visible_streams, language_station_rects
+                if active_page == "home_cards":
+                    if btn_home_cards_back.collidepoint(event.pos):
+                        active_page = "settings"
+                    elif btn_card_layout_single.collidepoint(event.pos):
+                        set_home_card_layout("single")
+                        home_card_edit_slot = 0
+                    elif btn_card_layout_bubble.collidepoint(event.pos):
+                        set_home_card_layout("bubble")
+                    elif btn_card_slot_left.collidepoint(event.pos):
+                        home_card_edit_slot = 0
+                    elif (
+                        device_settings.home_card_layout == "bubble"
+                        and btn_card_slot_right.collidepoint(event.pos)
                     ):
-                        if rect.collidepoint(event.pos):
-                            play_language_stream(stream)
-                            active_page = "radio"
-                            break
-                continue
+                        home_card_edit_slot = 1
+                    else:
+                        for kind, rect in zip(
+                            HOME_CARD_KINDS, home_card_choice_rects
+                        ):
+                            if rect.collidepoint(event.pos):
+                                assign_home_card(home_card_edit_slot, kind)
+                                break
+                    continue
 
-            if active_page != "radio":
-                if btn_pages.collidepoint(event.pos):
-                    youtube_keyboard_open = False
-                    active_page = "menu"
-                elif active_page == "youtube":
-                    if btn_youtube_search_go.collidepoint(event.pos):
-                        query = youtube_keyboard_text.strip() or youtube_touch_query
-                        if query:
-                            begin_youtube_search(query)
-                        else:
-                            youtube_keyboard_open = True
-                    elif btn_youtube_search_field.collidepoint(event.pos):
-                        youtube_keyboard_open = True
-                    elif youtube_keyboard_open:
-                        if btn_youtube_keyboard_close.collidepoint(event.pos):
-                            youtube_keyboard_open = False
-                        else:
-                            for _label, value, rect in youtube_key_rects:
-                                if rect.collidepoint(event.pos):
-                                    handle_youtube_key(value)
+                if active_page == "languages":
+                    if btn_pages.collidepoint(event.pos):
+                        active_page = "menu"
+                    else:
+                        for language, rect in zip(
+                            LANGUAGE_STREAMS, language_card_rects
+                        ):
+                            if rect.collidepoint(event.pos):
+                                if (
+                                    language_stream_busy
+                                    and language not in language_stream_cache
+                                ):
                                     break
-                    elif not youtube_touch_busy:
-                            for (_label, query), rect in zip(
-                                YOUTUBE_PRESETS, youtube_preset_rects
-                            ):
-                                if rect.collidepoint(event.pos):
-                                    youtube_keyboard_text = query
-                                    begin_youtube_search(query)
-                                    break
-                            total = len(youtube_results_cache)
-                            if (
-                                btn_youtube_prev.collidepoint(event.pos)
-                                and youtube_touch_offset > 0
-                            ):
-                                youtube_touch_offset = max(
-                                    0, youtube_touch_offset - 4
-                                )
-                            elif (
-                                btn_youtube_next.collidepoint(event.pos)
-                                and youtube_touch_offset + 4 < total
-                            ):
-                                youtube_touch_offset += 4
+                                selected_language = language
+                                language_stream_offset = 0
+                                active_page = "language_stations"
+                                if language in language_stream_cache:
+                                    count = len(language_stream_cache[language])
+                                    language_stream_status = (
+                                        f"{count} station"
+                                        f"{'s' if count != 1 else ''}"
+                                    )
+                                elif not language_stream_busy:
+                                    language_stream_busy = True
+                                    language_stream_status = "Loading stations…"
+                                    threading.Thread(
+                                        target=load_language_streams,
+                                        args=(language,),
+                                        daemon=True
+                                    ).start()
+                                break
+                    continue
+
+                if active_page == "language_stations":
+                    streams = language_stream_cache.get(selected_language, [])
+                    if btn_language_back.collidepoint(event.pos):
+                        active_page = "languages"
+                    elif (
+                        btn_language_previous.collidepoint(event.pos)
+                        and language_stream_offset > 0
+                    ):
+                        language_stream_offset = max(
+                            0, language_stream_offset - 5
+                        )
+                    elif (
+                        btn_language_next.collidepoint(event.pos)
+                        and language_stream_offset + 5 < len(streams)
+                    ):
+                        language_stream_offset += 5
+                    elif not language_stream_busy:
+                        visible_streams = streams[
+                            language_stream_offset:language_stream_offset + 5
+                        ]
+                        for stream, rect in zip(
+                            visible_streams, language_station_rects
+                        ):
+                            if rect.collidepoint(event.pos):
+                                play_language_stream(stream)
+                                active_page = "radio"
+                                break
+                    continue
+
+                if active_page != "radio":
+                    if btn_pages.collidepoint(event.pos):
+                        youtube_keyboard_open = False
+                        active_page = "menu"
+                    elif active_page == "youtube":
+                        if btn_youtube_search_go.collidepoint(event.pos):
+                            query = youtube_keyboard_text.strip() or youtube_touch_query
+                            if query:
+                                begin_youtube_search(query)
                             else:
-                                visible = youtube_results_cache[
-                                    youtube_touch_offset:youtube_touch_offset + 4
-                                ]
-                                for video, rect in zip(
-                                    visible, youtube_result_rects
+                                youtube_keyboard_open = True
+                        elif btn_youtube_search_field.collidepoint(event.pos):
+                            youtube_keyboard_open = True
+                        elif youtube_keyboard_open:
+                            if btn_youtube_keyboard_close.collidepoint(event.pos):
+                                youtube_keyboard_open = False
+                            else:
+                                for _label, value, rect in youtube_key_rects:
+                                    if rect.collidepoint(event.pos):
+                                        handle_youtube_key(value)
+                                        break
+                        elif not youtube_touch_busy:
+                                for (_label, query), rect in zip(
+                                    YOUTUBE_PRESETS, youtube_preset_rects
                                 ):
                                     if rect.collidepoint(event.pos):
-                                        begin_youtube_play(video)
+                                        youtube_keyboard_text = query
+                                        begin_youtube_search(query)
                                         break
-                elif active_page == "favorites":
-                    if btn_favorite_toggle.collidepoint(event.pos):
-                        toggle_current_favorite()
-                    else:
-                        for favorite_index, card in enumerate(
-                            favorite_card_rects
-                        ):
-                            if (
-                                card.collidepoint(event.pos)
-                                and favorite_index < len(favorite_indices)
-                            ):
-                                current_idx = favorite_indices[favorite_index]
-                                play()
-                                break
-                elif active_page == "alarm":
-                    if btn_alarm_toggle_page.collidepoint(event.pos):
-                        alarm_system.alarm_enabled = (
-                            not alarm_system.alarm_enabled
-                        )
-                        alarm_system.save_alarm_settings()
-                    elif (
-                        btn_alarm_minus.collidepoint(event.pos)
-                        or btn_alarm_plus.collidepoint(event.pos)
-                    ):
-                        alarm_time = datetime.strptime(
-                            alarm_system.alarm_time, "%H:%M"
-                        )
-                        minutes = (
-                            -5 if btn_alarm_minus.collidepoint(event.pos) else 5
-                        )
-                        alarm_system.alarm_time = (
-                            alarm_time + timedelta(minutes=minutes)
-                        ).strftime("%H:%M")
-                        alarm_system.save_alarm_settings()
-                    else:
-                        for preset, minutes in zip(
-                            btn_sleep_presets, (15, 30, 60)
-                        ):
-                            if preset.collidepoint(event.pos):
-                                alarm_system.start_sleep_timer(minutes)
-                                break
-                        if btn_sleep_cancel.collidepoint(event.pos):
-                            alarm_system.stop_sleep_timer()
-                elif active_page == "system":
-                    if btn_safe_shutdown.collidepoint(event.pos):
-                        if now <= shutdown_confirm_until:
-                            request_touch_shutdown()
+                                total = len(youtube_results_cache)
+                                if (
+                                    btn_youtube_prev.collidepoint(event.pos)
+                                    and youtube_touch_offset > 0
+                                ):
+                                    youtube_touch_offset = max(
+                                        0, youtube_touch_offset - 4
+                                    )
+                                elif (
+                                    btn_youtube_next.collidepoint(event.pos)
+                                    and youtube_touch_offset + 4 < total
+                                ):
+                                    youtube_touch_offset += 4
+                                else:
+                                    visible = youtube_results_cache[
+                                        youtube_touch_offset:youtube_touch_offset + 4
+                                    ]
+                                    for video, rect in zip(
+                                        visible, youtube_result_rects
+                                    ):
+                                        if rect.collidepoint(event.pos):
+                                            begin_youtube_play(video)
+                                            break
+                    elif active_page == "favorites":
+                        if btn_favorite_toggle.collidepoint(event.pos):
+                            toggle_current_favorite()
                         else:
-                            shutdown_confirm_until = now + 5
-                elif active_page == "settings":
-                    for rect, output_name in zip(
-                        btn_audio_outputs,
-                        ("auto", "analog", "hdmi", "bluetooth")
-                    ):
-                        available = (
-                            output_name in ("auto", "bluetooth")
-                            or audio_manager.outputs.get(
-                                output_name, {}
-                            ).get('available', False)
-                        )
-                        if rect.collidepoint(event.pos) and available:
-                            if output_name == "bluetooth":
-                                active_page = "bluetooth"
+                            for favorite_index, card in enumerate(
+                                favorite_card_rects
+                            ):
+                                if (
+                                    card.collidepoint(event.pos)
+                                    and favorite_index < len(favorite_indices)
+                                ):
+                                    current_idx = favorite_indices[favorite_index]
+                                    play(user_select_playback())
+                                    break
+                    elif active_page == "alarm":
+                        if btn_alarm_toggle_page.collidepoint(event.pos):
+                            alarm_system.alarm_enabled = (
+                                not alarm_system.alarm_enabled
+                            )
+                            alarm_system.save_alarm_settings()
+                        elif (
+                            btn_alarm_minus.collidepoint(event.pos)
+                            or btn_alarm_plus.collidepoint(event.pos)
+                        ):
+                            alarm_time = datetime.strptime(
+                                alarm_system.alarm_time, "%H:%M"
+                            )
+                            minutes = (
+                                -5 if btn_alarm_minus.collidepoint(event.pos) else 5
+                            )
+                            alarm_system.alarm_time = (
+                                alarm_time + timedelta(minutes=minutes)
+                            ).strftime("%H:%M")
+                            alarm_system.save_alarm_settings()
+                        else:
+                            for preset, minutes in zip(
+                                btn_sleep_presets, (15, 30, 60)
+                            ):
+                                if preset.collidepoint(event.pos):
+                                    alarm_system.start_sleep_timer(minutes)
+                                    break
+                            if btn_sleep_cancel.collidepoint(event.pos):
+                                alarm_system.stop_sleep_timer()
+                    elif active_page == "system":
+                        if btn_safe_shutdown.collidepoint(event.pos):
+                            if now <= shutdown_confirm_until:
+                                request_touch_shutdown()
                             else:
-                                audio_manager.set_output(output_name)
-                            break
-                    if (
-                        btn_brightness_minus.collidepoint(event.pos)
-                        or btn_brightness_plus.collidepoint(event.pos)
-                    ):
-                        change = (
-                            -10
-                            if btn_brightness_minus.collidepoint(event.pos)
-                            else 10
-                        )
-                        device_settings.brightness = max(
-                            10,
-                            min(100, device_settings.brightness + change)
-                        )
-                        device_settings.save()
-                        device_settings.set_hardware_brightness(
-                            device_settings.brightness
-                        )
-                    elif btn_auto_dim.collidepoint(event.pos):
-                        device_settings.auto_dim_enabled = (
-                            not device_settings.auto_dim_enabled
-                        )
-                        device_settings.save()
-                    elif btn_wifi_setup.collidepoint(event.pos):
-                        wifi_from_settings = True
-                        wifi_setup_required = False
-                        wifi_password_open = False
-                        active_page = "wifi"
-                        if not wifi_networks and not wifi_busy:
-                            begin_wifi_scan()
-                    elif btn_wifi_qr.collidepoint(event.pos):
-                        show_qr = True
-                    elif (
-                        btn_theme_previous.collidepoint(event.pos)
-                        or btn_theme_next.collidepoint(event.pos)
-                    ):
-                        current_theme_index = next(
-                            (
-                                index for index, theme_name
-                                in enumerate(theme_names)
-                                if THEMES[theme_name].name
-                                == current_theme.name
-                            ),
-                            0
-                        )
-                        direction = (
-                            -1 if btn_theme_previous.collidepoint(event.pos)
-                            else 1
-                        )
-                        set_theme(
-                            theme_names[
-                                (current_theme_index + direction)
-                                % len(theme_names)
-                            ]
-                        )
-                continue
+                                shutdown_confirm_until = now + 5
+                    elif active_page == "settings":
+                        for rect, output_name in zip(
+                            btn_audio_outputs,
+                            ("auto", "analog", "hdmi", "bluetooth")
+                        ):
+                            available = (
+                                output_name in ("auto", "bluetooth")
+                                or audio_manager.outputs.get(
+                                    output_name, {}
+                                ).get('available', False)
+                            )
+                            if rect.collidepoint(event.pos) and available:
+                                if output_name == "bluetooth":
+                                    active_page = "bluetooth"
+                                    if (
+                                        not touch_bluetooth_devices
+                                        and not touch_bluetooth_busy
+                                    ):
+                                        try:
+                                            touch_bluetooth_devices = (
+                                                audio_manager.get_bluetooth_devices()
+                                            )
+                                            touch_bluetooth_offset = 0
+                                        except Exception:
+                                            pass
+                                else:
+                                    audio_manager.set_output(output_name)
+                                break
+                        if (
+                            btn_brightness_minus.collidepoint(event.pos)
+                            or btn_brightness_plus.collidepoint(event.pos)
+                        ):
+                            change = (
+                                -10
+                                if btn_brightness_minus.collidepoint(event.pos)
+                                else 10
+                            )
+                            device_settings.brightness = max(
+                                10,
+                                min(100, device_settings.brightness + change)
+                            )
+                            device_settings.save()
+                            device_settings.set_hardware_brightness(
+                                device_settings.brightness
+                            )
+                        elif btn_auto_dim.collidepoint(event.pos):
+                            device_settings.auto_dim_enabled = (
+                                not device_settings.auto_dim_enabled
+                            )
+                            device_settings.save()
+                        elif btn_wifi_setup.collidepoint(event.pos):
+                            wifi_from_settings = True
+                            wifi_setup_required = False
+                            wifi_password_open = False
+                            active_page = "wifi"
+                            if not wifi_networks and not wifi_busy:
+                                begin_wifi_scan()
+                        elif btn_wifi_qr.collidepoint(event.pos):
+                            show_qr = True
+                        elif btn_home_cards.collidepoint(event.pos):
+                            active_page = "home_cards"
+                        elif (
+                            btn_theme_previous.collidepoint(event.pos)
+                            or btn_theme_next.collidepoint(event.pos)
+                        ):
+                            current_theme_index = next(
+                                (
+                                    index for index, theme_name
+                                    in enumerate(theme_names)
+                                    if THEMES[theme_name].name
+                                    == current_theme.name
+                                ),
+                                0
+                            )
+                            direction = (
+                                -1 if btn_theme_previous.collidepoint(event.pos)
+                                else 1
+                            )
+                            set_theme(
+                                theme_names[
+                                    (current_theme_index + direction)
+                                    % len(theme_names)
+                                ]
+                            )
+                    continue
 
-            if btn_fab.collidepoint(event.pos):
-                fab_open = not fab_open
-                continue
-            if fab_open:
-                if btn_sleep.collidepoint(event.pos):
-                    if alarm_system.sleep_timer_enabled:
-                        alarm_system.stop_sleep_timer()
-                    else:
-                        alarm_system.start_sleep_timer(30)
-                elif btn_saver.collidepoint(event.pos):
-                    saver_active = not saver_active
-                    if saver_active:
-                        saver_started_at = time.time()
-                elif btn_alarm.collidepoint(event.pos):
-                    alarm_system.alarm_enabled = not alarm_system.alarm_enabled
-                    alarm_system.save_alarm_settings()
-                elif btn_mute.collidepoint(event.pos):
-                    apply_live_volume(0 if vol_level > 0 else last_unmuted_volume)
-                fab_open = False
-                continue
-            if btn_open_pages.collidepoint(event.pos):
-                fab_open = False
-                active_page = "menu"
-                continue
-            if btn_exit.collidepoint(event.pos):
-                save_playback_state(force=True)
-                pygame.quit()
-                sys.exit()
-            if btn_qr.collidepoint(event.pos):
-                show_qr = True
-            if btn_prev.collidepoint(event.pos):
-                skip_playback(-1)
-            if btn_next.collidepoint(event.pos):
-                skip_playback(1)
-            if btn_toggle.collidepoint(event.pos):
-                player.pause()
-            if vol_minus_rect.collidepoint(event.pos):
-                apply_live_volume(vol_level - 5)
-                show_volume_bar = True
-                volume_bar_timer = time.time()
-            if vol_plus_rect.collidepoint(event.pos):
-                apply_live_volume(vol_level + 5)
-                show_volume_bar = True
-                volume_bar_timer = time.time()
-            if vol_bar_rect.collidepoint(event.pos):
-                adjusting_volume = True
-                apply_live_volume(
-                    int((event.pos[0] - vol_bar_rect.x) * 100 / vol_bar_rect.width)
-                )
-                show_volume_bar = True
-                volume_bar_timer = time.time()
-        
-        elif event.type == pygame.MOUSEBUTTONUP:
-            dx = event.pos[0] - touch_start_pos[0]
-            dy = event.pos[1] - touch_start_pos[1]
-            dt = time.time() - touch_start_time
-            if (
-                active_page in PAGE_ORDER
-                and abs(dx) > 45
-                and abs(dx) > abs(dy)
-                and dt < 2.5
-            ):
-                youtube_keyboard_open = False
-                fab_open = False
-                page_index = PAGE_ORDER.index(active_page)
-                direction = 1 if dx < 0 else -1
-                active_page = PAGE_ORDER[
-                    (page_index + direction) % len(PAGE_ORDER)
-                ]
-                adjusting_volume = False
-                continue
-
-            if active_page == "radio" and logo_rect.collidepoint(touch_start_pos):
-                dy = touch_start_pos[1] - event.pos[1]
-                if dt > 1.0:
-                    if alarm_system.sleep_timer_enabled:
-                        alarm_system.stop_sleep_timer()
-                    else:
-                        alarm_system.start_sleep_timer(30)
-                elif abs(dy) > 30:
-                    apply_live_volume(vol_level + (5 if dy > 0 else -5))
+                if btn_fab.collidepoint(event.pos):
+                    fab_open = not fab_open
+                    continue
+                if fab_open:
+                    if btn_sleep.collidepoint(event.pos):
+                        if alarm_system.sleep_timer_enabled:
+                            alarm_system.stop_sleep_timer()
+                        else:
+                            alarm_system.start_sleep_timer(30)
+                    elif btn_saver.collidepoint(event.pos):
+                        saver_active = not saver_active
+                        if saver_active:
+                            saver_started_at = time.time()
+                    elif btn_alarm.collidepoint(event.pos):
+                        alarm_system.alarm_enabled = not alarm_system.alarm_enabled
+                        alarm_system.save_alarm_settings()
+                    elif btn_mute.collidepoint(event.pos):
+                        apply_live_volume(0 if vol_level > 0 else last_unmuted_volume)
+                    fab_open = False
+                    continue
+                if btn_open_pages.collidepoint(event.pos):
+                    fab_open = False
+                    active_page = "menu"
+                    continue
+                if btn_exit.collidepoint(event.pos):
+                    save_playback_state(force=True)
+                    try:
+                        with open(os.path.expanduser("~/.tcradios-user-quit"), "w") as flag:
+                            flag.write("quit\n")
+                    except OSError:
+                        pass
+                    pygame.quit()
+                    sys.exit()
+                if btn_qr.collidepoint(event.pos):
+                    show_qr = True
+                if btn_prev.collidepoint(event.pos):
+                    skip_playback(-1)
+                if btn_next.collidepoint(event.pos):
+                    skip_playback(1)
+                if btn_toggle.collidepoint(event.pos):
+                    toggle_playback()
+                if vol_minus_rect.collidepoint(event.pos):
+                    apply_live_volume(vol_level - 5)
                     show_volume_bar = True
                     volume_bar_timer = time.time()
-            if adjusting_volume:
-                save_playback_state(force=True)
-            adjusting_volume = False
-        
-        elif event.type == pygame.MOUSEMOTION and adjusting_volume:
-            if event.pos[0] >= vol_bar_rect.x and event.pos[0] <= vol_bar_rect.right:
-                apply_live_volume(
-                    int((event.pos[0] - vol_bar_rect.x) * 100 / vol_bar_rect.width)
-                )
-                volume_bar_timer = time.time()
-    
-    apply_display_brightness(now)
-    pygame.display.flip()
-    time.sleep(0.05)
+                if vol_plus_rect.collidepoint(event.pos):
+                    apply_live_volume(vol_level + 5)
+                    show_volume_bar = True
+                    volume_bar_timer = time.time()
+                if vol_bar_rect.collidepoint(event.pos):
+                    adjusting_volume = True
+                    apply_live_volume(
+                        int((event.pos[0] - vol_bar_rect.x) * 100 / vol_bar_rect.width)
+                    )
+                    show_volume_bar = True
+                    volume_bar_timer = time.time()
+
+            elif event.type == pygame.MOUSEBUTTONUP:
+                dx = event.pos[0] - touch_start_pos[0]
+                dy = event.pos[1] - touch_start_pos[1]
+                dt = time.time() - touch_start_time
+                if (
+                    active_page in PAGE_ORDER
+                    and abs(dx) > X(45)
+                    and abs(dx) > abs(dy)
+                    and dt < 2.5
+                ):
+                    youtube_keyboard_open = False
+                    fab_open = False
+                    page_index = PAGE_ORDER.index(active_page)
+                    direction = 1 if dx < 0 else -1
+                    active_page = PAGE_ORDER[
+                        (page_index + direction) % len(PAGE_ORDER)
+                    ]
+                    adjusting_volume = False
+                    continue
+
+                if active_page == "radio" and logo_rect.collidepoint(touch_start_pos):
+                    dy = touch_start_pos[1] - event.pos[1]
+                    if dt > 1.0:
+                        if alarm_system.sleep_timer_enabled:
+                            alarm_system.stop_sleep_timer()
+                        else:
+                            alarm_system.start_sleep_timer(30)
+                    elif abs(dy) > Y(30):
+                        apply_live_volume(vol_level + (5 if dy > 0 else -5))
+                        show_volume_bar = True
+                        volume_bar_timer = time.time()
+                if adjusting_volume:
+                    save_playback_state(force=True)
+                adjusting_volume = False
+
+            elif event.type == pygame.MOUSEMOTION and adjusting_volume:
+                if event.pos[0] >= vol_bar_rect.x and event.pos[0] <= vol_bar_rect.right:
+                    apply_live_volume(
+                        int((event.pos[0] - vol_bar_rect.x) * 100 / vol_bar_rect.width)
+                    )
+                    volume_bar_timer = time.time()
+
+        apply_display_brightness(now)
+        pygame.display.flip()
+        ui_clock.tick(40)
+    except Exception:
+        if time.time() - _radio_frame_error_at > 30:
+            _radio_frame_error_at = time.time()
+            traceback.print_exc()
+        time.sleep(0.2)

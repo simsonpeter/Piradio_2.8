@@ -7,9 +7,25 @@ timeout 2 plymouth quit >/dev/null 2>&1 || true
 
 exec 9>"/tmp/tcradios-${UID:-0}.lock"
 if ! flock -n 9; then
-    if pgrep -f touch_radio.py >/dev/null 2>&1; then
-        exit 0
-    fi
+    echo "tcradios already running $(date -Is)"
+    exit 0
+fi
+# This launcher owns the lock. End a player left behind by an older copy.
+# Only kill Python itself. A shell whose command mentions the file is not the player.
+stopped_player=0
+for pid in $(pgrep -f '[t]ouch_radio.py' || true); do
+    cmd="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+    base="${cmd%% *}"
+    base="${base##*/}"
+    case "${base}" in
+        python|python3|python3.*)
+            kill -9 "${pid}" >/dev/null 2>&1 || true
+            stopped_player=1
+            ;;
+    esac
+done
+if [[ "${stopped_player}" == 1 ]]; then
+    sleep 0.2
 fi
 
 if [[ ! -t 1 ]]; then
@@ -18,6 +34,22 @@ fi
 echo "tcradios-start $(date -Is) ${DISPLAY:-:0} ${REPO_DIR}"
 
 export DISPLAY="${DISPLAY:-:0}"
+# Bluetooth audio lives in the desktop session. A bare restart does not
+# pass that session through, so the speaker connects and then stays silent.
+if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+    runtime="/run/user/$(id -u)"
+    if [[ -d "${runtime}" ]]; then
+        export XDG_RUNTIME_DIR="${runtime}"
+    fi
+fi
+if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -S "${XDG_RUNTIME_DIR}/bus" ]]; then
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+    fi
+    if [[ -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
+        export PULSE_SERVER="unix:${XDG_RUNTIME_DIR}/pulse/native"
+    fi
+fi
 DISPLAY_NUMBER="${DISPLAY#:}"
 for _ in {1..40}; do
     if [[ -S "/tmp/.X11-unix/X${DISPLAY_NUMBER}" ]]; then
@@ -30,4 +62,16 @@ sleep 1
 timeout 2 plymouth quit >/dev/null 2>&1 || true
 
 cd "${REPO_DIR}"
-exec /usr/bin/python3 "${REPO_DIR}/touch_radio.py"
+QUIT_FLAG="${HOME}/.tcradios-user-quit"
+rm -f "${QUIT_FLAG}"
+while true; do
+    /usr/bin/python3 "${REPO_DIR}/touch_radio.py"
+    code=$?
+    if [[ -f "${QUIT_FLAG}" ]]; then
+        rm -f "${QUIT_FLAG}"
+        echo "tcradios user quit $(date -Is)"
+        exit 0
+    fi
+    echo "tcradios exited ${code} $(date -Is), starting again"
+    sleep 2
+done
