@@ -607,6 +607,10 @@ def apply_live_volume(level):
 def skip_playback(step):
     global current_idx
     try:
+        epoch = user_select_playback()
+    except NameError:
+        epoch = None
+    try:
         if current_youtube_id() and continue_youtube_queue(step, user=True):
             return
     except NameError:
@@ -614,7 +618,7 @@ def skip_playback(step):
     try:
         if stations:
             current_idx = (current_idx + step) % len(stations)
-            play()
+            play(epoch)
     except (NameError, ZeroDivisionError):
         pass
 
@@ -1160,6 +1164,11 @@ youtube_queue = []
 youtube_queue_index = -1
 youtube_skip_ids = set()
 youtube_touch_offset = 0
+youtube_touch_busy = False
+youtube_touch_pending = None
+playback_epoch = 0
+playback_should_run = True
+playback_down_since = 0
 _youtube_was_playing = False
 _youtube_ended_handled = False
 _youtube_play_started_at = 0
@@ -3517,8 +3526,9 @@ def remote_action(action):
 def play_index(idx):
     global current_idx
     try:
+        epoch = user_select_playback()
         current_idx = idx % len(stations)
-        play()
+        play(epoch)
         return "OK"
     except Exception as e:
         return f"Error: {str(e)}", 500
@@ -3776,7 +3786,7 @@ def add_link():
             }
             stations.append(station)
             current_idx = len(stations) - 1
-            play()
+            play(user_select_playback())
             return jsonify({"success": True, "link": result})
         else:
             return jsonify({"success": False, "error": result})
@@ -3794,7 +3804,7 @@ def play_link(link_id):
             for i, s in enumerate(stations):
                 if s.get('direct_link_id') == link_id:
                     current_idx = i
-                    play()
+                    play(user_select_playback())
                     return jsonify({"success": True})
             
             # Add new
@@ -3807,7 +3817,7 @@ def play_link(link_id):
             }
             stations.append(station)
             current_idx = len(stations) - 1
-            play()
+            play(user_select_playback())
             return jsonify({"success": True})
         return jsonify({"success": False, "error": "Link not found"})
     except Exception as e:
@@ -4145,6 +4155,81 @@ def youtube_audio_url(video_id, timeout=40):
                 return candidate, None
     return '', err or 'Could not extract audio URL'
 
+_playback_lock = threading.Lock()
+
+def cancel_background_playback():
+    """Ignore a YouTube resume or fetch that has not taken over the speakers."""
+    global playback_epoch, youtube_touch_busy, youtube_touch_pending
+    with _playback_lock:
+        playback_epoch += 1
+        youtube_touch_busy = False
+        youtube_touch_pending = None
+        return playback_epoch
+
+def user_select_playback():
+    """The listener picked something else. Drop the restored YouTube item."""
+    global playback_should_run, playback_down_since
+    epoch = cancel_background_playback()
+    with _playback_lock:
+        playback_should_run = True
+        playback_down_since = 0
+    return epoch
+
+def claim_youtube_fetch():
+    """Own the next YouTube start so a restore cannot speak over it."""
+    global playback_epoch, youtube_touch_busy, youtube_touch_pending
+    global playback_should_run, playback_down_since
+    with _playback_lock:
+        playback_epoch += 1
+        youtube_touch_pending = None
+        youtube_touch_busy = True
+        playback_should_run = False
+        playback_down_since = 0
+        return playback_epoch
+
+def release_youtube_busy(epoch):
+    global youtube_touch_busy
+    with _playback_lock:
+        if epoch == playback_epoch:
+            youtube_touch_busy = False
+
+def publish_youtube_pending(item, epoch):
+    global youtube_touch_pending
+    with _playback_lock:
+        if epoch is not None and epoch != playback_epoch:
+            return False
+        youtube_touch_pending = item
+        return True
+
+def stop_audio_output():
+    try:
+        player.stop()
+    except Exception:
+        pass
+
+def pause_playback_now():
+    """Pause the radio and drop a YouTube restore that has not started yet."""
+    global playback_should_run, playback_down_since
+    cancel_background_playback()
+    with _playback_lock:
+        playback_should_run = False
+        playback_down_since = 0
+    try:
+        player.pause()
+    except Exception:
+        pass
+
+def stop_playback_now():
+    global playback_epoch, youtube_touch_busy, youtube_touch_pending
+    global playback_should_run, playback_down_since
+    with _playback_lock:
+        playback_epoch += 1
+        youtube_touch_busy = False
+        youtube_touch_pending = None
+        playback_should_run = False
+        playback_down_since = 0
+        stop_audio_output()
+
 # YouTube API Routes
 @app.route('/api/youtube/search', methods=['POST'])
 def youtube_search():
@@ -4162,18 +4247,30 @@ def youtube_search():
 
 @app.route('/api/youtube/play', methods=['POST'])
 def youtube_play():
+    epoch = None
     try:
         data = request.get_json(silent=True) or {}
         video_id = str(data.get('video_id', '')).strip()
         title = str(data.get('title') or 'YouTube Audio')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{6,32}', video_id):
+            return jsonify({'success': False, 'error': 'No video ID'}), 400
+        epoch = claim_youtube_fetch()
+        stop_audio_output()
+        stage_youtube_choice(video_id, title, epoch)
         audio_url, err = youtube_audio_url(video_id)
+        if epoch != playback_epoch:
+            return jsonify({'success': False, 'error': 'Cancelled'})
         if not audio_url:
             return jsonify({'success': False, 'error': err}), 502
         remember_youtube_queue(video_id, title)
-        play_youtube_station(video_id, title, audio_url)
+        if not play_youtube_station(video_id, title, audio_url, epoch):
+            return jsonify({'success': False, 'error': 'Cancelled'})
         return jsonify({'success': True, 'message': f'Playing: {title}'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        if epoch is not None:
+            release_youtube_busy(epoch)
 
 @app.route('/static/<path:filename>')
 def serve_static(filename):
@@ -5522,26 +5619,32 @@ def current_display_track():
         return station.get("name") or "TCRADIOS"
     return meta_text or "TCRADIOS"
 
-def play():
+def play(epoch=None):
     global meta_text, scroll_x, saver_scroll_x, saved_station_url, saved_station_index
     global playback_should_run, playback_down_since
     scroll_x = SCREEN_W
     saver_scroll_x = SCREEN_W
+    if epoch is not None and epoch != playback_epoch:
+        return False
     if not stations:
-        return
+        return False
     station = stations[current_idx]
     if not station.get("url"):
         meta_text = "LOADING STATIONS"
-        return
+        return False
     if station.get("youtube_id"):
         meta_text = youtube_display_title(station)
     else:
         meta_text = style_now_playing(station.get("name") or "")
     try:
-        playback_should_run = True
-        playback_down_since = 0
-        player.set_media(instance.media_new(station['url']))
-        player.play()
+        media = instance.media_new(station['url'])
+        player.set_media(media)
+        with _playback_lock:
+            if epoch is not None and epoch != playback_epoch:
+                return False
+            playback_should_run = True
+            playback_down_since = 0
+            player.play()
         player.audio_set_volume(vol_level)
         request_hardware_volume(vol_level)
         begin_logo_update(station.get('logo', ''))
@@ -5549,8 +5652,9 @@ def play():
         saved_station_index = current_idx
         save_playback_state(force=True)
         rebuild_qr_surface()
-    except:
-        pass
+        return True
+    except Exception:
+        return False
 
 def apply_github_station_list(loaded):
     global current_idx, base_stations, stations_waiting_for_github
@@ -5587,7 +5691,8 @@ def apply_github_station_list(loaded):
     current_idx = choose_station_index(stations)
     stations_waiting_for_github = False
     load_favorite_indices()
-    play()
+    if playback_should_run:
+        play(playback_epoch)
 
 def retry_github_stations():
     for _attempt in range(24):
@@ -5634,9 +5739,45 @@ def remember_youtube_queue(video_id, title=""):
     )
     youtube_touch_offset = (max(0, youtube_queue_index) // 4) * 4
 
-def play_youtube_station(video_id, title, audio_url):
+def stage_youtube_choice(video_id, title, epoch=None):
+    """Show the chosen video at once, before its audio address is ready."""
+    global current_idx, meta_text
+    shown = str(title or "YouTube").strip() or "YouTube"
+    station = {
+        'name': f"YT: {shown[:40]}",
+        'url': '',
+        'genre': 'YouTube',
+        'logo': f'https://img.youtube.com/vi/{video_id}/mqdefault.jpg',
+        'youtube_id': video_id,
+    }
+    with _playback_lock:
+        if epoch is not None and epoch != playback_epoch:
+            return False
+        meta_text = shown
+        existing = next(
+            (
+                index for index, item in enumerate(stations)
+                if item.get('youtube_id') == video_id
+            ),
+            None
+        )
+        if existing is None:
+            stations.append(station)
+            current_idx = len(stations) - 1
+        else:
+            stations[existing] = station
+            current_idx = existing
+    try:
+        begin_logo_update(station['logo'])
+    except Exception:
+        pass
+    return True
+
+def play_youtube_station(video_id, title, audio_url, epoch=None):
     global current_idx, _youtube_play_started_at, _youtube_ended_handled
     global _youtube_was_playing
+    if not audio_url:
+        return False
     station = {
         'name': f"YT: {str(title)[:40]}",
         'url': audio_url,
@@ -5644,25 +5785,30 @@ def play_youtube_station(video_id, title, audio_url):
         'logo': f'https://img.youtube.com/vi/{video_id}/mqdefault.jpg',
         'youtube_id': video_id,
     }
-    existing = next(
-        (
-            index for index, item in enumerate(stations)
-            if item.get('youtube_id') == video_id
-        ),
-        None
-    )
-    if existing is None:
-        stations.append(station)
-        current_idx = len(stations) - 1
-    else:
-        stations[existing] = station
-        current_idx = existing
+    with _playback_lock:
+        if epoch is not None and epoch != playback_epoch:
+            return False
+        existing = next(
+            (
+                index for index, item in enumerate(stations)
+                if item.get('youtube_id') == video_id
+            ),
+            None
+        )
+        if existing is None:
+            stations.append(station)
+            current_idx = len(stations) - 1
+        else:
+            stations[existing] = station
+            current_idx = existing
     remember_youtube_queue(video_id, title)
     youtube_skip_ids.discard(video_id)
+    if epoch is not None and epoch != playback_epoch:
+        return False
     _youtube_play_started_at = time.time()
     _youtube_ended_handled = False
     _youtube_was_playing = False
-    play()
+    return bool(play(epoch))
 
 def save_favorites():
     try:
@@ -6172,43 +6318,60 @@ def play_language_stream(stream):
         current_idx = len(stations) - 1
     else:
         current_idx = existing_index
-    play()
+    play(user_select_playback())
 
 def resume_last_playback():
-    global current_idx
-    youtube_id = str(saved_playback.get("youtube_id") or "").strip()
-    if youtube_id:
-        title = str(saved_playback.get("name") or "YouTube")
-        if title.startswith("YT: "):
-            title = title[4:]
-        audio_url, err = youtube_audio_url(youtube_id, timeout=18)
-        if audio_url:
-            play_youtube_station(youtube_id, title, audio_url)
+    global current_idx, youtube_touch_busy
+    with _playback_lock:
+        if playback_epoch != 0:
+            print("Playback restore skipped", flush=True)
             return
-        print(f"Could not restore YouTube item: {err}")
-    saved_url = str(saved_station_url or "").strip()
-    if youtube_id:
-        saved_url = ""
-    if saved_url and all(station.get("url") != saved_url for station in stations):
-        restored = {
-            "name": saved_playback.get("name") or "Last played",
-            "url": saved_url,
-            "genre": saved_playback.get("genre") or "Radio",
-            "logo": saved_playback.get("logo") or "",
-        }
-        for key in ("language", "direct_link_id"):
-            value = saved_playback.get(key)
-            if value not in (None, ""):
-                restored[key] = value
-        stations.append(restored)
-        current_idx = len(stations) - 1
-    play()
+        epoch = playback_epoch
+        youtube_touch_busy = True
+    try:
+        youtube_id = str(saved_playback.get("youtube_id") or "").strip()
+        if youtube_id:
+            title = str(saved_playback.get("name") or "YouTube")
+            if title.startswith("YT: "):
+                title = title[4:]
+            audio_url, err = youtube_audio_url(youtube_id, timeout=18)
+            if playback_epoch != epoch:
+                print("YouTube restore cancelled", flush=True)
+                return
+            if audio_url:
+                play_youtube_station(youtube_id, title, audio_url, epoch)
+                return
+            print(f"Could not restore YouTube item: {err}")
+        if playback_epoch != epoch:
+            print("Playback restore cancelled", flush=True)
+            return
+        saved_url = str(saved_station_url or "").strip()
+        if youtube_id:
+            saved_url = ""
+        if saved_url and all(station.get("url") != saved_url for station in stations):
+            restored = {
+                "name": saved_playback.get("name") or "Last played",
+                "url": saved_url,
+                "genre": saved_playback.get("genre") or "Radio",
+                "logo": saved_playback.get("logo") or "",
+            }
+            for key in ("language", "direct_link_id"):
+                value = saved_playback.get(key)
+                if value not in (None, ""):
+                    restored[key] = value
+            stations.append(restored)
+            current_idx = len(stations) - 1
+        if playback_epoch != epoch:
+            return
+        play(epoch)
+    finally:
+        release_youtube_busy(epoch)
 
 splash_remaining = 5.0 - (time.time() - splash_started_at)
 if splash_remaining > 0:
     time.sleep(splash_remaining)
 
-resume_last_playback()
+threading.Thread(target=resume_last_playback, daemon=True).start()
 if stations_waiting_for_github:
     threading.Thread(target=retry_github_stations, daemon=True).start()
 ip_display_time = 0
@@ -6253,33 +6416,61 @@ def toggle_playback():
         state = player.get_state()
     except Exception:
         state = None
+    youtube = False
+    try:
+        youtube = bool(current_youtube_id())
+    except Exception:
+        youtube = False
+    if youtube:
+        if not playback_should_run:
+            playback_should_run = True
+            playback_down_since = 0
+            restart_playback("play button", playback_epoch)
+            return
+        if state == vlc.State.Paused:
+            playback_should_run = True
+            playback_down_since = 0
+            try:
+                player.play()
+            except Exception:
+                restart_playback("play button", playback_epoch)
+            return
+        stop_playback_now()
+        return
     if state == vlc.State.Playing:
-        playback_should_run = False
-        player.pause()
+        pause_playback_now()
         return
     if state == vlc.State.Paused:
         playback_should_run = True
         playback_down_since = 0
-        player.pause()
+        try:
+            player.pause()
+        except Exception:
+            pass
         return
     playback_should_run = True
     playback_down_since = 0
-    restart_playback("play button")
+    restart_playback("play button", playback_epoch)
 
-def restart_playback(reason):
+def restart_playback(reason, epoch=None):
+    if epoch is not None and epoch != playback_epoch:
+        return
     video_id = current_youtube_id() if stations else ""
     print(f"Restarting playback ({reason})", flush=True)
     if video_id:
         title = stations[current_idx].get("name", "YouTube")
         if title.upper().startswith("YT:"):
             title = title[3:].strip()
-        begin_youtube_play({"id": video_id, "title": title or "YouTube"}, auto=True)
+        begin_youtube_play(
+            {"id": video_id, "title": title or "YouTube"}, auto=True
+        )
         return
-    play()
+    play(epoch)
 
 def keep_playback_alive(now):
     global playback_down_since, playback_retry_after, playback_retry_wait
     global playback_stall_since
+    epoch = playback_epoch
     if (
         not playback_should_run
         or alarm_fade_active
@@ -6318,7 +6509,9 @@ def keep_playback_alive(now):
     playback_retry_wait = min(300, max(15, playback_retry_wait * 2))
     playback_down_since = now
     playback_stall_since = 0
-    restart_playback(getattr(state, "name", state))
+    if epoch != playback_epoch or not playback_should_run:
+        return
+    restart_playback(getattr(state, "name", state), epoch)
 
 def target_display_brightness(now):
     if (
@@ -7768,9 +7961,7 @@ youtube_keyboard_open = False
 youtube_keyboard_text = ""
 youtube_touch_query = ""
 youtube_touch_status = "Choose a station or search"
-youtube_touch_busy = False
 youtube_touch_offset = 0
-youtube_touch_pending = None
 
 def build_youtube_keys():
     keys = []
@@ -7808,20 +7999,24 @@ def fetch_youtube_search(query):
     except Exception as error:
         youtube_touch_pending = ('results', [], str(error))
 
-def fetch_youtube_audio(video, auto=False):
-    global youtube_touch_pending
+def fetch_youtube_audio(video, auto=False, epoch=None):
     video_id = str(video.get('id', '')).strip()
     title = video.get('title') or 'YouTube Audio'
     try:
         audio_url, err = youtube_audio_url(video_id)
         if audio_url:
-            youtube_touch_pending = ('play', video_id, title, audio_url, auto)
+            publish_youtube_pending(
+                ('play', video_id, title, audio_url, auto, epoch), epoch
+            )
         else:
-            youtube_touch_pending = (
-                'error', err or 'Could not extract audio URL', auto, video_id
+            publish_youtube_pending(
+                ('error', err or 'Could not extract audio URL', auto, video_id, epoch),
+                epoch,
             )
     except Exception as error:
-        youtube_touch_pending = ('error', str(error), auto, video_id)
+        publish_youtube_pending(
+            ('error', str(error), auto, video_id, epoch), epoch
+        )
 
 def begin_youtube_search(query):
     global youtube_touch_busy, youtube_touch_status, youtube_touch_query
@@ -7843,21 +8038,29 @@ def begin_youtube_search(query):
 
 def begin_youtube_play(video, auto=False):
     global youtube_touch_busy, youtube_touch_status
-    if youtube_touch_busy or not video.get('id'):
+    if not video.get('id'):
         return False
-    if not auto:
+    if auto:
+        with _playback_lock:
+            if youtube_touch_busy or not playback_should_run:
+                return False
+            epoch = playback_epoch
+            youtube_touch_busy = True
+    else:
+        epoch = claim_youtube_fetch()
+        stop_audio_output()
         youtube_skip_ids.clear()
+        stage_youtube_choice(video.get('id'), video.get('title') or '', epoch)
         remember_youtube_queue(video.get('id'), video.get('title') or '')
-    youtube_touch_busy = True
     youtube_touch_status = "Opening next…" if auto else "Opening audio…"
     threading.Thread(
-        target=fetch_youtube_audio, args=(video, auto), daemon=True
+        target=fetch_youtube_audio, args=(video, auto, epoch), daemon=True
     ).start()
     return True
 
 def continue_youtube_queue(step=1, user=False):
     global youtube_queue_index
-    if youtube_touch_busy:
+    if youtube_touch_busy and not user:
         return True
     if len(youtube_queue) <= 1:
         return False
@@ -7882,6 +8085,8 @@ def youtube_queue_status():
 
 def maybe_advance_youtube_queue():
     global _youtube_was_playing, _youtube_ended_handled
+    if not playback_should_run:
+        return
     if not current_youtube_id() or len(youtube_queue) <= 1:
         return
     try:
@@ -7911,12 +8116,22 @@ def maybe_advance_youtube_queue():
 def apply_youtube_touch_result():
     global youtube_touch_pending, youtube_touch_busy, youtube_touch_status
     global youtube_touch_offset, youtube_results_cache, active_page
-    pending = youtube_touch_pending
-    if not pending:
-        return
-    youtube_touch_pending = None
-    youtube_touch_busy = False
-    kind = pending[0]
+    with _playback_lock:
+        pending = youtube_touch_pending
+        if not pending:
+            return
+        kind = pending[0]
+        epoch = None
+        if kind == 'play' and len(pending) > 5:
+            epoch = pending[5]
+        elif kind == 'error' and len(pending) > 4:
+            epoch = pending[4]
+        if epoch is not None and epoch != playback_epoch:
+            if youtube_touch_pending is pending:
+                youtube_touch_pending = None
+            return
+        youtube_touch_pending = None
+        youtube_touch_busy = False
     if kind == 'results':
         videos, err = pending[1], pending[2]
         if err and not videos:
@@ -7935,11 +8150,17 @@ def apply_youtube_touch_result():
             pending[0], pending[1], pending[2], pending[3],
             pending[4] if len(pending) > 4 else False
         )
-        play_youtube_station(video_id, title, audio_url)
+        epoch = pending[5] if len(pending) > 5 else None
+        if epoch is not None and epoch != playback_epoch:
+            return
+        play_youtube_station(video_id, title, audio_url, epoch)
         youtube_touch_status = youtube_queue_status()
         if not auto:
             active_page = "radio"
     elif kind == 'error':
+        epoch = pending[4] if len(pending) > 4 else None
+        if epoch is not None and epoch != playback_epoch:
+            return
         youtube_touch_status = str(pending[1])[:80]
         auto = pending[2] if len(pending) > 2 else False
         video_id = pending[3] if len(pending) > 3 else ''
@@ -8098,7 +8319,6 @@ btn_prev = _playback_controls["prev"]
 btn_toggle = _playback_controls["toggle"]
 btn_next = _playback_controls["next"]
 
-playback_should_run = True
 playback_down_since = 0
 playback_stall_since = 0
 playback_retry_after = 0
@@ -8646,7 +8866,7 @@ while True:
                                     and favorite_index < len(favorite_indices)
                                 ):
                                     current_idx = favorite_indices[favorite_index]
-                                    play()
+                                    play(user_select_playback())
                                     break
                     elif active_page == "alarm":
                         if btn_alarm_toggle_page.collidepoint(event.pos):
