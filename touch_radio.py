@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import pygame, vlc, requests, time, os, io, math, socket, sys, threading, qrcode, json, base64, random, re, shutil, signal, traceback
+import pygame, vlc, requests, time, os, io, math, socket, sys, threading, qrcode, json, base64, random, re, shutil, signal, traceback, gc, ctypes
 from urllib.request import urlopen
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
@@ -4939,6 +4939,54 @@ def draw_glass_card(surface, rect, accent, radius=22):
     surface.blit(overlay, rect.topleft)
     return body
 
+_scaled_logo = {"key": None, "surface": None}
+_clock_face = {"key": None, "surface": None}
+_dim_overlay = None
+
+def scaled_logo(width, height):
+    key = (id(logo), max(1, width), max(1, height))
+    if _scaled_logo["key"] == key and _scaled_logo["surface"] is not None:
+        return _scaled_logo["surface"]
+    surface = pygame.transform.smoothscale(logo, (key[1], key[2]))
+    _scaled_logo["key"] = key
+    _scaled_logo["surface"] = surface
+    return surface
+
+def scaled_clock_face(text, color, target_w, max_h):
+    key = (text, color, target_w, max_h)
+    if _clock_face["key"] == key and _clock_face["surface"] is not None:
+        return _clock_face["surface"]
+    rendered = f_xl.render(text, True, color)
+    width = max(1, target_w)
+    height = int(rendered.get_height() * width / max(1, rendered.get_width()))
+    if max_h > 0 and height > max_h:
+        height = max(1, max_h)
+        width = max(1, int(rendered.get_width() * height / max(1, rendered.get_height())))
+    surface = pygame.transform.smoothscale(rendered, (width, max(1, height)))
+    _clock_face["key"] = key
+    _clock_face["surface"] = surface
+    return surface
+
+def screen_dim():
+    global _dim_overlay
+    if _dim_overlay is None or _dim_overlay.get_size() != (SCREEN_W, SCREEN_H):
+        _dim_overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+        _dim_overlay.fill((0, 0, 0, 150))
+    return _dim_overlay
+
+def release_spare_memory():
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+    try:
+        pages = int(open("/proc/self/statm").read().split()[1])
+        used = pages * os.sysconf("SC_PAGE_SIZE") // (1024 * 1024)
+        print(f"Radio memory {used} MB", flush=True)
+    except Exception:
+        pass
+
 def draw_animated_ui_glow(surface, now):
     ui_animation_layer.fill((0, 0, 0, 0))
     pulse = (math.sin(now * 1.1) + 1) / 2
@@ -6621,9 +6669,7 @@ def draw_home_card(
         inner_r = radius - 4
         logo_rect = square_around(cx, cy, inner_r)
         screen.blit(
-            pygame.transform.smoothscale(
-                logo, (logo_rect.width, logo_rect.height)
-            ),
+            scaled_logo(logo_rect.width, logo_rect.height),
             logo_rect
         )
         try:
@@ -6730,21 +6776,11 @@ def draw_home_card(
         )
     elif kind == "clock":
         clock_now = datetime.now()
-        time_surf = f_xl.render(
-            clock_now.strftime("%H:%M"), True, ink_on(body)
-        )
-        target_w = int(rect.width * 0.82)
-        target_h = int(
-            time_surf.get_height() * target_w / max(1, time_surf.get_width())
-        )
-        max_h = int(rect.height * 0.46)
-        if target_h > max_h:
-            target_h = max_h
-            target_w = int(
-                time_surf.get_width() * target_h / max(1, time_surf.get_height())
-            )
-        time_surf = pygame.transform.smoothscale(
-            time_surf, (max(1, target_w), max(1, target_h))
+        time_surf = scaled_clock_face(
+            clock_now.strftime("%H:%M"),
+            ink_on(body),
+            int(rect.width * 0.82),
+            int(rect.height * 0.46),
         )
         y = Y(inner_top) + S(6)
         screen.blit(
@@ -7832,6 +7868,8 @@ playback_down_since = 0
 playback_stall_since = 0
 playback_retry_after = 0
 playback_retry_wait = 8
+last_meta_check = 0
+last_memory_trim = 0
 _radio_frame_error_at = 0
 
 while True:
@@ -7866,19 +7904,31 @@ while True:
             last_system_update = now
             threading.Thread(target=refresh_system_stats, daemon=True).start()
 
-        try:
-            media = player.get_media()
-            if media:
-                try:
-                    m = media.get_meta(vlc.Meta.NowPlaying)
-                    if m:
-                        meta_text = style_now_playing(m)
-                    else:
+        if now - last_meta_check > 2:
+            last_meta_check = now
+            media = None
+            try:
+                media = player.get_media()
+                if media:
+                    try:
+                        m = media.get_meta(vlc.Meta.NowPlaying)
+                        if m:
+                            meta_text = style_now_playing(m)
+                        else:
+                            meta_text = style_now_playing(stations[current_idx]['name'])
+                    except Exception:
                         meta_text = style_now_playing(stations[current_idx]['name'])
-                except: 
-                    meta_text = style_now_playing(stations[current_idx]['name'])
-        except: 
-            meta_text = style_now_playing(stations[current_idx]['name'])
+            except Exception:
+                meta_text = style_now_playing(stations[current_idx]['name'])
+            finally:
+                if media is not None:
+                    try:
+                        media.release()
+                    except Exception:
+                        pass
+            if now - last_memory_trim > 600:
+                last_memory_trim = now
+                release_spare_memory()
 
         if show_volume_bar and now - volume_bar_timer > 3:
             show_volume_bar = False
@@ -7995,9 +8045,7 @@ while True:
             )
 
             if fab_open:
-                dim = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
-                dim.fill((0, 0, 0, 150))
-                screen.blit(dim, (0, 0))
+                screen.blit(screen_dim(), (0, 0))
                 panel = R(8, 236, 304, 136)
                 pygame.draw.rect(screen, UI_SURFACE, panel, border_radius=S(18))
                 pygame.draw.rect(screen, (54, 64, 91), panel, S(1), border_radius=S(18))
@@ -8486,6 +8534,11 @@ while True:
                     continue
                 if btn_exit.collidepoint(event.pos):
                     save_playback_state(force=True)
+                    try:
+                        with open(os.path.expanduser("~/.tcradios-user-quit"), "w") as flag:
+                            flag.write("quit\n")
+                    except OSError:
+                        pass
                     pygame.quit()
                     sys.exit()
                 if btn_qr.collidepoint(event.pos):

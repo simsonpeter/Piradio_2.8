@@ -30,4 +30,16 @@ sleep 1
 timeout 2 plymouth quit >/dev/null 2>&1 || true
 
 cd "${REPO_DIR}"
-exec /usr/bin/python3 "${REPO_DIR}/touch_radio.py"
+QUIT_FLAG="${HOME}/.tcradios-user-quit"
+rm -f "${QUIT_FLAG}"
+while true; do
+    /usr/bin/python3 "${REPO_DIR}/touch_radio.py"
+    code=$?
+    if [[ -f "${QUIT_FLAG}" ]]; then
+        rm -f "${QUIT_FLAG}"
+        echo "tcradios user quit $(date -Is)"
+        exit 0
+    fi
+    echo "tcradios exited ${code} $(date -Is), starting again"
+    sleep 2
+done
