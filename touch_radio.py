@@ -565,6 +565,30 @@ audio_manager = AudioOutputManager()
 vol_level = 80
 last_unmuted_volume = 80
 
+_hw_volume_lock = threading.Lock()
+_hw_volume = {"pending": None, "running": False}
+
+def _hardware_volume_worker():
+    while True:
+        with _hw_volume_lock:
+            level = _hw_volume["pending"]
+            _hw_volume["pending"] = None
+            if level is None:
+                _hw_volume["running"] = False
+                return
+        try:
+            audio_manager.set_volume(level)
+        except Exception as error:
+            print(f"Volume error: {error}")
+
+def request_hardware_volume(level):
+    with _hw_volume_lock:
+        _hw_volume["pending"] = int(level)
+        if _hw_volume["running"]:
+            return
+        _hw_volume["running"] = True
+    threading.Thread(target=_hardware_volume_worker, daemon=True).start()
+
 def apply_live_volume(level):
     global vol_level, last_unmuted_volume
     vol_level = max(0, min(100, int(level)))
@@ -574,10 +598,7 @@ def apply_live_volume(level):
         player.audio_set_volume(vol_level)
     except Exception:
         pass
-    try:
-        audio_manager.set_volume(vol_level)
-    except Exception as error:
-        print(f"Volume error: {error}")
+    request_hardware_volume(vol_level)
     try:
         save_playback_state()
     except NameError:
@@ -2819,21 +2840,17 @@ HTML_TEMPLATE = """
         }
         
         function adjustVolume(delta) {
-            const newVol = Math.max(0, Math.min(100, currentVolume + delta));
-            fetch(apiBase + '/api/volume/set/' + newVol).then(() => {
-                currentVolume = newVol;
-                updateVolumeUI();
-            });
+            currentVolume = Math.max(0, Math.min(100, currentVolume + delta));
+            updateVolumeUI();
+            fetch(apiBase + '/api/volume/set/' + currentVolume).catch(() => {});
         }
         
         function setVolume(e) {
             const rect = e.currentTarget.getBoundingClientRect();
             const pct = (e.clientX - rect.left) / rect.width;
-            const newVol = Math.round(pct * 100);
-            fetch(apiBase + '/api/volume/set/' + newVol).then(() => {
-                currentVolume = newVol;
-                updateVolumeUI();
-            });
+            currentVolume = Math.round(Math.max(0, Math.min(1, pct)) * 100);
+            updateVolumeUI();
+            fetch(apiBase + '/api/volume/set/' + currentVolume).catch(() => {});
         }
         
         function updateVolumeUI() {
@@ -5381,22 +5398,70 @@ def rebuild_qr_surface():
 
 rebuild_qr_surface()
 
+_ip_lookup = {"busy": False, "value": None}
+
 def update_qr_code():
     global current_ip, last_ip_check
+    found = _ip_lookup["value"]
+    if found:
+        _ip_lookup["value"] = None
+        if found != current_ip:
+            current_ip = found
     now = time.time()
-    if now - last_ip_check > 30:
-        new_ip = get_local_ip()
-        if new_ip != current_ip:
-            current_ip = new_ip
+    if now - last_ip_check > 30 and not _ip_lookup["busy"]:
         last_ip_check = now
+        _ip_lookup["busy"] = True
+        def lookup():
+            try:
+                _ip_lookup["value"] = get_local_ip()
+            finally:
+                _ip_lookup["busy"] = False
+        threading.Thread(target=lookup, daemon=True).start()
     rebuild_qr_surface()
 
-def update_logo(url):
+_logo_lock = threading.Lock()
+_logo_request = {"token": 0}
+_logo_ready = {"token": 0, "raw": None}
+
+def begin_logo_update(url):
+    url = str(url or "").strip()
+    with _logo_lock:
+        _logo_request["token"] += 1
+        token = _logo_request["token"]
+    if not url:
+        with _logo_lock:
+            if _logo_request["token"] == token:
+                _logo_ready["token"] = token
+                _logo_ready["raw"] = None
+        return
+    def fetch_logo():
+        raw = None
+        try:
+            raw = urlopen(url, timeout=2).read()
+        except Exception:
+            raw = None
+        with _logo_lock:
+            if _logo_request["token"] != token:
+                return
+            _logo_ready["token"] = token
+            _logo_ready["raw"] = raw
+    threading.Thread(target=fetch_logo, daemon=True).start()
+
+def apply_pending_logo():
+    with _logo_lock:
+        token = _logo_ready["token"]
+        if not token:
+            return
+        raw = _logo_ready["raw"]
+        _logo_ready["token"] = 0
+        _logo_ready["raw"] = None
+    paint_logo(raw)
+
+def paint_logo(raw):
     global logo
     try:
-        if not url:
-            raise ValueError("No logo URL")
-        raw = urlopen(url, timeout=2).read()
+        if not raw:
+            raise ValueError("No logo")
         img = pygame.image.load(io.BytesIO(raw)).convert_alpha()
         img = pygame.transform.smoothscale(img, (LOGO_SIZE, LOGO_SIZE))
         
@@ -5459,8 +5524,8 @@ def play():
         player.set_media(instance.media_new(station['url']))
         player.play()
         player.audio_set_volume(vol_level)
-        audio_manager.set_volume(vol_level)
-        update_logo(station.get('logo', ''))
+        request_hardware_volume(vol_level)
+        begin_logo_update(station.get('logo', ''))
         saved_station_url = station.get("url", "")
         saved_station_index = current_idx
         save_playback_state(force=True)
@@ -7976,6 +8041,7 @@ playback_retry_wait = 8
 last_meta_check = 0
 last_memory_trim = 0
 _radio_frame_error_at = 0
+ui_clock = pygame.time.Clock()
 
 while True:
     now = time.time()
@@ -7984,6 +8050,8 @@ while True:
     except Exception as error:
         print(f"Playback watchdog error: {error}", flush=True)
     try:
+        frame_events = pygame.event.get()
+        apply_pending_logo()
         update_qr_code()
 
         if alarm_system.check_alarm() and not alarm_fade_active:
@@ -8245,7 +8313,7 @@ while True:
                 elif active_page == "wifi":
                     draw_wifi_screen(now)
 
-        for event in pygame.event.get():
+        for event in frame_events:
             if event.type == pygame.MOUSEBUTTONDOWN:
                 was_auto_dimmed = (
                     target_display_brightness(now) < device_settings.brightness
@@ -8725,7 +8793,7 @@ while True:
 
         apply_display_brightness(now)
         pygame.display.flip()
-        time.sleep(0.05)
+        ui_clock.tick(40)
     except Exception:
         if time.time() - _radio_frame_error_at > 30:
             _radio_frame_error_at = time.time()
