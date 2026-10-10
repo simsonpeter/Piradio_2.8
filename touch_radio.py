@@ -4971,7 +4971,7 @@ def draw_glass_card(surface, rect, accent, radius=22):
     return body
 
 _scaled_logo = {"key": None, "surface": None}
-_clock_face = {"key": None, "surface": None}
+_clock_faces = {}
 _dim_overlay = None
 
 def scaled_logo(width, height):
@@ -4985,8 +4985,9 @@ def scaled_logo(width, height):
 
 def scaled_clock_face(text, color, target_w, max_h):
     key = (text, color, target_w, max_h)
-    if _clock_face["key"] == key and _clock_face["surface"] is not None:
-        return _clock_face["surface"]
+    cached = _clock_faces.get(key)
+    if cached is not None:
+        return cached
     rendered = f_xl.render(text, True, color)
     width = max(1, target_w)
     height = int(rendered.get_height() * width / max(1, rendered.get_width()))
@@ -4994,8 +4995,9 @@ def scaled_clock_face(text, color, target_w, max_h):
         height = max(1, max_h)
         width = max(1, int(rendered.get_width() * height / max(1, rendered.get_height())))
     surface = pygame.transform.smoothscale(rendered, (width, max(1, height)))
-    _clock_face["key"] = key
-    _clock_face["surface"] = surface
+    if len(_clock_faces) > 6:
+        _clock_faces.clear()
+    _clock_faces[key] = surface
     return surface
 
 def screen_dim():
@@ -6851,33 +6853,53 @@ def draw_home_card(
         )
     elif kind == "clock":
         clock_now = datetime.now()
+        temp_bit = f"{current_temp}°C" if current_temp else "--°C"
+        condition = weather_label.upper() if weather_label else ""
+        top_px = Y(inner_top) + S(4)
+        bottom_px = Y(inner_bottom) - S(6)
+        meta_h = (
+            f_sm.get_height() + S(4)
+            + f_tiny.get_height() + S(4)
+            + f_tiny.get_height()
+        )
+        gaps = S(8) + S(8)
+        room = max(S(48), bottom_px - top_px - meta_h - gaps)
         time_surf = scaled_clock_face(
             clock_now.strftime("%H:%M"),
             ink_on(body),
-            int(rect.width * 0.82),
-            int(rect.height * 0.48),
+            int(rect.width * 0.9),
+            max(S(28), int(room / 1.75)),
         )
-        y = Y(inner_top) + S(6)
+        temp_h = max(S(20), int(time_surf.get_height() * 3 / 4))
+        temp_surf = scaled_clock_face(
+            temp_bit,
+            ink_on(body, accent),
+            max(rect.width, temp_h * 4),
+            temp_h,
+        )
+        y = top_px
         screen.blit(
             time_surf,
             (rect.centerx - time_surf.get_width() // 2, y)
         )
-        y += time_surf.get_height() + S(12)
+        y += time_surf.get_height() + S(8)
+        screen.blit(
+            temp_surf,
+            (rect.centerx - temp_surf.get_width() // 2, y)
+        )
+        y += temp_surf.get_height() + S(8)
         day = blit_px(
             clock_now.strftime("%A").upper(), f_sm, ink_on(body), y, 16
         )
-        y += day.get_height() + S(6)
+        y += day.get_height() + S(4)
         date = blit_px(
             clock_now.strftime("%d %B %Y"), f_tiny, muted_ink_on(body), y, 22
         )
-        temp_bit = f"{current_temp}°C" if current_temp else "--°C"
-        condition = weather_label.upper() if weather_label else ""
-        blit_px(
-            f"{temp_bit}   {condition}".strip(),
-            f_sm, ink_on(body, accent),
-            y + date.get_height() + S(12),
-            18 if half else 24
-        )
+        if condition:
+            blit_px(
+                condition, f_tiny, muted_ink_on(body),
+                y + date.get_height() + S(4), 18 if half else 24
+            )
     elif kind == "favorites":
         saved = [
             stations[index]['name']
