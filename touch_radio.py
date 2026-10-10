@@ -4767,11 +4767,9 @@ def create_ui_background():
         pygame.draw.line(background, color, (0, y), (SCREEN_W - 1, y))
 
     glow = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
-    pygame.draw.ellipse(glow, (*UI_BLUE, 40), E(292, 108, 120))
-    pygame.draw.ellipse(glow, (*UI_PINK, 30), E(24, 150, 96))
-    pygame.draw.ellipse(glow, (*UI_PURPLE, 32), E(12, 360, 140))
-    pygame.draw.ellipse(glow, (*UI_AMBER, 24), E(160, 28, 88))
-    pygame.draw.ellipse(glow, (*UI_GREEN, 20), E(250, 420, 72))
+    pygame.draw.ellipse(glow, (*UI_BLUE, 34), E(286, 96, 128))
+    pygame.draw.ellipse(glow, (*UI_PURPLE, 20), E(18, 340, 130))
+    pygame.draw.ellipse(glow, (*UI_AMBER, 16), E(40, 180, 70))
     background.blit(glow, (0, 0))
     return background
 
@@ -4784,14 +4782,14 @@ def refresh_ui_palette():
     UI_PURPLE = ensure_bright(current_theme.pygame_secondary, 155)
     UI_AMBER = ensure_bright(current_theme.pygame_accent, 165)
     # Pink and green stay saturated so the screen is not one blue wash.
-    UI_PINK = (255, 72, 164)
-    UI_GREEN = (46, 230, 154)
+    UI_PINK = (255, 118, 158)
+    UI_GREEN = (72, 214, 168)
     UI_TEXT = (255, 255, 255)
-    UI_BG_TOP = (3, 0, 10)
-    UI_BG_BOTTOM = mix_colors((16, 6, 32), UI_PURPLE, 0.1)
-    UI_SURFACE = mix_colors((22, 12, 38), UI_BLUE, 0.08)
-    UI_SURFACE_RAISED = mix_colors((30, 16, 48), UI_PINK, 0.08)
-    UI_MUTED = (236, 226, 246)
+    UI_BG_TOP = (0, 0, 0)
+    UI_BG_BOTTOM = mix_colors((5, 8, 18), UI_BLUE, 0.06)
+    UI_SURFACE = mix_colors((10, 14, 24), UI_PURPLE, 0.06)
+    UI_SURFACE_RAISED = mix_colors((16, 20, 32), UI_BLUE, 0.08)
+    UI_MUTED = (186, 196, 214)
     ui_background = create_ui_background()
     ui_palette_theme = current_theme.name
 
@@ -4907,18 +4905,26 @@ def draw_circle_icon_button(surface, rect, fill, kind):
 def draw_modern_button(surface, rect, fill, border, radius=14, border_width=0):
     body = border if (border[0] + border[1] + border[2]) > 90 else fill
     pygame.draw.rect(surface, body, rect, border_radius=S(radius))
-    gloss = mix_colors(body, (255, 255, 255), 0.38)
-    inset = max(3, rect.width // 10)
+    gloss = mix_colors(body, (255, 255, 255), 0.16)
+    inset = max(4, rect.width // 8)
     shine = _Rect(
         rect.x + inset,
-        rect.y + max(2, rect.height // 8),
+        rect.y + max(2, rect.height // 7),
         max(1, rect.width - inset * 2),
-        max(2, min(S(4), rect.height // 6)),
+        max(1, min(S(2), rect.height // 10)),
     )
-    if shine.bottom < rect.centery:
+    if shine.width > 6 and shine.bottom < rect.centery:
         pygame.draw.rect(
-            surface, gloss, shine, border_radius=max(2, shine.height // 2)
+            surface, gloss, shine, border_radius=max(1, shine.height // 2)
         )
+    return body
+
+def draw_quiet_button(surface, rect, accent, radius=16):
+    body = mix_colors(UI_SURFACE_RAISED, accent, 0.16)
+    pygame.draw.rect(surface, body, rect, border_radius=S(radius))
+    pygame.draw.rect(
+        surface, accent, rect, max(1, S(2)), border_radius=S(radius)
+    )
     return body
 
 def labeled_button(surface, rect, fill, font, text, radius=14, border=None):
@@ -4946,20 +4952,19 @@ def draw_glass_card(surface, rect, accent, radius=22):
         _glass_overlays[key] = overlay
     overlay.fill((0, 0, 0, 0))
     body = UI_SURFACE_RAISED
-    tint = mix_colors(body, accent, 0.5)
+    tint = mix_colors(body, accent, 0.14)
     bounds = overlay.get_rect()
     pygame.draw.rect(
-        overlay, (*tint, 158), bounds, border_radius=S(radius)
+        overlay, (*tint, 150), bounds, border_radius=S(radius)
     )
-    gloss = mix_colors(tint, (255, 255, 255), 0.42)
     shine = _Rect(
-        S(12), S(8),
-        max(1, bounds.width - S(24)),
-        max(2, S(5)),
+        S(16), S(8),
+        max(1, bounds.width - S(32)),
+        max(1, S(2)),
     )
-    pygame.draw.rect(overlay, (*gloss, 110), shine, border_radius=S(4))
+    pygame.draw.rect(overlay, (*accent, 70), shine, border_radius=S(2))
     pygame.draw.rect(
-        overlay, (*accent, 235), bounds, max(2, S(3)),
+        overlay, (*accent, 210), bounds, max(1, S(2)),
         border_radius=S(radius)
     )
     surface.blit(overlay, rect.topleft)
@@ -5017,44 +5022,36 @@ def draw_animated_ui_glow(surface, now):
     ui_animation_layer.fill((0, 0, 0, 0))
     pulse = (math.sin(now * 1.1) + 1) / 2
     orbs = (
-        (278 + math.sin(now * 0.35) * 18, 112 + math.cos(now * 0.42) * 16, UI_BLUE, pulse),
-        (40 + math.cos(now * 0.31) * 14, 148 + math.sin(now * 0.36) * 12, UI_PINK, 1 - pulse),
-        (22 + math.cos(now * 0.28) * 16, 368 + math.sin(now * 0.38) * 14, UI_PURPLE, pulse),
-        (236 + math.sin(now * 0.24) * 12, 408 + math.cos(now * 0.29) * 10, UI_AMBER, 1 - pulse),
+        (278 + math.sin(now * 0.35) * 16, 100 + math.cos(now * 0.42) * 14, UI_BLUE, pulse),
+        (24 + math.cos(now * 0.28) * 14, 360 + math.sin(now * 0.34) * 12, UI_PURPLE, 1 - pulse),
+        (48 + math.sin(now * 0.22) * 10, 190 + math.cos(now * 0.26) * 8, UI_AMBER, pulse),
     )
     for cx, cy, color, phase in orbs:
-        for radius, alpha in ((102, 8), (56, 14)):
+        for radius, alpha in ((96, 5), (54, 9)):
             pygame.draw.ellipse(
                 ui_animation_layer,
-                (*color, min(30, alpha + int(phase * 8))),
+                (*color, min(18, alpha + int(phase * 5))),
                 E(cx, cy, radius)
             )
     surface.blit(ui_animation_layer, (0, 0))
 
 def draw_header_chrome(surface, rect):
     pygame.draw.rect(surface, UI_SURFACE, rect, border_radius=S(17))
-    edge = mix_colors(UI_PURPLE, UI_PINK, 0.42)
+    edge = mix_colors(UI_BLUE, UI_PURPLE, 0.35)
     pygame.draw.rect(
         surface, edge, rect, max(1, S(2)), border_radius=S(17)
     )
 
 def draw_header_stripe(surface, left, right, y):
-    span = max(3, int(right) - int(left))
-    third = max(1, span // 3)
-    width = max(2, S(3))
-    x0 = int(left)
+    width = max(2, S(2))
     y = int(y)
-    pygame.draw.line(surface, UI_BLUE, (x0, y), (x0 + third, y), width)
-    pygame.draw.line(surface, UI_PINK, (x0 + third, y), (x0 + 2 * third, y), width)
-    pygame.draw.line(
-        surface, UI_AMBER, (x0 + 2 * third, y), (x0 + span, y), width
-    )
+    pygame.draw.line(surface, UI_BLUE, (int(left), y), (int(right), y), width)
 
 def draw_pulsing_border(surface, rect, color, now):
     ui_animation_layer.fill((0, 0, 0, 0))
     pulse = (math.sin(now * 2.2) + 1) / 2
-    outer = rect.inflate(X(8), Y(8))
-    inner = rect.inflate(X(4), Y(4))
+    outer = rect.inflate(X(4), Y(3))
+    inner = rect.inflate(X(2), Y(2))
     pygame.draw.rect(
         ui_animation_layer,
         (*color, 10 + int(pulse * 12)),
@@ -5965,6 +5962,20 @@ def hidden_playback_controls():
     }
 
 
+def transport_buttons(x, btn_y, w, height, margin, gap, middle_extra):
+    """Three transport buttons with a real gap so play never touches next."""
+    inner = w - margin * 2 - gap * 2
+    side = max(24, (inner - middle_extra) // 3)
+    middle = max(side, inner - side * 2)
+    prev_x = x + margin
+    toggle_x = prev_x + side + gap
+    next_x = toggle_x + middle + gap
+    return (
+        R(prev_x, btn_y, side, height),
+        R(toggle_x, btn_y, middle, height),
+        R(next_x, btn_y, max(24, x + w - margin - next_x), height),
+    )
+
 def playback_control_layout():
     box = playback_card_box()
     if box is None:
@@ -5972,30 +5983,36 @@ def playback_control_layout():
     _rect, _kind, x, y, w, h = box
     if w < 220:
         vol_y = y + h - 136
-        btn_y = y + h - 80
+        btn_y = y + h - 78
+        prev, toggle, nxt = transport_buttons(
+            x, btn_y, w, 46, margin=6, gap=8, middle_extra=8
+        )
         return {
-            "vol_minus": inscribed_square(x + 8, vol_y, 28, 34),
-            "vol_plus": inscribed_square(x + w - 36, vol_y, 28, 34),
-            "vol_bar": R(x + 40, vol_y + 10, w - 80, 12),
+            "vol_minus": inscribed_square(x + 6, vol_y, 30, 36),
+            "vol_plus": inscribed_square(x + w - 36, vol_y, 30, 36),
+            "vol_bar": R(x + 40, vol_y + 12, w - 80, 12),
             "pct_x": x + w // 2,
             "pct_y": vol_y + 32,
-            "prev": R(x + 8, btn_y, 42, 44),
-            "toggle": R(x + 54, btn_y - 2, 44, 48),
-            "next": R(x + w - 50, btn_y, 42, 44),
+            "prev": prev,
+            "toggle": toggle,
+            "next": nxt,
             "compact": True,
             "visible": True,
         }
     vol_y = y + h - 132
-    btn_y = y + h - 76
+    btn_y = y + h - 74
+    prev, toggle, nxt = transport_buttons(
+        x, btn_y, w, 52, margin=10, gap=12, middle_extra=14
+    )
     return {
         "vol_minus": inscribed_square(x + 10, vol_y, 46, 46),
         "vol_plus": inscribed_square(x + w - 56, vol_y, 46, 46),
         "vol_bar": R(x + 64, vol_y + 14, w - 128, 14),
         "pct_x": x + w // 2,
         "pct_y": vol_y + 34,
-        "prev": R(x + 10, btn_y, 88, 50),
-        "toggle": R(x + w // 2 - 46, btn_y - 4, 92, 58),
-        "next": R(x + w - 98, btn_y, 88, 50),
+        "prev": prev,
+        "toggle": toggle,
+        "next": nxt,
         "compact": False,
         "visible": True,
     }
@@ -6455,8 +6472,8 @@ def draw_page_base(title, now):
     draw_centered_text(screen, f_lg, title, UI_TEXT, header)
 
 def draw_pages_button():
-    body = draw_modern_button(screen, btn_pages, UI_BLUE, UI_BLUE, 16)
-    draw_centered_text(screen, f_sm, "PAGES", contrasting_text(body), btn_pages)
+    body = draw_quiet_button(screen, btn_pages, UI_BLUE, 16)
+    draw_centered_text(screen, f_sm, "PAGES", ink_on(body, UI_BLUE), btn_pages)
 
 def fit_label(text, length=16):
     return truncate_display(text, length)
@@ -6483,16 +6500,16 @@ def draw_menu_screen(now):
             UI_PINK if index == 8
             else (UI_BLUE, UI_PINK, UI_AMBER, UI_GREEN, UI_PURPLE)[index % 5]
         )
-        body = draw_modern_button(screen, rect, border, border, 16)
+        body = draw_glass_card(screen, rect, border, 16)
         title_band = _Rect(rect.x, rect.y, rect.width, rect.height // 2)
         subtitle_band = _Rect(
             rect.x, rect.y + rect.height // 2, rect.width, rect.height // 2
         )
         draw_centered_text(
-            screen, f_sm, title, contrasting_text(body), title_band
+            screen, f_sm, title, ink_on(body, border), title_band
         )
         draw_centered_text(
-            screen, f_tiny, subtitle, contrasting_muted(body), subtitle_band
+            screen, f_tiny, subtitle, muted_ink_on(body), subtitle_band
         )
 def draw_favorites_screen(now):
     draw_page_base("FAVORITES", now)
@@ -6643,7 +6660,12 @@ def draw_home_card(
                 layout_y + 24
             )
         elif kind == "clock":
-            blit_lines(datetime.now().strftime("%H:%M"), datetime.now().strftime("%A").upper(), layout_y + 24)
+            temp_bit = f"{current_temp}°C" if current_temp else "--°C"
+            blit_lines(
+                datetime.now().strftime("%H:%M"),
+                f"{datetime.now().strftime('%A').upper()}  {temp_bit}",
+                layout_y + 24
+            )
         elif kind == "favorites":
             count = len(favorite_indices)
             blit_lines(f"{count} SAVED", "STATIONS", layout_y + 24)
@@ -6715,8 +6737,10 @@ def draw_home_card(
         cx = layout_x + layout_w // 2
         cy = inner_top + avail_h // 2
         center = XY(cx, cy)
-        pygame.draw.circle(screen, (17, 31, 53), center, S(radius))
-        pygame.draw.circle(screen, (40, 58, 91), center, S(radius - 2), S(1))
+        pygame.draw.circle(
+            screen, mix_colors((8, 12, 22), accent, 0.28), center, S(radius)
+        )
+        pygame.draw.circle(screen, accent, center, S(radius - 2), max(1, S(2)))
         inner_r = radius - 4
         logo_rect = square_around(cx, cy, inner_r)
         screen.blit(
@@ -6831,20 +6855,28 @@ def draw_home_card(
             clock_now.strftime("%H:%M"),
             ink_on(body),
             int(rect.width * 0.82),
-            int(rect.height * 0.46),
+            int(rect.height * 0.48),
         )
         y = Y(inner_top) + S(6)
         screen.blit(
             time_surf,
             (rect.centerx - time_surf.get_width() // 2, y)
         )
-        y += time_surf.get_height() + S(14)
+        y += time_surf.get_height() + S(12)
         day = blit_px(
             clock_now.strftime("%A").upper(), f_sm, ink_on(body), y, 16
         )
+        y += day.get_height() + S(6)
+        date = blit_px(
+            clock_now.strftime("%d %B %Y"), f_tiny, muted_ink_on(body), y, 22
+        )
+        temp_bit = f"{current_temp}°C" if current_temp else "--°C"
+        condition = weather_label.upper() if weather_label else ""
         blit_px(
-            clock_now.strftime("%d %B %Y"), f_tiny, muted_ink_on(body),
-            y + day.get_height() + S(8), 22
+            f"{temp_bit}   {condition}".strip(),
+            f_sm, ink_on(body, accent),
+            y + date.get_height() + S(12),
+            18 if half else 24
         )
     elif kind == "favorites":
         saved = [
@@ -8012,8 +8044,8 @@ while True:
                 btn_exit.left - S(8),
                 header_rect.bottom - S(8),
             )
-            qr_body = draw_modern_button(screen, btn_qr, UI_BLUE, UI_BLUE, 12)
-            draw_centered_text(screen, f_sm, "QR", contrasting_text(qr_body), btn_qr)
+            qr_body = draw_quiet_button(screen, btn_qr, UI_BLUE, 12)
+            draw_centered_text(screen, f_sm, "QR", ink_on(qr_body, UI_BLUE), btn_qr)
 
             title_rect = R(65, 10, 190, 38)
             draw_centered_text(screen, f_lg, "TC RADIOS", UI_TEXT, title_rect)
@@ -8080,14 +8112,14 @@ while True:
                     UI_AMBER if is_playing else UI_GREEN,
                     now
                 )
-                prev_body = draw_modern_button(screen, btn_prev, UI_BLUE, UI_BLUE, 16)
+                prev_body = draw_quiet_button(screen, btn_prev, UI_BLUE, 16)
                 toggle_color = UI_AMBER if is_playing else UI_GREEN
                 toggle_body = draw_modern_button(
                     screen, btn_toggle, toggle_color, toggle_color, 18
                 )
-                next_body = draw_modern_button(screen, btn_next, UI_PURPLE, UI_PURPLE, 16)
+                next_body = draw_quiet_button(screen, btn_next, UI_PURPLE, 16)
                 draw_centered_text(
-                    screen, control_font, "PREV", contrasting_text(prev_body), btn_prev
+                    screen, control_font, "PREV", ink_on(prev_body, UI_BLUE), btn_prev
                 )
                 draw_centered_text(
                     screen, control_font, "PAUSE" if is_playing else "PLAY",
@@ -8095,14 +8127,12 @@ while True:
                     btn_toggle
                 )
                 draw_centered_text(
-                    screen, control_font, "NEXT", contrasting_text(next_body), btn_next
+                    screen, control_font, "NEXT", ink_on(next_body, UI_PURPLE), btn_next
                 )
 
-            pages_body = draw_modern_button(
-                screen, btn_open_pages, UI_BLUE, UI_BLUE, 16
-            )
+            pages_body = draw_quiet_button(screen, btn_open_pages, UI_BLUE, 16)
             draw_centered_text(
-                screen, f_sm, "PAGES", contrasting_text(pages_body), btn_open_pages
+                screen, f_sm, "PAGES", ink_on(pages_body, UI_BLUE), btn_open_pages
             )
 
             if fab_open:
@@ -8110,7 +8140,7 @@ while True:
                 panel = R(8, 236, 304, 136)
                 pygame.draw.rect(screen, UI_SURFACE, panel, border_radius=S(18))
                 pygame.draw.rect(
-                    screen, mix_colors(UI_PURPLE, UI_PINK, 0.42), panel,
+                    screen, mix_colors(UI_BLUE, UI_PURPLE, 0.4), panel,
                     max(1, S(2)), border_radius=S(18)
                 )
                 sleep_fill = UI_PURPLE if alarm_system.sleep_timer_enabled else UI_SURFACE_RAISED
