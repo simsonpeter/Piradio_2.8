@@ -102,6 +102,7 @@ class AudioOutputManager:
         self.bluetooth_lock = threading.Lock()
         self.settings_file = os.path.expanduser('~/.radio_audio')
         self.default_bluetooth_address = None
+        self.active_sink = None
         self.load_settings()
         self.scan_outputs()
         if self.default_bluetooth_address:
@@ -305,24 +306,105 @@ class AudioOutputManager:
             )
             return self._merge_bluetooth_scan(discovered)
 
-    def _find_bluetooth_sink(self, address):
-        result = self._run(['pactl', 'list', 'sinks', 'short'])
-        address_token = address.replace(':', '_').lower()
-        for line in result.stdout.splitlines():
+    @staticmethod
+    def sink_name_for_address(listing, address):
+        tokens = []
+        if address:
+            lowered = str(address).lower()
+            tokens = [
+                lowered.replace(':', '_'),
+                lowered.replace(':', '-'),
+                lowered,
+            ]
+        bluetooth_sinks = []
+        for line in (listing or '').splitlines():
             parts = line.split()
-            if len(parts) >= 2 and address_token in parts[1].lower():
+            if len(parts) < 2:
+                continue
+            name = parts[1]
+            lowered_name = name.lower()
+            if tokens and any(token in lowered_name for token in tokens):
+                return name
+            if 'bluez' in lowered_name or 'bluetooth' in lowered_name:
+                bluetooth_sinks.append(name)
+        if not tokens and bluetooth_sinks:
+            return bluetooth_sinks[0]
+        if len(bluetooth_sinks) == 1:
+            return bluetooth_sinks[0]
+        return None
+
+    @staticmethod
+    def card_name_for_address(listing, address):
+        token = str(address or '').replace(':', '_').lower()
+        if not token:
+            return None
+        for line in (listing or '').splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and 'bluez' in parts[1].lower() and token in parts[1].lower():
                 return parts[1]
         return None
 
+    def _find_bluetooth_sink(self, address):
+        result = self._run(['pactl', 'list', 'sinks', 'short'])
+        return self.sink_name_for_address(result.stdout, address)
+
+    def _pulse_status(self):
+        try:
+            result = self._run(['pactl', 'info'], timeout=4)
+        except Exception as error:
+            return False, str(error)
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip()
+            return False, detail or 'Audio service is not running'
+        return True, ''
+
+    def _enable_bluetooth_audio_profile(self, address):
+        """Ask PipeWire or PulseAudio for the music profile, not the headset mic."""
+        try:
+            cards = self._run(['pactl', 'list', 'cards', 'short'], timeout=5)
+        except Exception as error:
+            print(f"Bluetooth card lookup failed: {error}")
+            return False
+        card = self.card_name_for_address(cards.stdout, address)
+        if not card:
+            return False
+        for profile in ('a2dp-sink', 'a2dp_sink'):
+            result = self._run(
+                ['pactl', 'set-card-profile', card, profile],
+                timeout=8,
+            )
+            if result.returncode == 0:
+                return True
+        return False
+
     def _make_sink_default(self, address):
+        self._enable_bluetooth_audio_profile(address)
+        restarted = False
         sink_name = None
-        for _ in range(12):
-            sink_name = self._find_bluetooth_sink(address)
+        for attempt in range(16):
+            try:
+                sink_name = self._find_bluetooth_sink(address)
+            except Exception as error:
+                raise RuntimeError(str(error)) from error
             if sink_name:
                 break
-            time.sleep(0.5)
+            if attempt == 6 and not restarted:
+                restarted = True
+                try:
+                    self._restart_bluetooth_audio_profile()
+                except Exception as error:
+                    print(f"Bluetooth audio restart failed: {error}")
+                self._enable_bluetooth_audio_profile(address)
+            time.sleep(0.4)
         if not sink_name:
-            raise RuntimeError('Connected, but no Bluetooth audio output appeared')
+            ready, detail = self._pulse_status()
+            if not ready:
+                raise RuntimeError(
+                    detail or 'Bluetooth is connected, but the audio service is not available'
+                )
+            raise RuntimeError(
+                'Bluetooth is connected, but the speaker has no audio channel yet'
+            )
 
         result = self._run(['pactl', 'set-default-sink', sink_name])
         if result.returncode != 0:
@@ -334,6 +416,7 @@ class AudioOutputManager:
             parts = line.split()
             if parts and parts[0].isdigit():
                 self._run(['pactl', 'move-sink-input', parts[0], sink_name])
+        self.active_sink = sink_name
         return sink_name
 
     def connect_bluetooth(self, address):
@@ -418,10 +501,13 @@ class AudioOutputManager:
             sink_name = self._make_sink_default(address)
             self.default_bluetooth_address = address
             self.current_output = 'bluetooth'
+            self.active_sink = sink_name
             self.save_settings()
             self.scan_outputs()
             self.current_output = 'bluetooth'
-            return sink_name
+            self.active_sink = sink_name
+        reroute_playback_after_output_change()
+        return sink_name
 
     def _restore_bluetooth_default(self):
         try:
@@ -485,32 +571,59 @@ class AudioOutputManager:
         if output_name == 'auto':
             os.system("amixer cset numid=3 0")
             self.current_output = output_name
+            self.active_sink = None
+            reroute_playback_after_output_change()
             return True
         elif output_name == 'analog':
             os.system("amixer cset numid=3 1")
+            self._prefer_local_sink(('analog', 'headphone', 'bcm2835'))
             self.current_output = output_name
+            reroute_playback_after_output_change()
             return True
         elif output_name == 'hdmi':
             os.system("amixer cset numid=3 2")
+            self._prefer_local_sink(('hdmi',))
             self.current_output = output_name
+            reroute_playback_after_output_change()
             return True
         elif output_name == 'bluetooth':
             try:
                 if self.default_bluetooth_address:
                     self._make_sink_default(self.default_bluetooth_address)
                     self.current_output = output_name
+                    reroute_playback_after_output_change()
                     return True
                 result = self._run(['pactl', 'list', 'sinks', 'short'])
-                for line in result.stdout.splitlines():
-                    parts = line.split()
-                    if len(parts) >= 2 and 'bluez' in parts[1].lower():
-                        self._run(['pactl', 'set-default-sink', parts[1]])
-                        self.current_output = output_name
-                        return True
+                sink_name = self.sink_name_for_address(result.stdout, '')
+                if sink_name:
+                    self._run(['pactl', 'set-default-sink', sink_name])
+                    self.active_sink = sink_name
+                    self.current_output = output_name
+                    reroute_playback_after_output_change()
+                    return True
             except Exception as e:
                 print(f"Bluetooth switch error: {e}")
                 return False
         return False
+
+    def _prefer_local_sink(self, needles):
+        try:
+            result = self._run(['pactl', 'list', 'sinks', 'short'], timeout=4)
+        except Exception:
+            self.active_sink = None
+            return
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            lowered = parts[1].lower()
+            if 'bluez' in lowered or 'bluetooth' in lowered:
+                continue
+            if any(needle in lowered for needle in needles):
+                self._run(['pactl', 'set-default-sink', parts[1]])
+                self.active_sink = parts[1]
+                return
+        self.active_sink = None
     
     def enable_multi_output(self, outputs_list):
         if not outputs_list or len(outputs_list) < 2:
@@ -560,6 +673,32 @@ class AudioOutputManager:
         except Exception as e:
             print(f"Volume error: {e}")
             return False
+
+def reroute_playback_after_output_change():
+    """Start the current station again so it follows the selected speaker."""
+    try:
+        media_player = player
+        play_now = play
+        epoch = playback_epoch
+        should_run = playback_should_run
+    except NameError:
+        return
+    try:
+        state = media_player.get_state()
+        active = state in (
+            vlc.State.Playing,
+            vlc.State.Opening,
+            vlc.State.Buffering,
+            vlc.State.Paused,
+        )
+    except Exception:
+        return
+    if not should_run or not active:
+        return
+    try:
+        play_now(epoch)
+    except Exception as error:
+        print(f"Could not move playback to the new speaker: {error}", flush=True)
 
 audio_manager = AudioOutputManager()
 vol_level = 80
@@ -4214,6 +4353,36 @@ def publish_youtube_pending(item, epoch):
         youtube_touch_pending = item
         return True
 
+def prepare_player_audio(media_player):
+    """Send this player to Pulse/PipeWire, then to the Bluetooth speaker when one is selected."""
+    if media_player is None:
+        return
+    try:
+        media_player.audio_output_set('pulse')
+    except Exception:
+        pass
+    sink = ''
+    try:
+        sink = audio_manager.active_sink or ''
+        if not sink and audio_manager.current_output == 'bluetooth':
+            sink = audio_manager.outputs.get('bluetooth', {}).get('device') or ''
+    except Exception:
+        sink = ''
+    if sink:
+        try:
+            media_player.audio_output_device_set('pulse', sink)
+        except TypeError:
+            try:
+                media_player.audio_output_device_set(sink)
+            except Exception:
+                pass
+        except Exception:
+            pass
+    try:
+        media_player.audio_set_volume(vol_level)
+    except Exception:
+        pass
+
 def stop_audio_output():
     """Drop the current decoder. A second play() must not keep the old stream."""
     global player
@@ -4238,10 +4407,7 @@ def stop_audio_output():
                 pass
         if fresh is not None:
             player = fresh
-            try:
-                player.audio_set_volume(vol_level)
-            except Exception:
-                pass
+            prepare_player_audio(player)
         if old is not None and old is not player:
             _retired_players.append(old)
             del _retired_players[:-1]
@@ -5282,8 +5448,21 @@ ui_animation_layer = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
 brightness_overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
 refresh_ui_palette()
 
-instance = vlc.Instance('--no-video')
+def _vlc_uses_pulse():
+    try:
+        ready, _detail = audio_manager._pulse_status()
+        return ready
+    except Exception:
+        return False
+
+if _vlc_uses_pulse():
+    # The jack is owned by PipeWire. ALSA then reports an audio error and
+    # the Bluetooth speaker stays silent.
+    instance = vlc.Instance('--no-video', '--quiet', '--aout=pulse', '--intf=dummy')
+else:
+    instance = vlc.Instance('--no-video', '--quiet', '--intf=dummy')
 player = instance.media_player_new()
+prepare_player_audio(player)
 
 URL = "https://raw.githubusercontent.com/simsonpeter/Tcradios/refs/heads/main/stations.json"
 LANGUAGE_BASE_URL = (

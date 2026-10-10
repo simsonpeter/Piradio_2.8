@@ -34,6 +34,22 @@ fi
 echo "tcradios-start $(date -Is) ${DISPLAY:-:0} ${REPO_DIR}"
 
 export DISPLAY="${DISPLAY:-:0}"
+# Bluetooth audio lives in the desktop session. A bare restart does not
+# pass that session through, so the speaker connects and then stays silent.
+if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+    runtime="/run/user/$(id -u)"
+    if [[ -d "${runtime}" ]]; then
+        export XDG_RUNTIME_DIR="${runtime}"
+    fi
+fi
+if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -S "${XDG_RUNTIME_DIR}/bus" ]]; then
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+    fi
+    if [[ -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
+        export PULSE_SERVER="unix:${XDG_RUNTIME_DIR}/pulse/native"
+    fi
+fi
 DISPLAY_NUMBER="${DISPLAY#:}"
 for _ in {1..40}; do
     if [[ -S "/tmp/.X11-unix/X${DISPLAY_NUMBER}" ]]; then
