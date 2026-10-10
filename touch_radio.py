@@ -889,6 +889,12 @@ THEMES = {
     'golden_hour': dark_theme('Golden Hour', '#f0c03a', '#ff9a3d', '#3ee6c7'),
     'mint_fresh': dark_theme('Mint Fresh', '#3ee6c7', '#7ae0e8', '#8bb4ff'),
     'crimson_red': dark_theme('Crimson Red', '#ff5a73', '#f0c45a', '#3ee6c7'),
+    'cobalt_blue': dark_theme('Cobalt', '#4c7dff', '#9eb6ff', '#ffd56a'),
+    'rose_gold': dark_theme('Rose', '#ff7aa2', '#ffd0a8', '#ffe08a'),
+    'lime_glow': dark_theme('Lime', '#c6f54a', '#7dffb3', '#fff4a8'),
+    'amber_night': dark_theme('Amber', '#ffbf3c', '#ff8a3d', '#fff1b8'),
+    'violet_dusk': dark_theme('Violet', '#b388ff', '#7c6bff', '#ffd6f2'),
+    'coral_reef': dark_theme('Coral', '#ff6b57', '#ffb199', '#ffe08a'),
 }
 
 current_theme = THEMES['true_black']
@@ -2716,7 +2722,13 @@ HTML_TEMPLATE = """
             'cyberpunk': { bg: '#000000', primary: '#ff4ec8', secondary: '#2ee6e0', accent: '#ffb347', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ff4ec8', buttonHover: '#2ee6e0', gradientStart: '#000000', gradientEnd: '#ff4ec8' },
             'golden_hour': { bg: '#000000', primary: '#f0c03a', secondary: '#ff9a3d', accent: '#3ee6c7', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#f0c03a', buttonHover: '#ff9a3d', gradientStart: '#000000', gradientEnd: '#f0c03a' },
             'mint_fresh': { bg: '#000000', primary: '#3ee6c7', secondary: '#7ae0e8', accent: '#8bb4ff', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#3ee6c7', buttonHover: '#7ae0e8', gradientStart: '#000000', gradientEnd: '#3ee6c7' },
-            'crimson_red': { bg: '#000000', primary: '#ff5a73', secondary: '#f0c45a', accent: '#3ee6c7', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ff5a73', buttonHover: '#f0c45a', gradientStart: '#000000', gradientEnd: '#ff5a73' }
+            'crimson_red': { bg: '#000000', primary: '#ff5a73', secondary: '#f0c45a', accent: '#3ee6c7', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ff5a73', buttonHover: '#f0c45a', gradientStart: '#000000', gradientEnd: '#ff5a73' },
+            'cobalt_blue': { bg: '#000000', primary: '#4c7dff', secondary: '#9eb6ff', accent: '#ffd56a', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#4c7dff', buttonHover: '#9eb6ff', gradientStart: '#000000', gradientEnd: '#4c7dff' },
+            'rose_gold': { bg: '#000000', primary: '#ff7aa2', secondary: '#ffd0a8', accent: '#ffe08a', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ff7aa2', buttonHover: '#ffd0a8', gradientStart: '#000000', gradientEnd: '#ff7aa2' },
+            'lime_glow': { bg: '#000000', primary: '#c6f54a', secondary: '#7dffb3', accent: '#fff4a8', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#c6f54a', buttonHover: '#7dffb3', gradientStart: '#000000', gradientEnd: '#c6f54a' },
+            'amber_night': { bg: '#000000', primary: '#ffbf3c', secondary: '#ff8a3d', accent: '#fff1b8', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ffbf3c', buttonHover: '#ff8a3d', gradientStart: '#000000', gradientEnd: '#ffbf3c' },
+            'violet_dusk': { bg: '#000000', primary: '#b388ff', secondary: '#7c6bff', accent: '#ffd6f2', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#b388ff', buttonHover: '#7c6bff', gradientStart: '#000000', gradientEnd: '#b388ff' },
+            'coral_reef': { bg: '#000000', primary: '#ff6b57', secondary: '#ffb199', accent: '#ffe08a', text: '#ffffff', muted: '#e6ebf6', card: 'rgba(8,10,14,0.96)', button: '#ff6b57', buttonHover: '#ffb199', gradientStart: '#000000', gradientEnd: '#ff6b57' }
         };
         
         function applyTheme(themeKey) {
@@ -5189,7 +5201,7 @@ def scaled_clock_face(text, color, target_w, max_h):
         height = max(1, max_h)
         width = max(1, int(rendered.get_width() * height / max(1, rendered.get_height())))
     surface = pygame.transform.smoothscale(rendered, (width, max(1, height)))
-    if len(_clock_faces) > 6:
+    if len(_clock_faces) > 16:
         _clock_faces.clear()
     _clock_faces[key] = surface
     return surface
@@ -7945,12 +7957,55 @@ def draw_youtube_screen(now):
         )
     draw_pages_button()
 
+SAVER_IDLE_SECONDS = 120
+
 def draw_screensaver():
-    # Lantern clock: huge dim time and a weather icon only.
+    """Full black clock. Time is largest, then temperature, title, date, track."""
     screen.fill((0, 0, 0))
-    time_surf = f_xl.render(datetime.now().strftime("%H:%M"), True, (58, 58, 58))
-    screen.blit(time_surf, time_surf.get_rect(center=XY(160, 200)))
-    draw_weather_icon(screen, 160, 332, weather_type, 36)
+    clock_now = datetime.now()
+    height = max(1, SCREEN_H)
+    width = max(1, SCREEN_W)
+    side = max(S(12), int(width * 0.05))
+    usable = max(40, width - side * 2)
+    title_h = max(S(28), int(height * 0.11))
+    time_h = max(S(64), int(height * 0.34))
+    date_h = max(S(14), int(height * 0.05))
+    temp_h = max(S(36), int(height * 0.16))
+    track_h = max(S(12), int(height * 0.04))
+    gap = max(S(6), int(height * 0.02))
+    stack = title_h + time_h + date_h + temp_h + track_h + gap * 4
+    y = max(gap, (height - stack) // 2)
+    title_color = current_theme.pygame_primary
+    title = scaled_clock_face("TC RADIOS", title_color, usable, title_h)
+    clock_face = scaled_clock_face(
+        clock_now.strftime("%H:%M"), (255, 255, 255), usable, time_h
+    )
+    date_line = scaled_clock_face(
+        clock_now.strftime("%A  %d %B %Y").upper(),
+        (186, 196, 214),
+        int(usable * 0.92),
+        date_h,
+    )
+    temp_text = f"{current_temp}°C" if current_temp else "--°C"
+    temp_face = scaled_clock_face(
+        temp_text, (255, 210, 60), int(usable * 0.72), temp_h
+    )
+
+    def place(surface):
+        nonlocal y
+        screen.blit(surface, (width // 2 - surface.get_width() // 2, y))
+        y += surface.get_height() + gap
+
+    place(title)
+    place(clock_face)
+    place(date_line)
+    place(temp_face)
+    track = current_display_track() or "TCRADIOS"
+    track_font = f_sm if f_sm.get_height() <= track_h else f_tiny
+    clip = pygame.Rect(side, y, usable, max(track_h, track_font.get_height()))
+    blit_scrolling_title(
+        screen, track_font, track, (214, 220, 232), y, clip, time.time()
+    )
 
 def greeting_phrases():
     hour = datetime.now().hour
@@ -8487,6 +8542,14 @@ while True:
             show_volume_bar = False
             adjusting_volume = False
 
+        if (
+            not saver_active
+            and not wifi_setup_required
+            and now - last_interaction_time >= SAVER_IDLE_SECONDS
+        ):
+            saver_active = True
+            saver_started_at = now
+
         hide_mouse_pointer()
         if saver_active:
             draw_screensaver()
@@ -8618,7 +8681,7 @@ while True:
                 alarm_fill = UI_AMBER if alarm_system.alarm_enabled else UI_SURFACE_RAISED
                 mute_fill = UI_PINK if vol_level == 0 else UI_SURFACE_RAISED
                 labeled_button(screen, btn_sleep, sleep_fill, f_sm, "SLEEP", 14)
-                labeled_button(screen, btn_saver, moon_fill, f_sm, "MOON", 14)
+                labeled_button(screen, btn_saver, moon_fill, f_sm, "SAVER", 14)
                 labeled_button(screen, btn_alarm, alarm_fill, f_sm, "ALARM", 14)
                 labeled_button(
                     screen, btn_mute, mute_fill, f_sm,
