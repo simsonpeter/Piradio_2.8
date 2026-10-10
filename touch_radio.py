@@ -6632,6 +6632,38 @@ def draw_favorites_screen(now):
             draw_centered_text(screen, f_tiny, "EMPTY", muted_ink_on(body), rect)
     draw_pages_button()
 
+_title_marquee = {"key": None, "surface": None, "started": 0.0}
+
+def blit_scrolling_title(target, font, text, color, y, clip, now):
+    """Scroll a track title when it is wider than the card."""
+    text = str(text or "")
+    key = (text, color, id(font))
+    if _title_marquee["key"] != key or _title_marquee["surface"] is None:
+        _title_marquee["key"] = key
+        _title_marquee["surface"] = font.render(text, True, color)
+        _title_marquee["started"] = now
+    rendered = _title_marquee["surface"]
+    if rendered.get_width() <= clip.width:
+        target.blit(
+            rendered,
+            (clip.centerx - rendered.get_width() // 2, int(y)),
+        )
+        return rendered
+    gap = S(32)
+    span = rendered.get_width() + gap
+    speed = max(20, S(46))
+    hold = 1.1
+    phase = (now - _title_marquee["started"]) % (hold + span / float(speed))
+    offset = 0 if phase < hold else int((phase - hold) * speed)
+    band = _Rect(clip.x, int(y), clip.width, max(clip.height, rendered.get_height()))
+    previous = target.get_clip()
+    target.set_clip(band)
+    x = band.x - offset
+    target.blit(rendered, (x, int(y)))
+    target.blit(rendered, (x + span, int(y)))
+    target.set_clip(previous)
+    return rendered
+
 def home_card_accent(kind):
     accents = {
         "now_playing": UI_BLUE,
@@ -6858,8 +6890,15 @@ def draw_home_card(
                 S(2)
             )
         text_y = Y(logo_bottom + 4)
-        title = blit_px(
-            playing, f_sm if half else f_lg, ink_on(body), text_y, main_chars
+        title_font = f_sm if half else f_lg
+        title = blit_scrolling_title(
+            screen, title_font, playing, ink_on(body), text_y,
+            _Rect(
+                rect.x + S(8), text_y,
+                max(1, rect.width - S(16)),
+                title_font.get_height(),
+            ),
+            now,
         )
         next_y = text_y + title.get_height() + S(4)
         if show_station:
