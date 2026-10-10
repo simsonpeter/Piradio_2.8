@@ -3489,7 +3489,7 @@ def remote_action(action):
         elif action == 'voldown':
             apply_live_volume(max(vol_level - 10, 0))
         elif action == 'toggle':
-            player.pause()
+            toggle_playback()
         elif action == 'mute':
             apply_live_volume(0 if vol_level > 0 else last_unmuted_volume)
         return "OK"
@@ -4917,8 +4917,17 @@ def draw_info_card(surface, rect, accent, radius=16):
     pygame.draw.rect(surface, accent, rect, S(2), border_radius=S(radius))
     return body
 
+_glass_overlays = {}
+
 def draw_glass_card(surface, rect, accent, radius=22):
-    overlay = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+    key = (rect.width, rect.height)
+    overlay = _glass_overlays.get(key)
+    if overlay is None:
+        if len(_glass_overlays) > 6:
+            _glass_overlays.clear()
+        overlay = pygame.Surface(key, pygame.SRCALPHA)
+        _glass_overlays[key] = overlay
+    overlay.fill((0, 0, 0, 0))
     body = UI_SURFACE_RAISED
     pygame.draw.rect(
         overlay, (*body, 150), overlay.get_rect(), border_radius=S(radius)
@@ -5347,6 +5356,7 @@ def update_logo(url):
 
 def play():
     global meta_text, scroll_x, saver_scroll_x, saved_station_url, saved_station_index
+    global playback_should_run, playback_down_since
     scroll_x = SCREEN_W
     saver_scroll_x = SCREEN_W
     if not stations:
@@ -5356,6 +5366,8 @@ def play():
         meta_text = "LOADING STATIONS"
         return
     try:
+        playback_should_run = True
+        playback_down_since = 0
         player.set_media(instance.media_new(station['url']))
         player.play()
         player.audio_set_volume(vol_level)
@@ -6031,7 +6043,9 @@ def handle_alarm_fade():
         alarm_fade_data = {}
 
 def handle_sleep_timer():
+    global playback_should_run
     if alarm_system.check_sleep_timer():
+        playback_should_run = False
         if alarm_system.sleep_volume_fade:
             for i in range(10, 0, -1):
                 player.audio_set_volume(vol_level * i // 10)
@@ -6040,6 +6054,79 @@ def handle_sleep_timer():
             player.pause()
         elif alarm_system.sleep_stop_method == "stop":
             player.stop()
+
+def toggle_playback():
+    global playback_should_run, playback_down_since
+    try:
+        state = player.get_state()
+    except Exception:
+        state = None
+    if state == vlc.State.Playing:
+        playback_should_run = False
+        player.pause()
+        return
+    if state == vlc.State.Paused:
+        playback_should_run = True
+        playback_down_since = 0
+        player.pause()
+        return
+    playback_should_run = True
+    playback_down_since = 0
+    restart_playback("play button")
+
+def restart_playback(reason):
+    video_id = current_youtube_id() if stations else ""
+    print(f"Restarting playback ({reason})", flush=True)
+    if video_id:
+        title = stations[current_idx].get("name", "YouTube")
+        if title.upper().startswith("YT:"):
+            title = title[3:].strip()
+        begin_youtube_play({"id": video_id, "title": title or "YouTube"}, auto=True)
+        return
+    play()
+
+def keep_playback_alive(now):
+    global playback_down_since, playback_retry_after, playback_retry_wait
+    global playback_stall_since
+    if (
+        not playback_should_run
+        or alarm_fade_active
+        or youtube_touch_busy
+        or not stations
+    ):
+        playback_down_since = 0
+        playback_stall_since = 0
+        return
+    try:
+        state = player.get_state()
+    except Exception:
+        return
+    if state == vlc.State.Playing:
+        playback_down_since = 0
+        playback_stall_since = 0
+        playback_retry_wait = 8
+        return
+    if state == vlc.State.Paused:
+        return
+    if state in (vlc.State.Opening, vlc.State.Buffering):
+        if playback_stall_since == 0:
+            playback_stall_since = now
+        if now - playback_stall_since < 45:
+            return
+    else:
+        playback_stall_since = 0
+        if playback_down_since == 0:
+            playback_down_since = now
+            return
+        if now - playback_down_since < 8:
+            return
+    if now < playback_retry_after:
+        return
+    playback_retry_after = now + playback_retry_wait
+    playback_retry_wait = min(300, max(15, playback_retry_wait * 2))
+    playback_down_since = now
+    playback_stall_since = 0
+    restart_playback(getattr(state, "name", state))
 
 def target_display_brightness(now):
     if (
@@ -7740,721 +7827,738 @@ btn_prev = _playback_controls["prev"]
 btn_toggle = _playback_controls["toggle"]
 btn_next = _playback_controls["next"]
 
+playback_should_run = True
+playback_down_since = 0
+playback_stall_since = 0
+playback_retry_after = 0
+playback_retry_wait = 8
+_radio_frame_error_at = 0
+
 while True:
     now = time.time()
-    update_qr_code()
-    
-    if alarm_system.check_alarm() and not alarm_fade_active:
-        alarm_fade_data = alarm_system.trigger_alarm(player, stations, current_idx, vol_level)
-        alarm_fade_active = True
-    
-    handle_alarm_fade()
-    handle_sleep_timer()
-    apply_youtube_touch_result()
-    maybe_advance_youtube_queue()
-    apply_wifi_result()
-    
-    if now - last_weather_update > 1200 and not weather_updating:
-        weather_updating = True
-        threading.Thread(target=refresh_weather, daemon=True).start()
-
-    if (
-        active_page in ("system", "settings", "clock", "radio")
-        and now - last_system_update > 10
-        and not system_stats_updating
-    ):
-        system_stats_updating = True
-        last_system_update = now
-        threading.Thread(target=refresh_system_stats, daemon=True).start()
-    
     try:
-        media = player.get_media()
-        if media:
-            try:
-                m = media.get_meta(vlc.Meta.NowPlaying)
-                if m:
-                    meta_text = style_now_playing(m)
-                else:
-                    meta_text = style_now_playing(stations[current_idx]['name'])
-            except: 
-                meta_text = style_now_playing(stations[current_idx]['name'])
-    except: 
-        meta_text = style_now_playing(stations[current_idx]['name'])
-    
-    if show_volume_bar and now - volume_bar_timer > 3:
-        show_volume_bar = False
-        adjusting_volume = False
-    
-    hide_mouse_pointer()
-    if saver_active:
-        draw_screensaver()
-    elif now < greeting_until:
-        draw_house_greeting()
-    else:
-        if ui_palette_theme != current_theme.name:
-            refresh_ui_palette()
-        screen.blit(ui_background, (0, 0))
-        draw_animated_ui_glow(screen, now)
+        keep_playback_alive(now)
+    except Exception as error:
+        print(f"Playback watchdog error: {error}", flush=True)
+    try:
+        update_qr_code()
 
-        try: is_playing = player.get_state() == vlc.State.Playing
-        except: is_playing = False
+        if alarm_system.check_alarm() and not alarm_fade_active:
+            alarm_fade_data = alarm_system.trigger_alarm(player, stations, current_idx, vol_level)
+            alarm_fade_active = True
 
-        logo_rect = R(0, 0, 1, 1)
+        handle_alarm_fade()
+        handle_sleep_timer()
+        apply_youtube_touch_result()
+        maybe_advance_youtube_queue()
+        apply_wifi_result()
 
-        # Title bar stays its own strip. Cards fill the band under it.
-        header_rect = R(8, 7, 304, 52)
-        pygame.draw.rect(screen, UI_SURFACE, header_rect, border_radius=S(17))
-        pygame.draw.rect(screen, (54, 75, 112), header_rect, S(1), border_radius=S(17))
+        if now - last_weather_update > 1200 and not weather_updating:
+            weather_updating = True
+            threading.Thread(target=refresh_weather, daemon=True).start()
 
-        btn_qr, btn_exit = header_edge_buttons(header_rect)
-        qr_body = draw_modern_button(screen, btn_qr, UI_BLUE, UI_BLUE, 12)
-        draw_centered_text(screen, f_sm, "QR", contrasting_text(qr_body), btn_qr)
-
-        title_rect = R(65, 10, 190, 38)
-        draw_centered_text(screen, f_lg, "TC RADIOS", UI_TEXT, title_rect)
-        if show_startup_ip and now < ip_display_time:
-            ip_surface = f_tiny.render(f"{current_ip}:8080", True, UI_MUTED)
-            screen.blit(ip_surface, (X(160) - ip_surface.get_width() // 2, Y(43)))
-
-        exit_body = draw_modern_button(screen, btn_exit, (75, 30, 55), UI_PINK, 12)
-        draw_vector_icon(
-            screen, btn_exit.center, "close",
-            contrasting_text(exit_body),
-            radius=max(8, min(btn_exit.width, btn_exit.height) // 4),
-            width=S(3),
-        )
-
-        home_slots = home_card_slots()
-        for rect, kind, layout_x, layout_y, layout_w, layout_h in home_slots:
-            draw_home_card(
-                rect, kind, now,
-                layout_x=layout_x, layout_y=layout_y,
-                layout_w=layout_w, layout_h=layout_h
-            )
-
-        # Volume and play controls stay on the now-playing card only.
-        controls = playback_control_layout()
-        vol_minus_rect = controls["vol_minus"]
-        vol_plus_rect = controls["vol_plus"]
-        vol_bar_rect = controls["vol_bar"]
-        btn_prev = controls["prev"]
-        btn_toggle = controls["toggle"]
-        btn_next = controls["next"]
-        if controls["visible"]:
-            control_font = f_tiny if controls["compact"] else f_sm
-            draw_circle_icon_button(screen, vol_minus_rect, UI_AMBER, "minus")
-            pygame.draw.rect(screen, (37, 48, 72), vol_bar_rect, border_radius=S(8))
-            fill_width = int(vol_bar_rect.width * vol_level / 100)
-            if fill_width > 0:
-                fill_rect = _Rect(
-                    vol_bar_rect.x, vol_bar_rect.y, max(X(10), fill_width), vol_bar_rect.height
-                )
-                pygame.draw.rect(screen, UI_BLUE, fill_rect, border_radius=S(8))
-            knob_x = vol_bar_rect.x + int(vol_bar_rect.width * vol_level / 100)
-            knob_x = max(vol_bar_rect.x + X(6), min(vol_bar_rect.right - X(6), knob_x))
-            draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), S(8), UI_TEXT)
-            draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), S(4), UI_BLUE)
-            vol_pct_surf = f_tiny.render(f"{vol_level}%", True, UI_TEXT)
-            screen.blit(
-                vol_pct_surf,
-                (
-                    X(controls["pct_x"]) - vol_pct_surf.get_width() // 2,
-                    Y(controls["pct_y"])
-                )
-            )
-            draw_circle_icon_button(screen, vol_plus_rect, UI_GREEN, "plus")
-
-            draw_pulsing_border(
-                screen,
-                btn_toggle,
-                UI_AMBER if is_playing else UI_GREEN,
-                now
-            )
-            prev_body = draw_modern_button(screen, btn_prev, UI_BLUE, UI_BLUE, 16)
-            toggle_color = UI_AMBER if is_playing else UI_GREEN
-            toggle_body = draw_modern_button(
-                screen, btn_toggle, toggle_color, toggle_color, 18
-            )
-            next_body = draw_modern_button(screen, btn_next, UI_PURPLE, UI_PURPLE, 16)
-            draw_centered_text(
-                screen, control_font, "PREV", contrasting_text(prev_body), btn_prev
-            )
-            draw_centered_text(
-                screen, control_font, "PAUSE" if is_playing else "PLAY",
-                contrasting_text(toggle_body),
-                btn_toggle
-            )
-            draw_centered_text(
-                screen, control_font, "NEXT", contrasting_text(next_body), btn_next
-            )
-
-        pages_body = draw_modern_button(
-            screen, btn_open_pages, UI_BLUE, UI_BLUE, 16
-        )
-        draw_centered_text(
-            screen, f_sm, "PAGES", contrasting_text(pages_body), btn_open_pages
-        )
-
-        if fab_open:
-            dim = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
-            dim.fill((0, 0, 0, 150))
-            screen.blit(dim, (0, 0))
-            panel = R(8, 236, 304, 136)
-            pygame.draw.rect(screen, UI_SURFACE, panel, border_radius=S(18))
-            pygame.draw.rect(screen, (54, 64, 91), panel, S(1), border_radius=S(18))
-            sleep_fill = UI_PURPLE if alarm_system.sleep_timer_enabled else UI_SURFACE_RAISED
-            moon_fill = UI_BLUE if saver_active else UI_SURFACE_RAISED
-            alarm_fill = UI_AMBER if alarm_system.alarm_enabled else UI_SURFACE_RAISED
-            mute_fill = UI_PINK if vol_level == 0 else UI_SURFACE_RAISED
-            labeled_button(screen, btn_sleep, sleep_fill, f_sm, "SLEEP", 14)
-            labeled_button(screen, btn_saver, moon_fill, f_sm, "MOON", 14)
-            labeled_button(screen, btn_alarm, alarm_fill, f_sm, "ALARM", 14)
-            labeled_button(
-                screen, btn_mute, mute_fill, f_sm,
-                "MUTE" if vol_level else "UNMUTE", 14
-            )
-
-        fab_fill = UI_PINK if fab_open else UI_PURPLE
-        draw_smooth_circle(screen, btn_fab.center, S(26), fab_fill)
-        draw_vector_icon(
-            screen, btn_fab.center,
-            "close" if fab_open else "gear",
-            ink_on(fab_fill),
-            radius=S(11),
-            width=S(3),
-        )
         if (
-            not fab_open
-            and (
-                vol_level == 0
-                or alarm_system.alarm_enabled
-                or alarm_system.sleep_timer_enabled
-            )
+            active_page in ("system", "settings", "clock", "radio")
+            and now - last_system_update > 10
+            and not system_stats_updating
         ):
-            pygame.draw.circle(
-                screen,
-                UI_PINK if vol_level == 0 else UI_AMBER,
-                (btn_fab.centerx + X(16), btn_fab.centery - Y(16)),
-                S(5),
-            )
+            system_stats_updating = True
+            last_system_update = now
+            threading.Thread(target=refresh_system_stats, daemon=True).start()
 
-        if show_qr:
-            qr_panel = R(31, 78, 258, 278)
-            body = draw_info_card(screen, qr_panel, UI_BLUE, 18)
-            screen.blit(qr_surface, XY(40, 88))
-            draw_centered_text(
-                screen, f_tiny, "LISTEN ALONG", ink_on(body),
-                R(40, 328, 240, 16)
-            )
-            station_label = fit_label(
-                stations[current_idx]['name'] if stations else "TCRADIOS", 22
-            )
-            draw_centered_text(
-                screen, f_sm, station_label, muted_ink_on(body),
-                R(40, 344, 240, 18)
-            )
-
-        if not show_qr:
-            if active_page == "menu":
-                draw_menu_screen(now)
-            elif active_page == "favorites":
-                draw_favorites_screen(now)
-            elif active_page == "forecast":
-                draw_forecast_screen(now)
-            elif active_page == "clock":
-                draw_clock_screen(now)
-            elif active_page == "alarm":
-                draw_alarm_screen(now)
-            elif active_page == "system":
-                draw_system_screen(now)
-            elif active_page == "settings":
-                draw_settings_screen(now)
-            elif active_page == "home_cards":
-                draw_home_cards_settings_screen(now)
-            elif active_page == "bluetooth":
-                draw_bluetooth_screen(now)
-            elif active_page == "languages":
-                draw_languages_screen(now)
-            elif active_page == "language_stations":
-                draw_language_stations_screen(now)
-            elif active_page == "youtube":
-                draw_youtube_screen(now)
-            elif active_page == "wifi":
-                draw_wifi_screen(now)
-    
-    for event in pygame.event.get():
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            was_auto_dimmed = (
-                target_display_brightness(now) < device_settings.brightness
-            )
-            previous_interaction = last_interaction_time
-            last_interaction_time = now
-            morning_greeting = (
-                not wifi_setup_required
-                and should_show_house_greeting(previous_interaction, now)
-            )
-            if was_auto_dimmed:
-                device_settings.set_hardware_brightness(
-                    device_settings.brightness
-                )
-                if morning_greeting:
-                    greeting_until = now + 6
-                    greeting_shown_on = datetime.now().date()
-                continue
-            touch_start_pos = event.pos
-            touch_start_time = time.time()
-            if saver_active:
-                saver_active = False
-                if morning_greeting:
-                    greeting_until = now + 6
-                    greeting_shown_on = datetime.now().date()
-                continue
-            if now < greeting_until:
-                greeting_until = 0
-                continue
-            if morning_greeting:
-                greeting_until = now + 6
-                greeting_shown_on = datetime.now().date()
-                continue
-            if show_qr:
-                show_qr = False
-                continue
-            if active_page == "menu":
-                for page_index, card in enumerate(menu_card_rects):
-                    if card.collidepoint(event.pos):
-                        active_page = PAGE_ORDER[page_index]
-                        break
-                continue
-
-            if active_page == "wifi":
-                if btn_pages.collidepoint(event.pos):
-                    wifi_password_open = False
-                    wifi_setup_required = False
-                    active_page = "menu"
-                elif wifi_password_open:
-                    for value, rect in wifi_key_rects:
-                        if rect.collidepoint(event.pos):
-                            handle_wifi_key(value)
-                            break
-                elif btn_wifi_scan.collidepoint(event.pos):
-                    begin_wifi_scan()
-                elif btn_wifi_skip.collidepoint(event.pos):
-                    wifi_password_open = False
-                    if wifi_setup_required:
-                        wifi_setup_required = False
-                        active_page = "radio"
+        try:
+            media = player.get_media()
+            if media:
+                try:
+                    m = media.get_meta(vlc.Meta.NowPlaying)
+                    if m:
+                        meta_text = style_now_playing(m)
                     else:
-                        active_page = "settings"
-                elif not wifi_busy:
-                    for network, rect in zip(wifi_networks[:4], wifi_network_rects):
-                        if rect.collidepoint(event.pos):
-                            begin_wifi_connect(network)
-                            break
-                continue
+                        meta_text = style_now_playing(stations[current_idx]['name'])
+                except: 
+                    meta_text = style_now_playing(stations[current_idx]['name'])
+        except: 
+            meta_text = style_now_playing(stations[current_idx]['name'])
 
-            if active_page == "bluetooth":
-                if btn_bluetooth_back.collidepoint(event.pos):
-                    active_page = "settings"
-                elif (
-                    btn_bluetooth_search.collidepoint(event.pos)
-                    and not touch_bluetooth_busy
-                ):
-                    touch_bluetooth_busy = True
-                    threading.Thread(
-                        target=scan_touch_bluetooth, daemon=True
-                    ).start()
-                elif btn_bluetooth_previous.collidepoint(event.pos):
-                    if touch_bluetooth_offset > 0:
-                        touch_bluetooth_offset = max(
-                            0, touch_bluetooth_offset - BLUETOOTH_PAGE_SIZE
-                        )
-                elif btn_bluetooth_next.collidepoint(event.pos):
-                    if (
-                        touch_bluetooth_offset + BLUETOOTH_PAGE_SIZE
-                        < len(touch_bluetooth_devices)
-                    ):
-                        touch_bluetooth_offset += BLUETOOTH_PAGE_SIZE
-                elif not touch_bluetooth_busy:
-                    for device, rect in zip(
-                        visible_bluetooth_devices(), bluetooth_device_rects
-                    ):
-                        if rect.collidepoint(event.pos):
-                            touch_bluetooth_busy = True
-                            threading.Thread(
-                                target=connect_touch_bluetooth,
-                                args=(device['address'], device['name']),
-                                daemon=True
-                            ).start()
-                            break
-                continue
+        if show_volume_bar and now - volume_bar_timer > 3:
+            show_volume_bar = False
+            adjusting_volume = False
 
-            if active_page == "home_cards":
-                if btn_home_cards_back.collidepoint(event.pos):
-                    active_page = "settings"
-                elif btn_card_layout_single.collidepoint(event.pos):
-                    set_home_card_layout("single")
-                    home_card_edit_slot = 0
-                elif btn_card_layout_bubble.collidepoint(event.pos):
-                    set_home_card_layout("bubble")
-                elif btn_card_slot_left.collidepoint(event.pos):
-                    home_card_edit_slot = 0
-                elif (
-                    device_settings.home_card_layout == "bubble"
-                    and btn_card_slot_right.collidepoint(event.pos)
-                ):
-                    home_card_edit_slot = 1
-                else:
-                    for kind, rect in zip(
-                        HOME_CARD_KINDS, home_card_choice_rects
-                    ):
-                        if rect.collidepoint(event.pos):
-                            assign_home_card(home_card_edit_slot, kind)
-                            break
-                continue
+        hide_mouse_pointer()
+        if saver_active:
+            draw_screensaver()
+        elif now < greeting_until:
+            draw_house_greeting()
+        else:
+            if ui_palette_theme != current_theme.name:
+                refresh_ui_palette()
+            screen.blit(ui_background, (0, 0))
+            draw_animated_ui_glow(screen, now)
 
-            if active_page == "languages":
-                if btn_pages.collidepoint(event.pos):
-                    active_page = "menu"
-                else:
-                    for language, rect in zip(
-                        LANGUAGE_STREAMS, language_card_rects
-                    ):
-                        if rect.collidepoint(event.pos):
-                            if (
-                                language_stream_busy
-                                and language not in language_stream_cache
-                            ):
+            try: is_playing = player.get_state() == vlc.State.Playing
+            except: is_playing = False
+
+            logo_rect = R(0, 0, 1, 1)
+
+            # Title bar stays its own strip. Cards fill the band under it.
+            header_rect = R(8, 7, 304, 52)
+            pygame.draw.rect(screen, UI_SURFACE, header_rect, border_radius=S(17))
+            pygame.draw.rect(screen, (54, 75, 112), header_rect, S(1), border_radius=S(17))
+
+            btn_qr, btn_exit = header_edge_buttons(header_rect)
+            qr_body = draw_modern_button(screen, btn_qr, UI_BLUE, UI_BLUE, 12)
+            draw_centered_text(screen, f_sm, "QR", contrasting_text(qr_body), btn_qr)
+
+            title_rect = R(65, 10, 190, 38)
+            draw_centered_text(screen, f_lg, "TC RADIOS", UI_TEXT, title_rect)
+            if show_startup_ip and now < ip_display_time:
+                ip_surface = f_tiny.render(f"{current_ip}:8080", True, UI_MUTED)
+                screen.blit(ip_surface, (X(160) - ip_surface.get_width() // 2, Y(43)))
+
+            exit_body = draw_modern_button(screen, btn_exit, (75, 30, 55), UI_PINK, 12)
+            draw_vector_icon(
+                screen, btn_exit.center, "close",
+                contrasting_text(exit_body),
+                radius=max(8, min(btn_exit.width, btn_exit.height) // 4),
+                width=S(3),
+            )
+
+            home_slots = home_card_slots()
+            for rect, kind, layout_x, layout_y, layout_w, layout_h in home_slots:
+                draw_home_card(
+                    rect, kind, now,
+                    layout_x=layout_x, layout_y=layout_y,
+                    layout_w=layout_w, layout_h=layout_h
+                )
+
+            # Volume and play controls stay on the now-playing card only.
+            controls = playback_control_layout()
+            vol_minus_rect = controls["vol_minus"]
+            vol_plus_rect = controls["vol_plus"]
+            vol_bar_rect = controls["vol_bar"]
+            btn_prev = controls["prev"]
+            btn_toggle = controls["toggle"]
+            btn_next = controls["next"]
+            if controls["visible"]:
+                control_font = f_tiny if controls["compact"] else f_sm
+                draw_circle_icon_button(screen, vol_minus_rect, UI_AMBER, "minus")
+                pygame.draw.rect(screen, (37, 48, 72), vol_bar_rect, border_radius=S(8))
+                fill_width = int(vol_bar_rect.width * vol_level / 100)
+                if fill_width > 0:
+                    fill_rect = _Rect(
+                        vol_bar_rect.x, vol_bar_rect.y, max(X(10), fill_width), vol_bar_rect.height
+                    )
+                    pygame.draw.rect(screen, UI_BLUE, fill_rect, border_radius=S(8))
+                knob_x = vol_bar_rect.x + int(vol_bar_rect.width * vol_level / 100)
+                knob_x = max(vol_bar_rect.x + X(6), min(vol_bar_rect.right - X(6), knob_x))
+                draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), S(8), UI_TEXT)
+                draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), S(4), UI_BLUE)
+                vol_pct_surf = f_tiny.render(f"{vol_level}%", True, UI_TEXT)
+                screen.blit(
+                    vol_pct_surf,
+                    (
+                        X(controls["pct_x"]) - vol_pct_surf.get_width() // 2,
+                        Y(controls["pct_y"])
+                    )
+                )
+                draw_circle_icon_button(screen, vol_plus_rect, UI_GREEN, "plus")
+
+                draw_pulsing_border(
+                    screen,
+                    btn_toggle,
+                    UI_AMBER if is_playing else UI_GREEN,
+                    now
+                )
+                prev_body = draw_modern_button(screen, btn_prev, UI_BLUE, UI_BLUE, 16)
+                toggle_color = UI_AMBER if is_playing else UI_GREEN
+                toggle_body = draw_modern_button(
+                    screen, btn_toggle, toggle_color, toggle_color, 18
+                )
+                next_body = draw_modern_button(screen, btn_next, UI_PURPLE, UI_PURPLE, 16)
+                draw_centered_text(
+                    screen, control_font, "PREV", contrasting_text(prev_body), btn_prev
+                )
+                draw_centered_text(
+                    screen, control_font, "PAUSE" if is_playing else "PLAY",
+                    contrasting_text(toggle_body),
+                    btn_toggle
+                )
+                draw_centered_text(
+                    screen, control_font, "NEXT", contrasting_text(next_body), btn_next
+                )
+
+            pages_body = draw_modern_button(
+                screen, btn_open_pages, UI_BLUE, UI_BLUE, 16
+            )
+            draw_centered_text(
+                screen, f_sm, "PAGES", contrasting_text(pages_body), btn_open_pages
+            )
+
+            if fab_open:
+                dim = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+                dim.fill((0, 0, 0, 150))
+                screen.blit(dim, (0, 0))
+                panel = R(8, 236, 304, 136)
+                pygame.draw.rect(screen, UI_SURFACE, panel, border_radius=S(18))
+                pygame.draw.rect(screen, (54, 64, 91), panel, S(1), border_radius=S(18))
+                sleep_fill = UI_PURPLE if alarm_system.sleep_timer_enabled else UI_SURFACE_RAISED
+                moon_fill = UI_BLUE if saver_active else UI_SURFACE_RAISED
+                alarm_fill = UI_AMBER if alarm_system.alarm_enabled else UI_SURFACE_RAISED
+                mute_fill = UI_PINK if vol_level == 0 else UI_SURFACE_RAISED
+                labeled_button(screen, btn_sleep, sleep_fill, f_sm, "SLEEP", 14)
+                labeled_button(screen, btn_saver, moon_fill, f_sm, "MOON", 14)
+                labeled_button(screen, btn_alarm, alarm_fill, f_sm, "ALARM", 14)
+                labeled_button(
+                    screen, btn_mute, mute_fill, f_sm,
+                    "MUTE" if vol_level else "UNMUTE", 14
+                )
+
+            fab_fill = UI_PINK if fab_open else UI_PURPLE
+            draw_smooth_circle(screen, btn_fab.center, S(26), fab_fill)
+            draw_vector_icon(
+                screen, btn_fab.center,
+                "close" if fab_open else "gear",
+                ink_on(fab_fill),
+                radius=S(11),
+                width=S(3),
+            )
+            if (
+                not fab_open
+                and (
+                    vol_level == 0
+                    or alarm_system.alarm_enabled
+                    or alarm_system.sleep_timer_enabled
+                )
+            ):
+                pygame.draw.circle(
+                    screen,
+                    UI_PINK if vol_level == 0 else UI_AMBER,
+                    (btn_fab.centerx + X(16), btn_fab.centery - Y(16)),
+                    S(5),
+                )
+
+            if show_qr:
+                qr_panel = R(31, 78, 258, 278)
+                body = draw_info_card(screen, qr_panel, UI_BLUE, 18)
+                screen.blit(qr_surface, XY(40, 88))
+                draw_centered_text(
+                    screen, f_tiny, "LISTEN ALONG", ink_on(body),
+                    R(40, 328, 240, 16)
+                )
+                station_label = fit_label(
+                    stations[current_idx]['name'] if stations else "TCRADIOS", 22
+                )
+                draw_centered_text(
+                    screen, f_sm, station_label, muted_ink_on(body),
+                    R(40, 344, 240, 18)
+                )
+
+            if not show_qr:
+                if active_page == "menu":
+                    draw_menu_screen(now)
+                elif active_page == "favorites":
+                    draw_favorites_screen(now)
+                elif active_page == "forecast":
+                    draw_forecast_screen(now)
+                elif active_page == "clock":
+                    draw_clock_screen(now)
+                elif active_page == "alarm":
+                    draw_alarm_screen(now)
+                elif active_page == "system":
+                    draw_system_screen(now)
+                elif active_page == "settings":
+                    draw_settings_screen(now)
+                elif active_page == "home_cards":
+                    draw_home_cards_settings_screen(now)
+                elif active_page == "bluetooth":
+                    draw_bluetooth_screen(now)
+                elif active_page == "languages":
+                    draw_languages_screen(now)
+                elif active_page == "language_stations":
+                    draw_language_stations_screen(now)
+                elif active_page == "youtube":
+                    draw_youtube_screen(now)
+                elif active_page == "wifi":
+                    draw_wifi_screen(now)
+
+        for event in pygame.event.get():
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                was_auto_dimmed = (
+                    target_display_brightness(now) < device_settings.brightness
+                )
+                previous_interaction = last_interaction_time
+                last_interaction_time = now
+                morning_greeting = (
+                    not wifi_setup_required
+                    and should_show_house_greeting(previous_interaction, now)
+                )
+                if was_auto_dimmed:
+                    device_settings.set_hardware_brightness(
+                        device_settings.brightness
+                    )
+                    if morning_greeting:
+                        greeting_until = now + 6
+                        greeting_shown_on = datetime.now().date()
+                    continue
+                touch_start_pos = event.pos
+                touch_start_time = time.time()
+                if saver_active:
+                    saver_active = False
+                    if morning_greeting:
+                        greeting_until = now + 6
+                        greeting_shown_on = datetime.now().date()
+                    continue
+                if now < greeting_until:
+                    greeting_until = 0
+                    continue
+                if morning_greeting:
+                    greeting_until = now + 6
+                    greeting_shown_on = datetime.now().date()
+                    continue
+                if show_qr:
+                    show_qr = False
+                    continue
+                if active_page == "menu":
+                    for page_index, card in enumerate(menu_card_rects):
+                        if card.collidepoint(event.pos):
+                            active_page = PAGE_ORDER[page_index]
+                            break
+                    continue
+
+                if active_page == "wifi":
+                    if btn_pages.collidepoint(event.pos):
+                        wifi_password_open = False
+                        wifi_setup_required = False
+                        active_page = "menu"
+                    elif wifi_password_open:
+                        for value, rect in wifi_key_rects:
+                            if rect.collidepoint(event.pos):
+                                handle_wifi_key(value)
                                 break
-                            selected_language = language
-                            language_stream_offset = 0
-                            active_page = "language_stations"
-                            if language in language_stream_cache:
-                                count = len(language_stream_cache[language])
-                                language_stream_status = (
-                                    f"{count} station"
-                                    f"{'s' if count != 1 else ''}"
-                                )
-                            elif not language_stream_busy:
-                                language_stream_busy = True
-                                language_stream_status = "Loading stations…"
+                    elif btn_wifi_scan.collidepoint(event.pos):
+                        begin_wifi_scan()
+                    elif btn_wifi_skip.collidepoint(event.pos):
+                        wifi_password_open = False
+                        if wifi_setup_required:
+                            wifi_setup_required = False
+                            active_page = "radio"
+                        else:
+                            active_page = "settings"
+                    elif not wifi_busy:
+                        for network, rect in zip(wifi_networks[:4], wifi_network_rects):
+                            if rect.collidepoint(event.pos):
+                                begin_wifi_connect(network)
+                                break
+                    continue
+
+                if active_page == "bluetooth":
+                    if btn_bluetooth_back.collidepoint(event.pos):
+                        active_page = "settings"
+                    elif (
+                        btn_bluetooth_search.collidepoint(event.pos)
+                        and not touch_bluetooth_busy
+                    ):
+                        touch_bluetooth_busy = True
+                        threading.Thread(
+                            target=scan_touch_bluetooth, daemon=True
+                        ).start()
+                    elif btn_bluetooth_previous.collidepoint(event.pos):
+                        if touch_bluetooth_offset > 0:
+                            touch_bluetooth_offset = max(
+                                0, touch_bluetooth_offset - BLUETOOTH_PAGE_SIZE
+                            )
+                    elif btn_bluetooth_next.collidepoint(event.pos):
+                        if (
+                            touch_bluetooth_offset + BLUETOOTH_PAGE_SIZE
+                            < len(touch_bluetooth_devices)
+                        ):
+                            touch_bluetooth_offset += BLUETOOTH_PAGE_SIZE
+                    elif not touch_bluetooth_busy:
+                        for device, rect in zip(
+                            visible_bluetooth_devices(), bluetooth_device_rects
+                        ):
+                            if rect.collidepoint(event.pos):
+                                touch_bluetooth_busy = True
                                 threading.Thread(
-                                    target=load_language_streams,
-                                    args=(language,),
+                                    target=connect_touch_bluetooth,
+                                    args=(device['address'], device['name']),
                                     daemon=True
                                 ).start()
-                            break
-                continue
+                                break
+                    continue
 
-            if active_page == "language_stations":
-                streams = language_stream_cache.get(selected_language, [])
-                if btn_language_back.collidepoint(event.pos):
-                    active_page = "languages"
-                elif (
-                    btn_language_previous.collidepoint(event.pos)
-                    and language_stream_offset > 0
-                ):
-                    language_stream_offset = max(
-                        0, language_stream_offset - 5
-                    )
-                elif (
-                    btn_language_next.collidepoint(event.pos)
-                    and language_stream_offset + 5 < len(streams)
-                ):
-                    language_stream_offset += 5
-                elif not language_stream_busy:
-                    visible_streams = streams[
-                        language_stream_offset:language_stream_offset + 5
-                    ]
-                    for stream, rect in zip(
-                        visible_streams, language_station_rects
+                if active_page == "home_cards":
+                    if btn_home_cards_back.collidepoint(event.pos):
+                        active_page = "settings"
+                    elif btn_card_layout_single.collidepoint(event.pos):
+                        set_home_card_layout("single")
+                        home_card_edit_slot = 0
+                    elif btn_card_layout_bubble.collidepoint(event.pos):
+                        set_home_card_layout("bubble")
+                    elif btn_card_slot_left.collidepoint(event.pos):
+                        home_card_edit_slot = 0
+                    elif (
+                        device_settings.home_card_layout == "bubble"
+                        and btn_card_slot_right.collidepoint(event.pos)
                     ):
-                        if rect.collidepoint(event.pos):
-                            play_language_stream(stream)
-                            active_page = "radio"
-                            break
-                continue
+                        home_card_edit_slot = 1
+                    else:
+                        for kind, rect in zip(
+                            HOME_CARD_KINDS, home_card_choice_rects
+                        ):
+                            if rect.collidepoint(event.pos):
+                                assign_home_card(home_card_edit_slot, kind)
+                                break
+                    continue
 
-            if active_page != "radio":
-                if btn_pages.collidepoint(event.pos):
-                    youtube_keyboard_open = False
-                    active_page = "menu"
-                elif active_page == "youtube":
-                    if btn_youtube_search_go.collidepoint(event.pos):
-                        query = youtube_keyboard_text.strip() or youtube_touch_query
-                        if query:
-                            begin_youtube_search(query)
-                        else:
-                            youtube_keyboard_open = True
-                    elif btn_youtube_search_field.collidepoint(event.pos):
-                        youtube_keyboard_open = True
-                    elif youtube_keyboard_open:
-                        if btn_youtube_keyboard_close.collidepoint(event.pos):
-                            youtube_keyboard_open = False
-                        else:
-                            for _label, value, rect in youtube_key_rects:
-                                if rect.collidepoint(event.pos):
-                                    handle_youtube_key(value)
+                if active_page == "languages":
+                    if btn_pages.collidepoint(event.pos):
+                        active_page = "menu"
+                    else:
+                        for language, rect in zip(
+                            LANGUAGE_STREAMS, language_card_rects
+                        ):
+                            if rect.collidepoint(event.pos):
+                                if (
+                                    language_stream_busy
+                                    and language not in language_stream_cache
+                                ):
                                     break
-                    elif not youtube_touch_busy:
-                            for (_label, query), rect in zip(
-                                YOUTUBE_PRESETS, youtube_preset_rects
-                            ):
-                                if rect.collidepoint(event.pos):
-                                    youtube_keyboard_text = query
-                                    begin_youtube_search(query)
-                                    break
-                            total = len(youtube_results_cache)
-                            if (
-                                btn_youtube_prev.collidepoint(event.pos)
-                                and youtube_touch_offset > 0
-                            ):
-                                youtube_touch_offset = max(
-                                    0, youtube_touch_offset - 4
-                                )
-                            elif (
-                                btn_youtube_next.collidepoint(event.pos)
-                                and youtube_touch_offset + 4 < total
-                            ):
-                                youtube_touch_offset += 4
+                                selected_language = language
+                                language_stream_offset = 0
+                                active_page = "language_stations"
+                                if language in language_stream_cache:
+                                    count = len(language_stream_cache[language])
+                                    language_stream_status = (
+                                        f"{count} station"
+                                        f"{'s' if count != 1 else ''}"
+                                    )
+                                elif not language_stream_busy:
+                                    language_stream_busy = True
+                                    language_stream_status = "Loading stations…"
+                                    threading.Thread(
+                                        target=load_language_streams,
+                                        args=(language,),
+                                        daemon=True
+                                    ).start()
+                                break
+                    continue
+
+                if active_page == "language_stations":
+                    streams = language_stream_cache.get(selected_language, [])
+                    if btn_language_back.collidepoint(event.pos):
+                        active_page = "languages"
+                    elif (
+                        btn_language_previous.collidepoint(event.pos)
+                        and language_stream_offset > 0
+                    ):
+                        language_stream_offset = max(
+                            0, language_stream_offset - 5
+                        )
+                    elif (
+                        btn_language_next.collidepoint(event.pos)
+                        and language_stream_offset + 5 < len(streams)
+                    ):
+                        language_stream_offset += 5
+                    elif not language_stream_busy:
+                        visible_streams = streams[
+                            language_stream_offset:language_stream_offset + 5
+                        ]
+                        for stream, rect in zip(
+                            visible_streams, language_station_rects
+                        ):
+                            if rect.collidepoint(event.pos):
+                                play_language_stream(stream)
+                                active_page = "radio"
+                                break
+                    continue
+
+                if active_page != "radio":
+                    if btn_pages.collidepoint(event.pos):
+                        youtube_keyboard_open = False
+                        active_page = "menu"
+                    elif active_page == "youtube":
+                        if btn_youtube_search_go.collidepoint(event.pos):
+                            query = youtube_keyboard_text.strip() or youtube_touch_query
+                            if query:
+                                begin_youtube_search(query)
                             else:
-                                visible = youtube_results_cache[
-                                    youtube_touch_offset:youtube_touch_offset + 4
-                                ]
-                                for video, rect in zip(
-                                    visible, youtube_result_rects
+                                youtube_keyboard_open = True
+                        elif btn_youtube_search_field.collidepoint(event.pos):
+                            youtube_keyboard_open = True
+                        elif youtube_keyboard_open:
+                            if btn_youtube_keyboard_close.collidepoint(event.pos):
+                                youtube_keyboard_open = False
+                            else:
+                                for _label, value, rect in youtube_key_rects:
+                                    if rect.collidepoint(event.pos):
+                                        handle_youtube_key(value)
+                                        break
+                        elif not youtube_touch_busy:
+                                for (_label, query), rect in zip(
+                                    YOUTUBE_PRESETS, youtube_preset_rects
                                 ):
                                     if rect.collidepoint(event.pos):
-                                        begin_youtube_play(video)
+                                        youtube_keyboard_text = query
+                                        begin_youtube_search(query)
                                         break
-                elif active_page == "favorites":
-                    if btn_favorite_toggle.collidepoint(event.pos):
-                        toggle_current_favorite()
-                    else:
-                        for favorite_index, card in enumerate(
-                            favorite_card_rects
-                        ):
-                            if (
-                                card.collidepoint(event.pos)
-                                and favorite_index < len(favorite_indices)
-                            ):
-                                current_idx = favorite_indices[favorite_index]
-                                play()
-                                break
-                elif active_page == "alarm":
-                    if btn_alarm_toggle_page.collidepoint(event.pos):
-                        alarm_system.alarm_enabled = (
-                            not alarm_system.alarm_enabled
-                        )
-                        alarm_system.save_alarm_settings()
-                    elif (
-                        btn_alarm_minus.collidepoint(event.pos)
-                        or btn_alarm_plus.collidepoint(event.pos)
-                    ):
-                        alarm_time = datetime.strptime(
-                            alarm_system.alarm_time, "%H:%M"
-                        )
-                        minutes = (
-                            -5 if btn_alarm_minus.collidepoint(event.pos) else 5
-                        )
-                        alarm_system.alarm_time = (
-                            alarm_time + timedelta(minutes=minutes)
-                        ).strftime("%H:%M")
-                        alarm_system.save_alarm_settings()
-                    else:
-                        for preset, minutes in zip(
-                            btn_sleep_presets, (15, 30, 60)
-                        ):
-                            if preset.collidepoint(event.pos):
-                                alarm_system.start_sleep_timer(minutes)
-                                break
-                        if btn_sleep_cancel.collidepoint(event.pos):
-                            alarm_system.stop_sleep_timer()
-                elif active_page == "system":
-                    if btn_safe_shutdown.collidepoint(event.pos):
-                        if now <= shutdown_confirm_until:
-                            request_touch_shutdown()
-                        else:
-                            shutdown_confirm_until = now + 5
-                elif active_page == "settings":
-                    for rect, output_name in zip(
-                        btn_audio_outputs,
-                        ("auto", "analog", "hdmi", "bluetooth")
-                    ):
-                        available = (
-                            output_name in ("auto", "bluetooth")
-                            or audio_manager.outputs.get(
-                                output_name, {}
-                            ).get('available', False)
-                        )
-                        if rect.collidepoint(event.pos) and available:
-                            if output_name == "bluetooth":
-                                active_page = "bluetooth"
+                                total = len(youtube_results_cache)
                                 if (
-                                    not touch_bluetooth_devices
-                                    and not touch_bluetooth_busy
+                                    btn_youtube_prev.collidepoint(event.pos)
+                                    and youtube_touch_offset > 0
                                 ):
-                                    try:
-                                        touch_bluetooth_devices = (
-                                            audio_manager.get_bluetooth_devices()
-                                        )
-                                        touch_bluetooth_offset = 0
-                                    except Exception:
-                                        pass
+                                    youtube_touch_offset = max(
+                                        0, youtube_touch_offset - 4
+                                    )
+                                elif (
+                                    btn_youtube_next.collidepoint(event.pos)
+                                    and youtube_touch_offset + 4 < total
+                                ):
+                                    youtube_touch_offset += 4
+                                else:
+                                    visible = youtube_results_cache[
+                                        youtube_touch_offset:youtube_touch_offset + 4
+                                    ]
+                                    for video, rect in zip(
+                                        visible, youtube_result_rects
+                                    ):
+                                        if rect.collidepoint(event.pos):
+                                            begin_youtube_play(video)
+                                            break
+                    elif active_page == "favorites":
+                        if btn_favorite_toggle.collidepoint(event.pos):
+                            toggle_current_favorite()
+                        else:
+                            for favorite_index, card in enumerate(
+                                favorite_card_rects
+                            ):
+                                if (
+                                    card.collidepoint(event.pos)
+                                    and favorite_index < len(favorite_indices)
+                                ):
+                                    current_idx = favorite_indices[favorite_index]
+                                    play()
+                                    break
+                    elif active_page == "alarm":
+                        if btn_alarm_toggle_page.collidepoint(event.pos):
+                            alarm_system.alarm_enabled = (
+                                not alarm_system.alarm_enabled
+                            )
+                            alarm_system.save_alarm_settings()
+                        elif (
+                            btn_alarm_minus.collidepoint(event.pos)
+                            or btn_alarm_plus.collidepoint(event.pos)
+                        ):
+                            alarm_time = datetime.strptime(
+                                alarm_system.alarm_time, "%H:%M"
+                            )
+                            minutes = (
+                                -5 if btn_alarm_minus.collidepoint(event.pos) else 5
+                            )
+                            alarm_system.alarm_time = (
+                                alarm_time + timedelta(minutes=minutes)
+                            ).strftime("%H:%M")
+                            alarm_system.save_alarm_settings()
+                        else:
+                            for preset, minutes in zip(
+                                btn_sleep_presets, (15, 30, 60)
+                            ):
+                                if preset.collidepoint(event.pos):
+                                    alarm_system.start_sleep_timer(minutes)
+                                    break
+                            if btn_sleep_cancel.collidepoint(event.pos):
+                                alarm_system.stop_sleep_timer()
+                    elif active_page == "system":
+                        if btn_safe_shutdown.collidepoint(event.pos):
+                            if now <= shutdown_confirm_until:
+                                request_touch_shutdown()
                             else:
-                                audio_manager.set_output(output_name)
-                            break
-                    if (
-                        btn_brightness_minus.collidepoint(event.pos)
-                        or btn_brightness_plus.collidepoint(event.pos)
-                    ):
-                        change = (
-                            -10
-                            if btn_brightness_minus.collidepoint(event.pos)
-                            else 10
-                        )
-                        device_settings.brightness = max(
-                            10,
-                            min(100, device_settings.brightness + change)
-                        )
-                        device_settings.save()
-                        device_settings.set_hardware_brightness(
-                            device_settings.brightness
-                        )
-                    elif btn_auto_dim.collidepoint(event.pos):
-                        device_settings.auto_dim_enabled = (
-                            not device_settings.auto_dim_enabled
-                        )
-                        device_settings.save()
-                    elif btn_wifi_setup.collidepoint(event.pos):
-                        wifi_from_settings = True
-                        wifi_setup_required = False
-                        wifi_password_open = False
-                        active_page = "wifi"
-                        if not wifi_networks and not wifi_busy:
-                            begin_wifi_scan()
-                    elif btn_wifi_qr.collidepoint(event.pos):
-                        show_qr = True
-                    elif btn_home_cards.collidepoint(event.pos):
-                        active_page = "home_cards"
-                    elif (
-                        btn_theme_previous.collidepoint(event.pos)
-                        or btn_theme_next.collidepoint(event.pos)
-                    ):
-                        current_theme_index = next(
-                            (
-                                index for index, theme_name
-                                in enumerate(theme_names)
-                                if THEMES[theme_name].name
-                                == current_theme.name
-                            ),
-                            0
-                        )
-                        direction = (
-                            -1 if btn_theme_previous.collidepoint(event.pos)
-                            else 1
-                        )
-                        set_theme(
-                            theme_names[
-                                (current_theme_index + direction)
-                                % len(theme_names)
-                            ]
-                        )
-                continue
+                                shutdown_confirm_until = now + 5
+                    elif active_page == "settings":
+                        for rect, output_name in zip(
+                            btn_audio_outputs,
+                            ("auto", "analog", "hdmi", "bluetooth")
+                        ):
+                            available = (
+                                output_name in ("auto", "bluetooth")
+                                or audio_manager.outputs.get(
+                                    output_name, {}
+                                ).get('available', False)
+                            )
+                            if rect.collidepoint(event.pos) and available:
+                                if output_name == "bluetooth":
+                                    active_page = "bluetooth"
+                                    if (
+                                        not touch_bluetooth_devices
+                                        and not touch_bluetooth_busy
+                                    ):
+                                        try:
+                                            touch_bluetooth_devices = (
+                                                audio_manager.get_bluetooth_devices()
+                                            )
+                                            touch_bluetooth_offset = 0
+                                        except Exception:
+                                            pass
+                                else:
+                                    audio_manager.set_output(output_name)
+                                break
+                        if (
+                            btn_brightness_minus.collidepoint(event.pos)
+                            or btn_brightness_plus.collidepoint(event.pos)
+                        ):
+                            change = (
+                                -10
+                                if btn_brightness_minus.collidepoint(event.pos)
+                                else 10
+                            )
+                            device_settings.brightness = max(
+                                10,
+                                min(100, device_settings.brightness + change)
+                            )
+                            device_settings.save()
+                            device_settings.set_hardware_brightness(
+                                device_settings.brightness
+                            )
+                        elif btn_auto_dim.collidepoint(event.pos):
+                            device_settings.auto_dim_enabled = (
+                                not device_settings.auto_dim_enabled
+                            )
+                            device_settings.save()
+                        elif btn_wifi_setup.collidepoint(event.pos):
+                            wifi_from_settings = True
+                            wifi_setup_required = False
+                            wifi_password_open = False
+                            active_page = "wifi"
+                            if not wifi_networks and not wifi_busy:
+                                begin_wifi_scan()
+                        elif btn_wifi_qr.collidepoint(event.pos):
+                            show_qr = True
+                        elif btn_home_cards.collidepoint(event.pos):
+                            active_page = "home_cards"
+                        elif (
+                            btn_theme_previous.collidepoint(event.pos)
+                            or btn_theme_next.collidepoint(event.pos)
+                        ):
+                            current_theme_index = next(
+                                (
+                                    index for index, theme_name
+                                    in enumerate(theme_names)
+                                    if THEMES[theme_name].name
+                                    == current_theme.name
+                                ),
+                                0
+                            )
+                            direction = (
+                                -1 if btn_theme_previous.collidepoint(event.pos)
+                                else 1
+                            )
+                            set_theme(
+                                theme_names[
+                                    (current_theme_index + direction)
+                                    % len(theme_names)
+                                ]
+                            )
+                    continue
 
-            if btn_fab.collidepoint(event.pos):
-                fab_open = not fab_open
-                continue
-            if fab_open:
-                if btn_sleep.collidepoint(event.pos):
-                    if alarm_system.sleep_timer_enabled:
-                        alarm_system.stop_sleep_timer()
-                    else:
-                        alarm_system.start_sleep_timer(30)
-                elif btn_saver.collidepoint(event.pos):
-                    saver_active = not saver_active
-                    if saver_active:
-                        saver_started_at = time.time()
-                elif btn_alarm.collidepoint(event.pos):
-                    alarm_system.alarm_enabled = not alarm_system.alarm_enabled
-                    alarm_system.save_alarm_settings()
-                elif btn_mute.collidepoint(event.pos):
-                    apply_live_volume(0 if vol_level > 0 else last_unmuted_volume)
-                fab_open = False
-                continue
-            if btn_open_pages.collidepoint(event.pos):
-                fab_open = False
-                active_page = "menu"
-                continue
-            if btn_exit.collidepoint(event.pos):
-                save_playback_state(force=True)
-                pygame.quit()
-                sys.exit()
-            if btn_qr.collidepoint(event.pos):
-                show_qr = True
-            if btn_prev.collidepoint(event.pos):
-                skip_playback(-1)
-            if btn_next.collidepoint(event.pos):
-                skip_playback(1)
-            if btn_toggle.collidepoint(event.pos):
-                player.pause()
-            if vol_minus_rect.collidepoint(event.pos):
-                apply_live_volume(vol_level - 5)
-                show_volume_bar = True
-                volume_bar_timer = time.time()
-            if vol_plus_rect.collidepoint(event.pos):
-                apply_live_volume(vol_level + 5)
-                show_volume_bar = True
-                volume_bar_timer = time.time()
-            if vol_bar_rect.collidepoint(event.pos):
-                adjusting_volume = True
-                apply_live_volume(
-                    int((event.pos[0] - vol_bar_rect.x) * 100 / vol_bar_rect.width)
-                )
-                show_volume_bar = True
-                volume_bar_timer = time.time()
-        
-        elif event.type == pygame.MOUSEBUTTONUP:
-            dx = event.pos[0] - touch_start_pos[0]
-            dy = event.pos[1] - touch_start_pos[1]
-            dt = time.time() - touch_start_time
-            if (
-                active_page in PAGE_ORDER
-                and abs(dx) > X(45)
-                and abs(dx) > abs(dy)
-                and dt < 2.5
-            ):
-                youtube_keyboard_open = False
-                fab_open = False
-                page_index = PAGE_ORDER.index(active_page)
-                direction = 1 if dx < 0 else -1
-                active_page = PAGE_ORDER[
-                    (page_index + direction) % len(PAGE_ORDER)
-                ]
-                adjusting_volume = False
-                continue
-
-            if active_page == "radio" and logo_rect.collidepoint(touch_start_pos):
-                dy = touch_start_pos[1] - event.pos[1]
-                if dt > 1.0:
-                    if alarm_system.sleep_timer_enabled:
-                        alarm_system.stop_sleep_timer()
-                    else:
-                        alarm_system.start_sleep_timer(30)
-                elif abs(dy) > Y(30):
-                    apply_live_volume(vol_level + (5 if dy > 0 else -5))
+                if btn_fab.collidepoint(event.pos):
+                    fab_open = not fab_open
+                    continue
+                if fab_open:
+                    if btn_sleep.collidepoint(event.pos):
+                        if alarm_system.sleep_timer_enabled:
+                            alarm_system.stop_sleep_timer()
+                        else:
+                            alarm_system.start_sleep_timer(30)
+                    elif btn_saver.collidepoint(event.pos):
+                        saver_active = not saver_active
+                        if saver_active:
+                            saver_started_at = time.time()
+                    elif btn_alarm.collidepoint(event.pos):
+                        alarm_system.alarm_enabled = not alarm_system.alarm_enabled
+                        alarm_system.save_alarm_settings()
+                    elif btn_mute.collidepoint(event.pos):
+                        apply_live_volume(0 if vol_level > 0 else last_unmuted_volume)
+                    fab_open = False
+                    continue
+                if btn_open_pages.collidepoint(event.pos):
+                    fab_open = False
+                    active_page = "menu"
+                    continue
+                if btn_exit.collidepoint(event.pos):
+                    save_playback_state(force=True)
+                    pygame.quit()
+                    sys.exit()
+                if btn_qr.collidepoint(event.pos):
+                    show_qr = True
+                if btn_prev.collidepoint(event.pos):
+                    skip_playback(-1)
+                if btn_next.collidepoint(event.pos):
+                    skip_playback(1)
+                if btn_toggle.collidepoint(event.pos):
+                    toggle_playback()
+                if vol_minus_rect.collidepoint(event.pos):
+                    apply_live_volume(vol_level - 5)
                     show_volume_bar = True
                     volume_bar_timer = time.time()
-            if adjusting_volume:
-                save_playback_state(force=True)
-            adjusting_volume = False
-        
-        elif event.type == pygame.MOUSEMOTION and adjusting_volume:
-            if event.pos[0] >= vol_bar_rect.x and event.pos[0] <= vol_bar_rect.right:
-                apply_live_volume(
-                    int((event.pos[0] - vol_bar_rect.x) * 100 / vol_bar_rect.width)
-                )
-                volume_bar_timer = time.time()
-    
-    apply_display_brightness(now)
-    pygame.display.flip()
-    time.sleep(0.05)
+                if vol_plus_rect.collidepoint(event.pos):
+                    apply_live_volume(vol_level + 5)
+                    show_volume_bar = True
+                    volume_bar_timer = time.time()
+                if vol_bar_rect.collidepoint(event.pos):
+                    adjusting_volume = True
+                    apply_live_volume(
+                        int((event.pos[0] - vol_bar_rect.x) * 100 / vol_bar_rect.width)
+                    )
+                    show_volume_bar = True
+                    volume_bar_timer = time.time()
+
+            elif event.type == pygame.MOUSEBUTTONUP:
+                dx = event.pos[0] - touch_start_pos[0]
+                dy = event.pos[1] - touch_start_pos[1]
+                dt = time.time() - touch_start_time
+                if (
+                    active_page in PAGE_ORDER
+                    and abs(dx) > X(45)
+                    and abs(dx) > abs(dy)
+                    and dt < 2.5
+                ):
+                    youtube_keyboard_open = False
+                    fab_open = False
+                    page_index = PAGE_ORDER.index(active_page)
+                    direction = 1 if dx < 0 else -1
+                    active_page = PAGE_ORDER[
+                        (page_index + direction) % len(PAGE_ORDER)
+                    ]
+                    adjusting_volume = False
+                    continue
+
+                if active_page == "radio" and logo_rect.collidepoint(touch_start_pos):
+                    dy = touch_start_pos[1] - event.pos[1]
+                    if dt > 1.0:
+                        if alarm_system.sleep_timer_enabled:
+                            alarm_system.stop_sleep_timer()
+                        else:
+                            alarm_system.start_sleep_timer(30)
+                    elif abs(dy) > Y(30):
+                        apply_live_volume(vol_level + (5 if dy > 0 else -5))
+                        show_volume_bar = True
+                        volume_bar_timer = time.time()
+                if adjusting_volume:
+                    save_playback_state(force=True)
+                adjusting_volume = False
+
+            elif event.type == pygame.MOUSEMOTION and adjusting_volume:
+                if event.pos[0] >= vol_bar_rect.x and event.pos[0] <= vol_bar_rect.right:
+                    apply_live_volume(
+                        int((event.pos[0] - vol_bar_rect.x) * 100 / vol_bar_rect.width)
+                    )
+                    volume_bar_timer = time.time()
+
+        apply_display_brightness(now)
+        pygame.display.flip()
+        time.sleep(0.05)
+    except Exception:
+        if time.time() - _radio_frame_error_at > 30:
+            _radio_frame_error_at = time.time()
+            traceback.print_exc()
+        time.sleep(0.2)
