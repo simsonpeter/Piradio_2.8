@@ -6410,12 +6410,99 @@ def draw_youtube_screen(now):
         )
     draw_pages_button()
 
+SAVER_IDLE_SECONDS = 120
+_saver_faces = {}
+_saver_track = {"key": None, "surface": None, "started": 0.0}
+
+def _saver_face(text, color, target_w, max_h):
+    key = (text, color, target_w, max_h)
+    cached = _saver_faces.get(key)
+    if cached is not None:
+        return cached
+    rendered = f_xl.render(text, True, color)
+    width = max(1, target_w)
+    height = int(rendered.get_height() * width / max(1, rendered.get_width()))
+    if max_h > 0 and height > max_h:
+        height = max(1, max_h)
+        width = max(1, int(rendered.get_width() * height / max(1, rendered.get_height())))
+    surface = pygame.transform.smoothscale(rendered, (width, max(1, height)))
+    if len(_saver_faces) > 16:
+        _saver_faces.clear()
+    _saver_faces[key] = surface
+    return surface
+
+def _blit_saver_track(text, font, color, y, clip, now):
+    text = str(text or "TCRADIOS")
+    key = (text, color, id(font))
+    if _saver_track["key"] != key or _saver_track["surface"] is None:
+        _saver_track["key"] = key
+        _saver_track["surface"] = font.render(text, True, color)
+        _saver_track["started"] = now
+    rendered = _saver_track["surface"]
+    if rendered.get_width() <= clip.width:
+        screen.blit(
+            rendered,
+            (clip.centerx - rendered.get_width() // 2, int(y)),
+        )
+        return
+    gap = 32
+    span = rendered.get_width() + gap
+    speed = 46
+    hold = 1.1
+    phase = (now - _saver_track["started"]) % (hold + span / float(speed))
+    offset = 0 if phase < hold else int((phase - hold) * speed)
+    previous = screen.get_clip()
+    screen.set_clip(clip)
+    screen.blit(rendered, (clip.x - offset, int(y)))
+    if offset > 0:
+        screen.blit(rendered, (clip.x - offset + span, int(y)))
+    screen.set_clip(previous)
+
 def draw_screensaver():
-    # Lantern clock: huge dim time and a weather icon only.
+    """Full black clock for the 3.5-inch panel. Same stack as the 7-inch saver."""
     screen.fill((0, 0, 0))
-    time_surf = f_xl.render(datetime.now().strftime("%H:%M"), True, (58, 58, 58))
-    screen.blit(time_surf, time_surf.get_rect(center=(160, 200)))
-    draw_weather_icon(screen, 160, 332, weather_type, 36)
+    clock_now = datetime.now()
+    height = max(1, screen.get_height())
+    width = max(1, screen.get_width())
+    side = max(12, int(width * 0.05))
+    usable = max(40, width - side * 2)
+    title_h = max(28, int(height * 0.11))
+    time_h = max(64, int(height * 0.34))
+    date_h = max(14, int(height * 0.05))
+    temp_h = max(36, int(height * 0.16))
+    track_h = max(12, int(height * 0.04))
+    gap = max(6, int(height * 0.02))
+    stack = title_h + time_h + date_h + temp_h + track_h + gap * 4
+    y = max(gap, (height - stack) // 2)
+    title = _saver_face("TC RADIOS", current_theme.pygame_primary, usable, title_h)
+    clock_face = _saver_face(
+        clock_now.strftime("%H:%M"), (255, 255, 255), usable, time_h
+    )
+    date_line = _saver_face(
+        clock_now.strftime("%A  %d %B %Y").upper(),
+        (186, 196, 214),
+        int(usable * 0.92),
+        date_h,
+    )
+    temp_text = f"{current_temp}°C" if current_temp else "--°C"
+    temp_face = _saver_face(temp_text, (255, 210, 60), int(usable * 0.72), temp_h)
+
+    def place(surface):
+        nonlocal y
+        screen.blit(surface, (width // 2 - surface.get_width() // 2, y))
+        y += surface.get_height() + gap
+
+    place(title)
+    place(clock_face)
+    place(date_line)
+    place(temp_face)
+    if stations and 0 <= current_idx < len(stations):
+        track = meta_text or stations[current_idx].get("name") or "TCRADIOS"
+    else:
+        track = meta_text or "TCRADIOS"
+    track_font = f_sm if f_sm.get_height() <= track_h else f_tiny
+    clip = pygame.Rect(side, y, usable, max(track_h, track_font.get_height()))
+    _blit_saver_track(track, track_font, (214, 220, 232), y, clip, time.time())
 
 def greeting_phrases():
     hour = datetime.now().hour
@@ -6883,7 +6970,15 @@ while True:
     if show_volume_bar and now - volume_bar_timer > 3:
         show_volume_bar = False
         adjusting_volume = False
-    
+
+    if (
+        not saver_active
+        and not wifi_setup_required
+        and now - last_interaction_time >= SAVER_IDLE_SECONDS
+    ):
+        saver_active = True
+        saver_started_at = now
+
     hide_mouse_pointer()
     if saver_active:
         draw_screensaver()
@@ -7054,7 +7149,7 @@ while True:
             alarm_fill = UI_AMBER if alarm_system.alarm_enabled else UI_SURFACE_RAISED
             mute_fill = UI_PINK if vol_level == 0 else UI_SURFACE_RAISED
             labeled_button(screen, btn_sleep, sleep_fill, f_sm, "SLEEP", 14)
-            labeled_button(screen, btn_saver, moon_fill, f_sm, "MOON", 14)
+            labeled_button(screen, btn_saver, moon_fill, f_sm, "SAVER", 14)
             labeled_button(screen, btn_alarm, alarm_fill, f_sm, "ALARM", 14)
             labeled_button(
                 screen, btn_mute, mute_fill, f_sm,
