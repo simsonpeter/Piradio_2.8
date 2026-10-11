@@ -2166,6 +2166,15 @@ HTML_TEMPLATE = """
                     <div class="big-artwork" id="big-artwork">📻</div>
                     <div class="big-title" id="now-playing-title">Loading...</div>
                     <div class="big-subtitle" id="now-playing-subtitle">Select a station</div>
+                    <div id="youtube-time-row" style="display:none;margin:8px 12px 0;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:14px;">
+                            <button type="button" onclick="seekYoutube(-60000)">-1 min</button>
+                            <span id="yt-elapsed">0:00</span>
+                            <span id="yt-remaining">--</span>
+                            <button type="button" onclick="seekYoutube(60000)">+1 min</button>
+                        </div>
+                        <input id="yt-seek" type="range" min="0" max="1000" value="0" style="width:100%;" onchange="commitYoutubeSeek(this.value)">
+                    </div>
                     
                     <div class="controls-grid">
                         <button class="control-btn" onclick="sendCmd('prev')">
@@ -3170,9 +3179,47 @@ HTML_TEMPLATE = """
                     playBtn.innerHTML = '<span class="control-icon">▶</span><span class="control-label">Play</span>';
                     npPlayBtn.textContent = '▶';
                 }
+                const timeRow = document.getElementById('youtube-time-row');
+                if (timeRow) {
+                    if (data.youtube && data.length_ms > 0) {
+                        timeRow.style.display = 'block';
+                        timeRow.dataset.length = data.length_ms;
+                        const elapsed = document.getElementById('yt-elapsed');
+                        const remaining = document.getElementById('yt-remaining');
+                        if (elapsed) elapsed.textContent = data.elapsed || '0:00';
+                        if (remaining) remaining.textContent = data.remaining || '';
+                        const slider = document.getElementById('yt-seek');
+                        if (slider && document.activeElement !== slider) {
+                            slider.value = Math.round(1000 * data.position_ms / data.length_ms);
+                        }
+                        const sub = document.getElementById('now-playing-subtitle');
+                        if (sub) sub.textContent = (data.elapsed || '') + ' · ' + (data.remaining || '');
+                    } else {
+                        timeRow.style.display = 'none';
+                    }
+                }
             });
         }
         
+        function seekYoutube(delta) {
+            fetch(apiBase + '/api/youtube/seek', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({delta_ms: delta})
+            }).then(() => refreshStatus());
+        }
+
+        function commitYoutubeSeek(value) {
+            const row = document.getElementById('youtube-time-row');
+            const length = parseInt((row && row.dataset.length) || '0', 10);
+            if (!length) return;
+            fetch(apiBase + '/api/youtube/seek', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({position_ms: Math.round(length * value / 1000)})
+            }).then(() => refreshStatus());
+        }
+
         function startPolling() {
             refreshStatus();
             setInterval(refreshStatus, 2000);
@@ -3477,8 +3524,26 @@ def get_status():
     return jsonify({
         "playing": is_playing,
         "volume": vol_level,
-        "station": current_idx
+        "station": current_idx,
+        **youtube_timeline_public(),
     })
+
+@app.route('/api/youtube/seek', methods=['POST'])
+def api_youtube_seek():
+    if not current_youtube_id():
+        return jsonify({'success': False, 'error': 'No YouTube song is playing'}), 409
+    data = request.get_json(silent=True) or {}
+    try:
+        if 'position_ms' in data:
+            queue_youtube_seek(int(data['position_ms']))
+        elif 'delta_ms' in data:
+            seek_youtube_by(int(data['delta_ms']))
+        else:
+            return jsonify({'success': False, 'error': 'Missing position'}), 400
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Bad position'}), 400
+    save_playback_state(force=True)
+    return jsonify({'success': True, **youtube_timeline_public()})
 
 @app.route('/api/weather/location', methods=['GET', 'POST'])
 def weather_location():
@@ -4798,6 +4863,18 @@ saved_station_index = 0
 saved_playback = {}
 stations_waiting_for_github = False
 _playback_save_at = 0
+youtube_position_ms = 0
+youtube_length_ms = 0
+youtube_seek_target_ms = None
+youtube_seek_started_at = 0
+adjusting_youtube_seek = False
+youtube_start_fresh = False
+youtube_hold_zero = False
+youtube_seek_rect = pygame.Rect(0, 0, 0, 0)
+youtube_back_rect = pygame.Rect(0, 0, 0, 0)
+youtube_forward_rect = pygame.Rect(0, 0, 0, 0)
+_youtube_position_saved_at = 0
+_youtube_saved_ms = -1
 
 def load_playback_state():
     global saved_station_url, saved_station_index, saved_playback
@@ -4838,18 +4915,38 @@ def playback_snapshot():
                 "logo": station.get("logo", ""),
                 "direct_link_id": station.get("direct_link_id", ""),
             })
+            if station.get("youtube_id"):
+                position = int(youtube_position_ms or 0)
+                if youtube_seek_target_ms is not None:
+                    position = int(youtube_seek_target_ms)
+                elif position <= 0 and not youtube_hold_zero:
+                    position = remembered_youtube_ms(station.get("youtube_id"))
+                snapshot["youtube_position_ms"] = position
+                snapshot["youtube_length_ms"] = int(
+                    youtube_length_ms
+                    or saved_playback.get("youtube_length_ms")
+                    or 0
+                )
     except NameError:
         pass
     return snapshot
 
 def save_playback_state(force=False):
-    global _playback_save_at
+    global _playback_save_at, saved_playback, _youtube_saved_ms
+    if force:
+        try:
+            note_youtube_position()
+        except Exception:
+            pass
     now = time.time()
     if not force and now - _playback_save_at < 0.5:
         return
     _playback_save_at = now
     try:
-        payload = json.dumps(playback_snapshot())
+        snapshot = playback_snapshot()
+        saved_playback = snapshot
+        _youtube_saved_ms = int(snapshot.get("youtube_position_ms") or 0)
+        payload = json.dumps(snapshot)
         for path in (PLAYBACK_FILE, LAST_STATION_FILE):
             temp_path = path + ".tmp"
             with open(temp_path, "w") as handle:
@@ -5131,6 +5228,8 @@ def update_logo(url):
 
 def play():
     global meta_text, scroll_x, saver_scroll_x, saved_station_url, saved_station_index
+    global youtube_position_ms, youtube_length_ms, youtube_seek_target_ms
+    global youtube_seek_started_at, youtube_start_fresh, youtube_hold_zero
     scroll_x = 320
     saver_scroll_x = 320
     if not stations:
@@ -5139,6 +5238,26 @@ def play():
     if not station.get("url"):
         meta_text = "LOADING STATIONS"
         return
+    if station.get("youtube_id"):
+        if youtube_start_fresh:
+            youtube_start_fresh = False
+            youtube_position_ms = 0
+            youtube_length_ms = 0
+            youtube_seek_target_ms = None
+            youtube_hold_zero = True
+        elif youtube_seek_target_ms is None:
+            remembered = remembered_youtube_ms(station.get("youtube_id"))
+            if remembered:
+                youtube_hold_zero = False
+                youtube_position_ms = remembered
+                youtube_seek_target_ms = remembered
+                youtube_seek_started_at = 0
+    else:
+        youtube_start_fresh = False
+        youtube_hold_zero = False
+        youtube_position_ms = 0
+        youtube_length_ms = 0
+        youtube_seek_target_ms = None
     try:
         player.set_media(instance.media_new(station['url']))
         player.play()
@@ -5209,6 +5328,202 @@ def current_youtube_id():
         return str(stations[current_idx].get("youtube_id") or "").strip()
     return ""
 
+def format_media_clock(ms):
+    total = max(0, int(ms or 0) // 1000)
+    minutes, seconds = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+def remaining_media_label(position_ms, length_ms):
+    length_ms = int(length_ms or 0)
+    if length_ms <= 0:
+        return "--"
+    left = max(0, length_ms - int(position_ms or 0))
+    if left < 60000:
+        return f"{max(1, left // 1000) if left else 0}s left"
+    return f"{left // 60000} min left"
+
+def remembered_youtube_ms(video_id):
+    if str(saved_playback.get("youtube_id") or "") != str(video_id or ""):
+        return 0
+    try:
+        saved_ms = max(0, int(saved_playback.get("youtube_position_ms") or 0))
+    except (TypeError, ValueError):
+        return 0
+    try:
+        length_ms = max(0, int(saved_playback.get("youtube_length_ms") or 0))
+    except (TypeError, ValueError):
+        length_ms = 0
+    if length_ms and saved_ms >= max(0, length_ms - 8000):
+        return 0
+    if saved_ms < 3000:
+        return 0
+    return saved_ms
+
+def note_youtube_position():
+    """Read the playing minute. Ignore the 0 VLC reports while a stream opens."""
+    global youtube_position_ms, youtube_length_ms, youtube_hold_zero
+    if adjusting_youtube_seek or youtube_seek_target_ms is not None:
+        return
+    if not current_youtube_id():
+        return
+    try:
+        length = int(player.get_length() or 0)
+        position = int(player.get_time())
+    except (TypeError, ValueError, Exception):
+        return
+    if length > 0:
+        youtube_length_ms = length
+    if position >= 1000:
+        youtube_position_ms = position
+        youtube_hold_zero = False
+
+def queue_youtube_seek(position_ms):
+    global youtube_position_ms, youtube_seek_target_ms, youtube_seek_started_at
+    global youtube_hold_zero
+    target = max(0, int(position_ms or 0))
+    if youtube_length_ms > 0:
+        target = min(target, max(0, youtube_length_ms - 1000))
+    youtube_hold_zero = target < 3000
+    youtube_position_ms = target
+    youtube_seek_target_ms = target
+    youtube_seek_started_at = 0
+    apply_pending_youtube_seek()
+
+def seek_youtube_by(delta_ms):
+    base = (
+        youtube_seek_target_ms
+        if youtube_seek_target_ms is not None
+        else youtube_position_ms
+    )
+    queue_youtube_seek(int(base or 0) + int(delta_ms or 0))
+
+def apply_pending_youtube_seek():
+    global youtube_seek_target_ms, youtube_seek_started_at, youtube_position_ms
+    if youtube_seek_target_ms is None or not current_youtube_id():
+        return
+    now = time.time()
+    if not youtube_seek_started_at:
+        youtube_seek_started_at = now
+    if now - youtube_seek_started_at > 20:
+        youtube_seek_target_ms = None
+        youtube_seek_started_at = 0
+        return
+    try:
+        state = player.get_state()
+        length = int(player.get_length() or 0)
+        current = int(player.get_time())
+    except (TypeError, ValueError, Exception):
+        return
+    if length <= 0 or state not in (
+        vlc.State.Playing, vlc.State.Paused, vlc.State.Buffering
+    ):
+        return
+    target = max(0, min(int(youtube_seek_target_ms), max(0, length - 1000)))
+    if current >= 1000 and abs(current - target) < 4000:
+        youtube_position_ms = current
+        youtube_length_ms = length
+        youtube_seek_target_ms = None
+        youtube_seek_started_at = 0
+        return
+    try:
+        player.set_time(target)
+    except Exception:
+        try:
+            player.set_position(target / float(length))
+        except Exception:
+            return
+
+def follow_youtube_timeline(now):
+    global _youtube_position_saved_at
+    apply_pending_youtube_seek()
+    note_youtube_position()
+    if not current_youtube_id():
+        return
+    if now - _youtube_position_saved_at < 2:
+        return
+    if abs(int(youtube_position_ms or 0) - int(_youtube_saved_ms or 0)) < 2000:
+        return
+    _youtube_position_saved_at = now
+    save_playback_state()
+
+def youtube_ms_from_x(x):
+    width = youtube_seek_rect.width
+    if youtube_length_ms <= 0 or width <= 0:
+        return int(youtube_position_ms or 0)
+    ratio = (x - youtube_seek_rect.x) / float(width)
+    ratio = max(0.0, min(1.0, ratio))
+    return int(ratio * youtube_length_ms)
+
+def youtube_timeline_public():
+    if not current_youtube_id():
+        return {"youtube": False}
+    position = int(
+        youtube_seek_target_ms
+        if youtube_seek_target_ms is not None
+        else youtube_position_ms or 0
+    )
+    length = int(youtube_length_ms or 0)
+    return {
+        "youtube": True,
+        "position_ms": position,
+        "length_ms": length,
+        "elapsed": format_media_clock(position),
+        "remaining": remaining_media_label(position, length),
+    }
+
+def clear_youtube_seek_hitboxes():
+    global youtube_seek_rect, youtube_back_rect, youtube_forward_rect
+    youtube_seek_rect = pygame.Rect(0, 0, 0, 0)
+    youtube_back_rect = pygame.Rect(0, 0, 0, 0)
+    youtube_forward_rect = pygame.Rect(0, 0, 0, 0)
+
+def draw_youtube_timeline():
+    global youtube_seek_rect, youtube_back_rect, youtube_forward_rect
+    clear_youtube_seek_hitboxes()
+    if not current_youtube_id():
+        return
+    info = youtube_timeline_public()
+    # Own row under the song title, with a wide gap before volume at y=288.
+    label_y = 186
+    row_y = 206
+    youtube_back_rect = pygame.Rect(8, row_y, 46, 32)
+    youtube_forward_rect = pygame.Rect(266, row_y, 46, 32)
+    back_body = draw_modern_button(screen, youtube_back_rect, UI_SURFACE_RAISED, UI_BLUE, 10)
+    forward_body = draw_modern_button(
+        screen, youtube_forward_rect, UI_SURFACE_RAISED, UI_AMBER, 10
+    )
+    draw_centered_text(screen, f_tiny, "-1", contrasting_text(back_body), youtube_back_rect)
+    draw_centered_text(
+        screen, f_tiny, "+1", contrasting_text(forward_body), youtube_forward_rect
+    )
+    elapsed = f_tiny.render(info["elapsed"], True, UI_TEXT)
+    remaining = f_tiny.render(info["remaining"], True, UI_AMBER)
+    screen.blit(elapsed, (12, label_y))
+    screen.blit(
+        remaining,
+        (308 - remaining.get_width(), label_y)
+    )
+    bar = pygame.Rect(62, row_y + 11, 196, 10)
+    youtube_seek_rect = pygame.Rect(bar.x, row_y, bar.width, 32)
+    pygame.draw.rect(screen, (37, 48, 72), bar, border_radius=6)
+    ratio = 0
+    if info["length_ms"] > 0:
+        ratio = min(1.0, info["position_ms"] / float(info["length_ms"]))
+    fill = int(bar.width * ratio)
+    if fill > 0:
+        pygame.draw.rect(
+            screen, UI_BLUE,
+            pygame.Rect(bar.x, bar.y, max(8, fill), bar.height),
+            border_radius=6
+        )
+    knob_x = bar.x + int(bar.width * ratio)
+    knob_x = max(bar.x + 6, min(bar.right - 6, knob_x))
+    draw_smooth_circle(screen, (knob_x, bar.centery), 8, UI_TEXT)
+    draw_smooth_circle(screen, (knob_x, bar.centery), 4, UI_AMBER)
+
 def remember_youtube_queue(video_id, title=""):
     global youtube_queue, youtube_queue_index, youtube_touch_offset
     video_id = str(video_id or "").strip()
@@ -5234,9 +5549,11 @@ def remember_youtube_queue(video_id, title=""):
     )
     youtube_touch_offset = (max(0, youtube_queue_index) // 4) * 4
 
-def play_youtube_station(video_id, title, audio_url):
+def play_youtube_station(video_id, title, audio_url, resume_ms=None):
     global current_idx, _youtube_play_started_at, _youtube_ended_handled
     global _youtube_was_playing
+    global youtube_position_ms, youtube_length_ms, youtube_seek_target_ms
+    global youtube_seek_started_at, youtube_start_fresh, youtube_hold_zero
     station = {
         'name': f"YT: {str(title)[:40]}",
         'url': audio_url,
@@ -5262,6 +5579,27 @@ def play_youtube_station(video_id, title, audio_url):
     _youtube_play_started_at = time.time()
     _youtube_ended_handled = False
     _youtube_was_playing = False
+    if resume_ms is None:
+        youtube_start_fresh = True
+        youtube_hold_zero = True
+        youtube_position_ms = 0
+        youtube_length_ms = 0
+        youtube_seek_target_ms = None
+    else:
+        youtube_start_fresh = False
+        resume_ms = max(0, int(resume_ms or 0))
+        length_ms = int(saved_playback.get("youtube_length_ms") or 0)
+        if length_ms and resume_ms >= max(0, length_ms - 8000):
+            resume_ms = 0
+        if resume_ms >= 3000:
+            youtube_hold_zero = False
+            youtube_position_ms = resume_ms
+            youtube_seek_target_ms = resume_ms
+            youtube_seek_started_at = 0
+        else:
+            youtube_hold_zero = True
+            youtube_position_ms = 0
+            youtube_seek_target_ms = None
     play()
 
 def save_favorites():
@@ -5622,7 +5960,12 @@ def resume_last_playback():
             title = title[4:]
         audio_url, err = youtube_audio_url(youtube_id, timeout=18)
         if audio_url:
-            play_youtube_station(youtube_id, title, audio_url)
+            play_youtube_station(
+                youtube_id,
+                title,
+                audio_url,
+                resume_ms=saved_playback.get("youtube_position_ms") or 0,
+            )
             return
         print(f"Could not restore YouTube item: {err}")
     saved_url = str(saved_station_url or "").strip()
@@ -6410,12 +6753,103 @@ def draw_youtube_screen(now):
         )
     draw_pages_button()
 
+SAVER_IDLE_SECONDS = 120
+_saver_faces = {}
+_saver_track = {"key": None, "surface": None, "started": 0.0}
+
+def _saver_face(text, color, target_w, max_h):
+    key = (text, color, target_w, max_h)
+    cached = _saver_faces.get(key)
+    if cached is not None:
+        return cached
+    rendered = f_xl.render(text, True, color)
+    width = max(1, target_w)
+    height = int(rendered.get_height() * width / max(1, rendered.get_width()))
+    if max_h > 0 and height > max_h:
+        height = max(1, max_h)
+        width = max(1, int(rendered.get_width() * height / max(1, rendered.get_height())))
+    surface = pygame.transform.smoothscale(rendered, (width, max(1, height)))
+    if len(_saver_faces) > 16:
+        _saver_faces.clear()
+    _saver_faces[key] = surface
+    return surface
+
+def _blit_saver_track(text, font, color, y, clip, now):
+    text = str(text or "TCRADIOS")
+    key = (text, color, id(font))
+    if _saver_track["key"] != key or _saver_track["surface"] is None:
+        _saver_track["key"] = key
+        _saver_track["surface"] = font.render(text, True, color)
+        _saver_track["started"] = now
+    rendered = _saver_track["surface"]
+    if rendered.get_width() <= clip.width:
+        screen.blit(
+            rendered,
+            (clip.centerx - rendered.get_width() // 2, int(y)),
+        )
+        return
+    gap = 32
+    span = rendered.get_width() + gap
+    speed = 46
+    hold = 1.1
+    phase = (now - _saver_track["started"]) % (hold + span / float(speed))
+    offset = 0 if phase < hold else int((phase - hold) * speed)
+    previous = screen.get_clip()
+    screen.set_clip(clip)
+    screen.blit(rendered, (clip.x - offset, int(y)))
+    if offset > 0:
+        screen.blit(rendered, (clip.x - offset + span, int(y)))
+    screen.set_clip(previous)
+
 def draw_screensaver():
-    # Lantern clock: huge dim time and a weather icon only.
+    """Full black clock for the 3.5-inch panel. Same stack as the 7-inch saver."""
     screen.fill((0, 0, 0))
-    time_surf = f_xl.render(datetime.now().strftime("%H:%M"), True, (58, 58, 58))
-    screen.blit(time_surf, time_surf.get_rect(center=(160, 200)))
-    draw_weather_icon(screen, 160, 332, weather_type, 36)
+    clock_now = datetime.now()
+    height = max(1, screen.get_height())
+    width = max(1, screen.get_width())
+    side = max(12, int(width * 0.05))
+    usable = max(40, width - side * 2)
+    title_h = max(28, int(height * 0.11))
+    time_h = max(64, int(height * 0.34))
+    date_h = max(14, int(height * 0.05))
+    temp_h = max(36, int(height * 0.16))
+    track_h = max(12, int(height * 0.04))
+    gap = max(6, int(height * 0.02))
+    stack = title_h + time_h + date_h + temp_h + track_h + gap * 4
+    y = max(gap, (height - stack) // 2)
+    title = _saver_face("TC RADIOS", current_theme.pygame_primary, usable, title_h)
+    clock_face = _saver_face(
+        clock_now.strftime("%H:%M"), (255, 255, 255), usable, time_h
+    )
+    date_line = _saver_face(
+        clock_now.strftime("%A  %d %B %Y").upper(),
+        (186, 196, 214),
+        int(usable * 0.92),
+        date_h,
+    )
+    temp_text = f"{current_temp}°C" if current_temp else "--°C"
+    temp_face = _saver_face(temp_text, (255, 210, 60), int(usable * 0.72), temp_h)
+
+    def place(surface):
+        nonlocal y
+        screen.blit(surface, (width // 2 - surface.get_width() // 2, y))
+        y += surface.get_height() + gap
+
+    place(title)
+    place(clock_face)
+    place(date_line)
+    place(temp_face)
+    if stations and 0 <= current_idx < len(stations):
+        track = meta_text or stations[current_idx].get("name") or "TCRADIOS"
+    else:
+        track = meta_text or "TCRADIOS"
+    if current_youtube_id():
+        info = youtube_timeline_public()
+        if info.get("elapsed"):
+            track = f"{info['elapsed']}  {info['remaining']}  {track}"
+    track_font = f_sm if f_sm.get_height() <= track_h else f_tiny
+    clip = pygame.Rect(side, y, usable, max(track_h, track_font.get_height()))
+    _blit_saver_track(track, track_font, (214, 220, 232), y, clip, time.time())
 
 def greeting_phrases():
     hour = datetime.now().hour
@@ -6469,14 +6903,23 @@ PAGE_ORDER = [
     "radio", "favorites", "forecast", "clock",
     "alarm", "system", "languages", "settings", "youtube"
 ]
-btn_open_pages = pygame.Rect(16, 422, 228, 46)
+btn_open_pages = pygame.Rect(16, 428, 228, 44)
 fab_open = False
-btn_fab = pygame.Rect(256, 416, 54, 54)
+btn_fab = pygame.Rect(258, 422, 50, 50)
 btn_sleep = pygame.Rect(16, 248, 140, 52)
 btn_saver = pygame.Rect(164, 248, 140, 52)
 btn_alarm = pygame.Rect(16, 308, 140, 52)
 btn_mute = pygame.Rect(164, 308, 140, 52)
 vol_rect = pygame.Rect(0, 0, 0, 0)
+btn_qr = pygame.Rect(15, 13, 42, 40)
+btn_exit = pygame.Rect(268, 13, 37, 40)
+logo_rect = pygame.Rect(126, 68, 68, 68)
+vol_minus_rect = pygame.Rect(10, 288, 42, 42)
+vol_plus_rect = pygame.Rect(268, 288, 42, 42)
+vol_bar_rect = pygame.Rect(60, 300, 200, 12)
+btn_prev = pygame.Rect(12, 356, 92, 46)
+btn_toggle = pygame.Rect(114, 352, 92, 54)
+btn_next = pygame.Rect(216, 356, 92, 46)
 btn_pages = pygame.Rect(70, 430, 180, 38)
 menu_card_rects = [
     pygame.Rect(16 + (index % 2) * 152, 68 + (index // 2) * 70, 136, 62)
@@ -6813,8 +7256,58 @@ def start_rotary_encoder():
 rotary_controls = []
 start_rotary_encoder()
 
+# YouTube stays on the menu. A horizontal slip on NEXT used to wrap the
+# page ring from Radio straight into the YouTube tab.
+SWIPE_PAGES = [
+    "radio", "favorites", "forecast", "clock",
+    "alarm", "system", "languages", "settings",
+]
+touch_can_swipe = False
+
+def press_can_change_page(pos):
+    """A finger that lands on a control must not also turn the page."""
+    if active_page not in SWIPE_PAGES:
+        return False
+    if active_page == "radio":
+        blocked = [
+            btn_qr, btn_exit, btn_fab, btn_open_pages,
+            btn_prev, btn_toggle, btn_next,
+            vol_minus_rect, vol_plus_rect, vol_bar_rect,
+            logo_rect,
+        ]
+        if fab_open:
+            blocked.extend([btn_sleep, btn_saver, btn_alarm, btn_mute])
+        if current_youtube_id():
+            blocked.extend([
+                youtube_back_rect, youtube_forward_rect, youtube_seek_rect,
+            ])
+    elif active_page == "menu":
+        blocked = list(menu_card_rects)
+    elif active_page == "favorites":
+        blocked = [btn_pages, btn_favorite_toggle, *favorite_card_rects]
+    elif active_page == "alarm":
+        blocked = [
+            btn_pages, btn_alarm_minus, btn_alarm_toggle_page, btn_alarm_plus,
+            *btn_sleep_presets, btn_sleep_cancel,
+        ]
+    elif active_page == "system":
+        blocked = [btn_pages, btn_safe_shutdown]
+    elif active_page == "settings":
+        blocked = [
+            btn_pages, *btn_audio_outputs, btn_brightness_minus, btn_auto_dim,
+            btn_brightness_plus, btn_theme_previous, btn_theme_next,
+            btn_wifi_setup, btn_wifi_qr,
+        ]
+    elif active_page == "languages":
+        blocked = [btn_pages, *language_card_rects]
+    else:
+        blocked = [btn_pages]
+    return not any(rect.collidepoint(pos) for rect in blocked)
+
 while True:
     now = time.time()
+    clear_youtube_seek_hitboxes()
+    follow_youtube_timeline(now)
     update_qr_code()
     
     if alarm_system.check_alarm() and not alarm_fade_active:
@@ -6883,7 +7376,15 @@ while True:
     if show_volume_bar and now - volume_bar_timer > 3:
         show_volume_bar = False
         adjusting_volume = False
-    
+
+    if (
+        not saver_active
+        and not wifi_setup_required
+        and now - last_interaction_time >= SAVER_IDLE_SECONDS
+    ):
+        saver_active = True
+        saver_started_at = now
+
     hide_mouse_pointer()
     if saver_active:
         draw_screensaver()
@@ -6920,11 +7421,15 @@ while True:
         try: is_playing = player.get_state() == vlc.State.Playing
         except: is_playing = False
 
-        # Smaller artwork area leaves breathing room between sections
-        pygame.draw.circle(screen, (17, 31, 53), (160, 128), 60)
-        pygame.draw.circle(screen, (40, 58, 91), (160, 128), 58, 1)
-        logo_rect = pygame.Rect(104, 72, LOGO_SIZE, LOGO_SIZE)
-        screen.blit(logo, logo_rect)
+        # Artwork sits under the header so the title, time, and volume each
+        # get their own band.
+        art_size = 68
+        art_top = 68
+        art_center = (160, art_top + art_size // 2)
+        pygame.draw.circle(screen, (17, 31, 53), art_center, art_size // 2 + 2)
+        pygame.draw.circle(screen, (40, 58, 91), art_center, art_size // 2, 1)
+        logo_rect = pygame.Rect(160 - art_size // 2, art_top, art_size, art_size)
+        screen.blit(pygame.transform.smoothscale(logo, (art_size, art_size)), logo_rect)
 
         if is_playing:
             pulse = (math.sin(time.time() * 3) + 1) / 2
@@ -6933,68 +7438,59 @@ while True:
                 int(UI_BLUE[1] * 0.75),
                 int(UI_BLUE[2] * 0.75)
             )
-            pygame.draw.circle(screen, pulse_color, (160, 128), 58 + int(pulse * 4), 2)
+            pygame.draw.circle(
+                screen, pulse_color, art_center,
+                art_size // 2 + int(pulse * 4), 2
+            )
         else:
-            pygame.draw.circle(screen, UI_MUTED, (160, 128), 58, 1)
+            pygame.draw.circle(screen, UI_MUTED, art_center, art_size // 2, 1)
 
-        # Now-playing: Tamil on top, English transliteration under it
+        # Song title stays in this band. The time row begins at y=186.
         display_text = sanitize_text(meta_text)
         roman_text = transliterate_tamil(display_text)
-        if roman_text:
-            name_area = pygame.Rect(16, 192, 288, 28)
-            roman_area = pygame.Rect(16, 220, 288, 20)
-            name_render = f_sm.render(display_text, True, UI_TEXT)
+        name_area = pygame.Rect(12, 142, 296, 28)
+        name_render = f_sm.render(display_text, True, UI_TEXT)
+        screen.set_clip(name_area)
+        if name_render.get_width() <= name_area.width - 8:
+            name_x = name_area.centerx - name_render.get_width() // 2
+        else:
+            scroll_x -= 2
+            if scroll_x < -name_render.get_width():
+                scroll_x = name_area.right
+            name_x = scroll_x
+        screen.blit(name_render, (name_x, name_area.y + 4))
+        screen.set_clip(None)
+        if roman_text and not current_youtube_id():
             roman_render = f_tiny.render(
-                fit_label(roman_text, 34), True, UI_MUTED
+                fit_label(roman_text, 36), True, UI_MUTED
             )
-            screen.set_clip(name_area.inflate(-12, 0))
-            if name_render.get_width() <= name_area.width - 24:
-                name_x = name_area.centerx - name_render.get_width() // 2
-            else:
-                scroll_x -= 2
-                if scroll_x < -name_render.get_width():
-                    scroll_x = name_area.right
-                name_x = scroll_x
-            screen.blit(name_render, (name_x, name_area.y + 4))
-            screen.set_clip(None)
             screen.blit(
                 roman_render,
-                (roman_area.centerx - roman_render.get_width() // 2, roman_area.y)
+                (160 - roman_render.get_width() // 2, 172)
             )
+
+        if current_youtube_id():
+            draw_youtube_timeline()
         else:
-            name_area = pygame.Rect(16, 198, 288, 34)
-            name_render = f_lg.render(display_text, True, UI_TEXT)
-            screen.set_clip(name_area.inflate(-12, 0))
-            if name_render.get_width() <= name_area.width - 24:
-                name_x = name_area.centerx - name_render.get_width() // 2
-            else:
-                scroll_x -= 2
-                if scroll_x < -name_render.get_width():
-                    scroll_x = name_area.right
-                name_x = scroll_x
-            screen.blit(name_render, (name_x, name_area.y + 5))
-            screen.set_clip(None)
+            alarm_chip = pygame.Rect(18, 196, 136, 28)
+            sleep_chip = pygame.Rect(166, 196, 136, 28)
+            if alarm_system.alarm_enabled:
+                draw_modern_button(screen, alarm_chip, (57, 48, 31), (112, 88, 41), 10)
+                draw_centered_text(
+                    screen, f_tiny, f"ALARM {alarm_system.alarm_time}",
+                    UI_AMBER, alarm_chip
+                )
+            if alarm_system.sleep_timer_enabled:
+                rem = alarm_system.get_sleep_remaining()
+                sleep_label = f"SLEEP {rem} MIN"
+                sleep_color = UI_GREEN if rem > 5 else UI_PINK
+                draw_modern_button(screen, sleep_chip, (35, 40, 67), (75, 61, 126), 10)
+                draw_centered_text(screen, f_tiny, sleep_label, sleep_color, sleep_chip)
 
-        # Status chips appear only when active; controls remain in the dock
-        alarm_chip = pygame.Rect(18, 242, 128, 22)
-        sleep_chip = pygame.Rect(174, 242, 128, 22)
-        if alarm_system.alarm_enabled:
-            draw_modern_button(screen, alarm_chip, (57, 48, 31), (112, 88, 41), 10)
-            draw_centered_text(
-                screen, f_tiny, f"ALARM {alarm_system.alarm_time}",
-                UI_AMBER, alarm_chip
-            )
-        if alarm_system.sleep_timer_enabled:
-            rem = alarm_system.get_sleep_remaining()
-            sleep_label = f"SLEEP {rem} MIN"
-            sleep_color = UI_GREEN if rem > 5 else UI_PINK
-            draw_modern_button(screen, sleep_chip, (35, 40, 67), (75, 61, 126), 10)
-            draw_centered_text(screen, f_tiny, sleep_label, sleep_color, sleep_chip)
-
-        # Volume strip: circular vector − / + so glyphs never become boxes
-        vol_minus_rect = pygame.Rect(10, 270, 46, 46)
-        vol_plus_rect = pygame.Rect(264, 270, 46, 46)
-        vol_bar_rect = pygame.Rect(64, 284, 192, 14)
+        # Volume strip sits below the time row with a clear gap.
+        vol_minus_rect = pygame.Rect(10, 288, 42, 42)
+        vol_plus_rect = pygame.Rect(268, 288, 42, 42)
+        vol_bar_rect = pygame.Rect(60, 300, 200, 12)
         draw_circle_icon_button(screen, vol_minus_rect, UI_AMBER, "minus")
         pygame.draw.rect(screen, (37, 48, 72), vol_bar_rect, border_radius=8)
         fill_width = int(vol_bar_rect.width * vol_level / 100)
@@ -7005,16 +7501,16 @@ while True:
             pygame.draw.rect(screen, UI_BLUE, fill_rect, border_radius=8)
         knob_x = vol_bar_rect.x + int(vol_bar_rect.width * vol_level / 100)
         knob_x = max(vol_bar_rect.x + 8, min(vol_bar_rect.right - 8, knob_x))
-        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), 9, UI_TEXT)
+        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), 8, UI_TEXT)
         draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), 4, UI_BLUE)
         vol_pct_surf = f_tiny.render(f"{vol_level}%", True, UI_TEXT)
-        screen.blit(vol_pct_surf, (160 - vol_pct_surf.get_width() // 2, 302))
+        screen.blit(vol_pct_surf, (160 - vol_pct_surf.get_width() // 2, 318))
         draw_circle_icon_button(screen, vol_plus_rect, UI_GREEN, "plus")
 
         # Primary transport controls
-        btn_prev = pygame.Rect(12, 329, 92, 53)
-        btn_toggle = pygame.Rect(114, 325, 92, 61)
-        btn_next = pygame.Rect(216, 329, 92, 53)
+        btn_prev = pygame.Rect(12, 356, 92, 46)
+        btn_toggle = pygame.Rect(114, 352, 92, 54)
+        btn_next = pygame.Rect(216, 356, 92, 46)
         draw_pulsing_border(
             screen,
             btn_toggle,
@@ -7054,7 +7550,7 @@ while True:
             alarm_fill = UI_AMBER if alarm_system.alarm_enabled else UI_SURFACE_RAISED
             mute_fill = UI_PINK if vol_level == 0 else UI_SURFACE_RAISED
             labeled_button(screen, btn_sleep, sleep_fill, f_sm, "SLEEP", 14)
-            labeled_button(screen, btn_saver, moon_fill, f_sm, "MOON", 14)
+            labeled_button(screen, btn_saver, moon_fill, f_sm, "SAVER", 14)
             labeled_button(screen, btn_alarm, alarm_fill, f_sm, "ALARM", 14)
             labeled_button(
                 screen, btn_mute, mute_fill, f_sm,
@@ -7148,6 +7644,7 @@ while True:
                 continue
             touch_start_pos = event.pos
             touch_start_time = time.time()
+            touch_can_swipe = False
             if saver_active:
                 saver_active = False
                 if morning_greeting:
@@ -7164,6 +7661,7 @@ while True:
             if show_qr:
                 show_qr = False
                 continue
+            touch_can_swipe = press_can_change_page(event.pos)
             if active_page == "menu":
                 for page_index, card in enumerate(menu_card_rects):
                     if card.collidepoint(event.pos):
@@ -7465,6 +7963,31 @@ while True:
             if btn_fab.collidepoint(event.pos):
                 fab_open = not fab_open
                 continue
+            if (
+                not fab_open
+                and active_page == "radio"
+                and youtube_back_rect.collidepoint(event.pos)
+            ):
+                seek_youtube_by(-60000)
+                save_playback_state(force=True)
+                continue
+            if (
+                not fab_open
+                and active_page == "radio"
+                and youtube_forward_rect.collidepoint(event.pos)
+            ):
+                seek_youtube_by(60000)
+                save_playback_state(force=True)
+                continue
+            if (
+                not fab_open
+                and active_page == "radio"
+                and youtube_seek_rect.width
+                and youtube_seek_rect.collidepoint(event.pos)
+            ):
+                adjusting_youtube_seek = True
+                youtube_position_ms = youtube_ms_from_x(event.pos[0])
+                continue
             if fab_open:
                 if btn_sleep.collidepoint(event.pos):
                     if alarm_system.sleep_timer_enabled:
@@ -7515,24 +8038,35 @@ while True:
                 volume_bar_timer = time.time()
         
         elif event.type == pygame.MOUSEBUTTONUP:
+            if adjusting_youtube_seek:
+                adjusting_youtube_seek = False
+                queue_youtube_seek(youtube_position_ms)
+                save_playback_state(force=True)
+                touch_can_swipe = False
+                continue
             dx = event.pos[0] - touch_start_pos[0]
             dy = event.pos[1] - touch_start_pos[1]
             dt = time.time() - touch_start_time
+            # NEXT is 92px wide, so the old 45px test treated a normal press
+            # as a swipe. From Radio that swipe wrapped onto the YouTube tab.
             if (
-                active_page in PAGE_ORDER
-                and abs(dx) > 45
-                and abs(dx) > abs(dy)
-                and dt < 2.5
+                touch_can_swipe
+                and active_page in SWIPE_PAGES
+                and abs(dx) >= 100
+                and abs(dx) > abs(dy) * 1.7
+                and dt < 1.2
             ):
                 youtube_keyboard_open = False
                 fab_open = False
-                page_index = PAGE_ORDER.index(active_page)
+                page_index = SWIPE_PAGES.index(active_page)
                 direction = 1 if dx < 0 else -1
-                active_page = PAGE_ORDER[
-                    (page_index + direction) % len(PAGE_ORDER)
+                active_page = SWIPE_PAGES[
+                    (page_index + direction) % len(SWIPE_PAGES)
                 ]
                 adjusting_volume = False
+                touch_can_swipe = False
                 continue
+            touch_can_swipe = False
 
             if active_page == "radio" and logo_rect.collidepoint(touch_start_pos):
                 dy = touch_start_pos[1] - event.pos[1]
@@ -7549,6 +8083,8 @@ while True:
                 save_playback_state(force=True)
             adjusting_volume = False
         
+        elif event.type == pygame.MOUSEMOTION and adjusting_youtube_seek:
+            youtube_position_ms = youtube_ms_from_x(event.pos[0])
         elif event.type == pygame.MOUSEMOTION and adjusting_volume:
             if event.pos[0] >= vol_bar_rect.x and event.pos[0] <= vol_bar_rect.right:
                 apply_live_volume(
