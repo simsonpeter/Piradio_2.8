@@ -353,7 +353,11 @@ echo "  ${CONFIG_FILE}.tcradios-backup"
 echo "  ${CMDLINE_FILE}.tcradios-backup"
 
 if [[ "${TCRADIOS_SKIP_LCD:-0}" == "1" ]]; then
-    echo "LCD driver installation skipped (TCRADIOS_SKIP_LCD=1)."
+    echo "Official DSI display selected. Skipping the GoodTFT LCD35 driver."
+    if ! grep -qF "# TCRADIOS official 7-inch" "${CONFIG_FILE}"; then
+        printf '\n# TCRADIOS official 7-inch\ndisplay_auto_detect=1\n' >> "${CONFIG_FILE}"
+    fi
+    echo "Connect the official 7-inch panel with the DSI ribbon and GPIO power cable."
     echo "Reboot to activate TCRADIOS: sudo reboot"
 elif [[ -f "${LCD_DRIVER_DIR}/.have_installed" ]]; then
     echo "GoodTFT LCD35 driver is already installed."
