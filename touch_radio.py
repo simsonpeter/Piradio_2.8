@@ -5486,8 +5486,8 @@ def draw_youtube_timeline():
     if not current_youtube_id():
         return
     info = youtube_timeline_public()
-    youtube_back_rect = pygame.Rect(6, 230, 42, 34)
-    youtube_forward_rect = pygame.Rect(272, 230, 42, 34)
+    youtube_back_rect = pygame.Rect(8, 234, 40, 26)
+    youtube_forward_rect = pygame.Rect(272, 234, 40, 26)
     back_body = draw_modern_button(screen, youtube_back_rect, UI_SURFACE_RAISED, UI_BLUE, 10)
     forward_body = draw_modern_button(
         screen, youtube_forward_rect, UI_SURFACE_RAISED, UI_AMBER, 10
@@ -5498,13 +5498,14 @@ def draw_youtube_timeline():
     )
     elapsed = f_tiny.render(info["elapsed"], True, UI_TEXT)
     remaining = f_tiny.render(info["remaining"], True, UI_AMBER)
-    screen.blit(elapsed, (52, 232))
+    screen.blit(elapsed, (52, 228))
     screen.blit(
         remaining,
-        (268 - remaining.get_width(), 232)
+        (268 - remaining.get_width(), 228)
     )
-    bar = pygame.Rect(52, 252, 216, 12)
-    youtube_seek_rect = bar.inflate(0, 18)
+    bar = pygame.Rect(52, 246, 216, 8)
+    # Stay above the volume buttons. A tall hit box was stealing those presses.
+    youtube_seek_rect = pygame.Rect(bar.x, 234, bar.width, 26)
     pygame.draw.rect(screen, (37, 48, 72), bar, border_radius=6)
     ratio = 0
     if info["length_ms"] > 0:
@@ -6908,6 +6909,15 @@ btn_saver = pygame.Rect(164, 248, 140, 52)
 btn_alarm = pygame.Rect(16, 308, 140, 52)
 btn_mute = pygame.Rect(164, 308, 140, 52)
 vol_rect = pygame.Rect(0, 0, 0, 0)
+btn_qr = pygame.Rect(15, 13, 42, 40)
+btn_exit = pygame.Rect(268, 13, 37, 40)
+logo_rect = pygame.Rect(104, 72, LOGO_SIZE, LOGO_SIZE)
+vol_minus_rect = pygame.Rect(10, 270, 46, 46)
+vol_plus_rect = pygame.Rect(264, 270, 46, 46)
+vol_bar_rect = pygame.Rect(64, 284, 192, 14)
+btn_prev = pygame.Rect(12, 329, 92, 53)
+btn_toggle = pygame.Rect(114, 325, 92, 61)
+btn_next = pygame.Rect(216, 329, 92, 53)
 btn_pages = pygame.Rect(70, 430, 180, 38)
 menu_card_rects = [
     pygame.Rect(16 + (index % 2) * 152, 68 + (index // 2) * 70, 136, 62)
@@ -7243,6 +7253,54 @@ def start_rotary_encoder():
 
 rotary_controls = []
 start_rotary_encoder()
+
+# YouTube stays on the menu. A horizontal slip on NEXT used to wrap the
+# page ring from Radio straight into the YouTube tab.
+SWIPE_PAGES = [
+    "radio", "favorites", "forecast", "clock",
+    "alarm", "system", "languages", "settings",
+]
+touch_can_swipe = False
+
+def press_can_change_page(pos):
+    """A finger that lands on a control must not also turn the page."""
+    if active_page not in SWIPE_PAGES:
+        return False
+    if active_page == "radio":
+        blocked = [
+            btn_qr, btn_exit, btn_fab, btn_open_pages,
+            btn_prev, btn_toggle, btn_next,
+            vol_minus_rect, vol_plus_rect, vol_bar_rect,
+            logo_rect,
+        ]
+        if fab_open:
+            blocked.extend([btn_sleep, btn_saver, btn_alarm, btn_mute])
+        if current_youtube_id():
+            blocked.extend([
+                youtube_back_rect, youtube_forward_rect, youtube_seek_rect,
+            ])
+    elif active_page == "menu":
+        blocked = list(menu_card_rects)
+    elif active_page == "favorites":
+        blocked = [btn_pages, btn_favorite_toggle, *favorite_card_rects]
+    elif active_page == "alarm":
+        blocked = [
+            btn_pages, btn_alarm_minus, btn_alarm_toggle_page, btn_alarm_plus,
+            *btn_sleep_presets, btn_sleep_cancel,
+        ]
+    elif active_page == "system":
+        blocked = [btn_pages, btn_safe_shutdown]
+    elif active_page == "settings":
+        blocked = [
+            btn_pages, *btn_audio_outputs, btn_brightness_minus, btn_auto_dim,
+            btn_brightness_plus, btn_theme_previous, btn_theme_next,
+            btn_wifi_setup, btn_wifi_qr,
+        ]
+    elif active_page == "languages":
+        blocked = [btn_pages, *language_card_rects]
+    else:
+        blocked = [btn_pages]
+    return not any(rect.collidepoint(pos) for rect in blocked)
 
 while True:
     now = time.time()
@@ -7591,6 +7649,7 @@ while True:
                 continue
             touch_start_pos = event.pos
             touch_start_time = time.time()
+            touch_can_swipe = False
             if saver_active:
                 saver_active = False
                 if morning_greeting:
@@ -7607,6 +7666,7 @@ while True:
             if show_qr:
                 show_qr = False
                 continue
+            touch_can_swipe = press_can_change_page(event.pos)
             if active_page == "menu":
                 for page_index, card in enumerate(menu_card_rects):
                     if card.collidepoint(event.pos):
@@ -7987,25 +8047,31 @@ while True:
                 adjusting_youtube_seek = False
                 queue_youtube_seek(youtube_position_ms)
                 save_playback_state(force=True)
+                touch_can_swipe = False
                 continue
             dx = event.pos[0] - touch_start_pos[0]
             dy = event.pos[1] - touch_start_pos[1]
             dt = time.time() - touch_start_time
+            # NEXT is 92px wide, so the old 45px test treated a normal press
+            # as a swipe. From Radio that swipe wrapped onto the YouTube tab.
             if (
-                active_page in PAGE_ORDER
-                and abs(dx) > 45
-                and abs(dx) > abs(dy)
-                and dt < 2.5
+                touch_can_swipe
+                and active_page in SWIPE_PAGES
+                and abs(dx) >= 100
+                and abs(dx) > abs(dy) * 1.7
+                and dt < 1.2
             ):
                 youtube_keyboard_open = False
                 fab_open = False
-                page_index = PAGE_ORDER.index(active_page)
+                page_index = SWIPE_PAGES.index(active_page)
                 direction = 1 if dx < 0 else -1
-                active_page = PAGE_ORDER[
-                    (page_index + direction) % len(PAGE_ORDER)
+                active_page = SWIPE_PAGES[
+                    (page_index + direction) % len(SWIPE_PAGES)
                 ]
                 adjusting_volume = False
+                touch_can_swipe = False
                 continue
+            touch_can_swipe = False
 
             if active_page == "radio" and logo_rect.collidepoint(touch_start_pos):
                 dy = touch_start_pos[1] - event.pos[1]
