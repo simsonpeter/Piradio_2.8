@@ -2485,6 +2485,15 @@ HTML_TEMPLATE = """
                     <div class="big-artwork" id="big-artwork">📻</div>
                     <div class="big-title" id="now-playing-title">Loading...</div>
                     <div class="big-subtitle" id="now-playing-subtitle">Select a station</div>
+                    <div id="youtube-time-row" style="display:none;margin:8px 12px 0;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:14px;">
+                            <button type="button" onclick="seekYoutube(-60000)">-1 min</button>
+                            <span id="yt-elapsed">0:00</span>
+                            <span id="yt-remaining">--</span>
+                            <button type="button" onclick="seekYoutube(60000)">+1 min</button>
+                        </div>
+                        <input id="yt-seek" type="range" min="0" max="1000" value="0" style="width:100%;" onchange="commitYoutubeSeek(this.value)">
+                    </div>
                     
                     <div class="controls-grid">
                         <button class="control-btn" onclick="sendCmd('prev')">
@@ -3491,7 +3500,45 @@ HTML_TEMPLATE = """
                     playBtn.innerHTML = '<span class="control-icon">▶</span><span class="control-label">Play</span>';
                     npPlayBtn.textContent = '▶';
                 }
+                const timeRow = document.getElementById('youtube-time-row');
+                if (timeRow) {
+                    if (data.youtube && data.length_ms > 0) {
+                        timeRow.style.display = 'block';
+                        timeRow.dataset.length = data.length_ms;
+                        const elapsed = document.getElementById('yt-elapsed');
+                        const remaining = document.getElementById('yt-remaining');
+                        if (elapsed) elapsed.textContent = data.elapsed || '0:00';
+                        if (remaining) remaining.textContent = data.remaining || '';
+                        const slider = document.getElementById('yt-seek');
+                        if (slider && document.activeElement !== slider) {
+                            slider.value = Math.round(1000 * data.position_ms / data.length_ms);
+                        }
+                        const sub = document.getElementById('now-playing-subtitle');
+                        if (sub) sub.textContent = (data.elapsed || '') + ' · ' + (data.remaining || '');
+                    } else {
+                        timeRow.style.display = 'none';
+                    }
+                }
             });
+        }
+
+        function seekYoutube(delta) {
+            fetch(apiBase + '/api/youtube/seek', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({delta_ms: delta})
+            }).then(() => refreshStatus());
+        }
+
+        function commitYoutubeSeek(value) {
+            const row = document.getElementById('youtube-time-row');
+            const length = parseInt((row && row.dataset.length) || '0', 10);
+            if (!length) return;
+            fetch(apiBase + '/api/youtube/seek', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({position_ms: Math.round(length * value / 1000)})
+            }).then(() => refreshStatus());
         }
         
         function startPolling() {
@@ -3799,8 +3846,26 @@ def get_status():
     return jsonify({
         "playing": is_playing,
         "volume": vol_level,
-        "station": current_idx
+        "station": current_idx,
+        **youtube_timeline_public(),
     })
+
+@app.route('/api/youtube/seek', methods=['POST'])
+def api_youtube_seek():
+    if not current_youtube_id():
+        return jsonify({'success': False, 'error': 'No YouTube song is playing'}), 409
+    data = request.get_json(silent=True) or {}
+    try:
+        if 'position_ms' in data:
+            queue_youtube_seek(int(data['position_ms']))
+        elif 'delta_ms' in data:
+            seek_youtube_by(int(data['delta_ms']))
+        else:
+            return jsonify({'success': False, 'error': 'Missing position'}), 400
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Bad position'}), 400
+    save_playback_state(force=True)
+    return jsonify({'success': True, **youtube_timeline_public()})
 
 @app.route('/api/weather/location', methods=['GET', 'POST'])
 def weather_location():
@@ -5511,6 +5576,18 @@ saved_station_index = 0
 saved_playback = {}
 stations_waiting_for_github = False
 _playback_save_at = 0
+youtube_position_ms = 0
+youtube_length_ms = 0
+youtube_seek_target_ms = None
+youtube_seek_started_at = 0
+adjusting_youtube_seek = False
+youtube_start_fresh = False
+youtube_hold_zero = False
+youtube_seek_rect = _Rect(0, 0, 0, 0)
+youtube_back_rect = _Rect(0, 0, 0, 0)
+youtube_forward_rect = _Rect(0, 0, 0, 0)
+_youtube_position_saved_at = 0
+_youtube_saved_ms = -1
 
 def load_playback_state():
     global saved_station_url, saved_station_index, saved_playback
@@ -5551,18 +5628,38 @@ def playback_snapshot():
                 "logo": station.get("logo", ""),
                 "direct_link_id": station.get("direct_link_id", ""),
             })
+            if station.get("youtube_id"):
+                position = int(youtube_position_ms or 0)
+                if youtube_seek_target_ms is not None:
+                    position = int(youtube_seek_target_ms)
+                elif position <= 0 and not youtube_hold_zero:
+                    position = remembered_youtube_ms(station.get("youtube_id"))
+                snapshot["youtube_position_ms"] = position
+                snapshot["youtube_length_ms"] = int(
+                    youtube_length_ms
+                    or saved_playback.get("youtube_length_ms")
+                    or 0
+                )
     except NameError:
         pass
     return snapshot
 
 def save_playback_state(force=False):
-    global _playback_save_at
+    global _playback_save_at, saved_playback, _youtube_saved_ms
+    if force:
+        try:
+            note_youtube_position()
+        except Exception:
+            pass
     now = time.time()
     if not force and now - _playback_save_at < 0.5:
         return
     _playback_save_at = now
     try:
-        payload = json.dumps(playback_snapshot())
+        snapshot = playback_snapshot()
+        saved_playback = snapshot
+        _youtube_saved_ms = int(snapshot.get("youtube_position_ms") or 0)
+        payload = json.dumps(snapshot)
         for path in (PLAYBACK_FILE, LAST_STATION_FILE):
             temp_path = path + ".tmp"
             with open(temp_path, "w") as handle:
@@ -5913,6 +6010,8 @@ def current_display_track():
 def play(epoch=None):
     global meta_text, scroll_x, saver_scroll_x, saved_station_url, saved_station_index
     global playback_should_run, playback_down_since
+    global youtube_position_ms, youtube_length_ms, youtube_seek_target_ms
+    global youtube_seek_started_at, youtube_start_fresh, youtube_hold_zero
     scroll_x = SCREEN_W
     saver_scroll_x = SCREEN_W
     if epoch is not None and epoch != playback_epoch:
@@ -5925,8 +6024,26 @@ def play(epoch=None):
         return False
     if station.get("youtube_id"):
         meta_text = youtube_display_title(station)
+        if youtube_start_fresh:
+            youtube_start_fresh = False
+            youtube_position_ms = 0
+            youtube_length_ms = 0
+            youtube_seek_target_ms = None
+            youtube_hold_zero = True
+        elif youtube_seek_target_ms is None:
+            remembered = remembered_youtube_ms(station.get("youtube_id"))
+            if remembered:
+                youtube_hold_zero = False
+                youtube_position_ms = remembered
+                youtube_seek_target_ms = remembered
+                youtube_seek_started_at = 0
     else:
         meta_text = style_now_playing(station.get("name") or "")
+        youtube_start_fresh = False
+        youtube_hold_zero = False
+        youtube_position_ms = 0
+        youtube_length_ms = 0
+        youtube_seek_target_ms = None
     try:
         with _playback_lock:
             if epoch is not None and epoch != playback_epoch:
@@ -6008,6 +6125,211 @@ def current_youtube_id():
         return str(stations[current_idx].get("youtube_id") or "").strip()
     return ""
 
+def format_media_clock(ms):
+    total = max(0, int(ms or 0) // 1000)
+    minutes, seconds = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+def remaining_media_label(position_ms, length_ms):
+    length_ms = int(length_ms or 0)
+    if length_ms <= 0:
+        return "--"
+    left = max(0, length_ms - int(position_ms or 0))
+    if left < 60000:
+        return f"{max(1, left // 1000) if left else 0}s left"
+    return f"{left // 60000} min left"
+
+def remembered_youtube_ms(video_id):
+    if str(saved_playback.get("youtube_id") or "") != str(video_id or ""):
+        return 0
+    try:
+        saved_ms = max(0, int(saved_playback.get("youtube_position_ms") or 0))
+    except (TypeError, ValueError):
+        return 0
+    try:
+        length_ms = max(0, int(saved_playback.get("youtube_length_ms") or 0))
+    except (TypeError, ValueError):
+        length_ms = 0
+    if length_ms and saved_ms >= max(0, length_ms - 8000):
+        return 0
+    if saved_ms < 3000:
+        return 0
+    return saved_ms
+
+def note_youtube_position():
+    """Read the playing minute. Ignore the 0 VLC reports while a stream opens."""
+    global youtube_position_ms, youtube_length_ms, youtube_hold_zero
+    if adjusting_youtube_seek or youtube_seek_target_ms is not None:
+        return
+    if not current_youtube_id():
+        return
+    try:
+        length = int(player.get_length() or 0)
+        position = int(player.get_time())
+    except (TypeError, ValueError, Exception):
+        return
+    if length > 0:
+        youtube_length_ms = length
+    if position >= 1000:
+        youtube_position_ms = position
+        youtube_hold_zero = False
+
+def queue_youtube_seek(position_ms):
+    global youtube_position_ms, youtube_seek_target_ms, youtube_seek_started_at
+    global youtube_hold_zero
+    target = max(0, int(position_ms or 0))
+    if youtube_length_ms > 0:
+        target = min(target, max(0, youtube_length_ms - 1000))
+    youtube_hold_zero = target < 3000
+    youtube_position_ms = target
+    youtube_seek_target_ms = target
+    youtube_seek_started_at = 0
+    apply_pending_youtube_seek()
+
+def seek_youtube_by(delta_ms):
+    base = (
+        youtube_seek_target_ms
+        if youtube_seek_target_ms is not None
+        else youtube_position_ms
+    )
+    queue_youtube_seek(int(base or 0) + int(delta_ms or 0))
+
+def apply_pending_youtube_seek():
+    global youtube_seek_target_ms, youtube_seek_started_at, youtube_position_ms
+    if youtube_seek_target_ms is None or not current_youtube_id():
+        return
+    now = time.time()
+    if not youtube_seek_started_at:
+        youtube_seek_started_at = now
+    if now - youtube_seek_started_at > 20:
+        youtube_seek_target_ms = None
+        youtube_seek_started_at = 0
+        return
+    try:
+        state = player.get_state()
+        length = int(player.get_length() or 0)
+        current = int(player.get_time())
+    except (TypeError, ValueError, Exception):
+        return
+    if length <= 0 or state not in (
+        vlc.State.Playing, vlc.State.Paused, vlc.State.Buffering
+    ):
+        return
+    target = max(0, min(int(youtube_seek_target_ms), max(0, length - 1000)))
+    if current >= 1000 and abs(current - target) < 4000:
+        youtube_position_ms = current
+        youtube_length_ms = length
+        youtube_seek_target_ms = None
+        youtube_seek_started_at = 0
+        return
+    try:
+        player.set_time(target)
+    except Exception:
+        try:
+            player.set_position(target / float(length))
+        except Exception:
+            return
+
+def follow_youtube_timeline(now):
+    global _youtube_position_saved_at
+    apply_pending_youtube_seek()
+    note_youtube_position()
+    if not current_youtube_id():
+        return
+    if now - _youtube_position_saved_at < 2:
+        return
+    if abs(int(youtube_position_ms or 0) - int(_youtube_saved_ms or 0)) < 2000:
+        return
+    _youtube_position_saved_at = now
+    save_playback_state()
+
+def youtube_ms_from_x(x):
+    width = youtube_seek_rect.width
+    if youtube_length_ms <= 0 or width <= 0:
+        return int(youtube_position_ms or 0)
+    ratio = (x - youtube_seek_rect.x) / float(width)
+    ratio = max(0.0, min(1.0, ratio))
+    return int(ratio * youtube_length_ms)
+
+def youtube_timeline_public():
+    if not current_youtube_id():
+        return {"youtube": False}
+    position = int(
+        youtube_seek_target_ms
+        if youtube_seek_target_ms is not None
+        else youtube_position_ms or 0
+    )
+    length = int(youtube_length_ms or 0)
+    return {
+        "youtube": True,
+        "position_ms": position,
+        "length_ms": length,
+        "elapsed": format_media_clock(position),
+        "remaining": remaining_media_label(position, length),
+    }
+
+def clear_youtube_seek_hitboxes():
+    global youtube_seek_rect, youtube_back_rect, youtube_forward_rect
+    youtube_seek_rect = _Rect(0, 0, 0, 0)
+    youtube_back_rect = _Rect(0, 0, 0, 0)
+    youtube_forward_rect = _Rect(0, 0, 0, 0)
+
+def draw_youtube_timeline():
+    """Elapsed time, minutes left, and a bar, just above the volume row."""
+    global youtube_seek_rect, youtube_back_rect, youtube_forward_rect
+    clear_youtube_seek_hitboxes()
+    if not current_youtube_id():
+        return
+    box = playback_card_box()
+    if box is None:
+        return
+    _rect, _kind, x, y, w, h = box
+    info = youtube_timeline_public()
+    row_y = y + h - 184
+    elapsed = f_tiny.render(info["elapsed"], True, UI_TEXT)
+    remaining = f_tiny.render(info["remaining"], True, UI_AMBER)
+    label_row = R(x, row_y, w, 16)
+    gap = S(8)
+    if elapsed.get_width() + gap + remaining.get_width() > label_row.width - S(8):
+        short = info["remaining"].replace(" min left", "m").replace(" left", "")
+        remaining = f_tiny.render(short, True, UI_AMBER)
+    label_w = elapsed.get_width() + gap + remaining.get_width()
+    label_x = label_row.centerx - label_w // 2
+    screen.blit(elapsed, (label_x, label_row.y))
+    screen.blit(remaining, (label_x + elapsed.get_width() + gap, label_row.y))
+    youtube_back_rect = R(x + 6, row_y + 18, 36, 26)
+    youtube_forward_rect = R(x + w - 42, row_y + 18, 36, 26)
+    back_body = draw_modern_button(
+        screen, youtube_back_rect, UI_SURFACE_RAISED, UI_BLUE, 10
+    )
+    forward_body = draw_modern_button(
+        screen, youtube_forward_rect, UI_SURFACE_RAISED, UI_AMBER, 10
+    )
+    draw_centered_text(screen, f_tiny, "-1", contrasting_text(back_body), youtube_back_rect)
+    draw_centered_text(
+        screen, f_tiny, "+1", contrasting_text(forward_body), youtube_forward_rect
+    )
+    bar = R(x + 48, row_y + 26, max(40, w - 96), 10)
+    youtube_seek_rect = bar.inflate(0, S(4))
+    pygame.draw.rect(screen, (37, 48, 72), bar, border_radius=S(6))
+    ratio = 0
+    if info["length_ms"] > 0:
+        ratio = min(1.0, info["position_ms"] / float(info["length_ms"]))
+    fill = int(bar.width * ratio)
+    if fill > 0:
+        pygame.draw.rect(
+            screen, UI_BLUE,
+            _Rect(bar.x, bar.y, max(S(8), fill), bar.height),
+            border_radius=S(6)
+        )
+    knob_x = bar.x + int(bar.width * ratio)
+    knob_x = max(bar.x + S(6), min(bar.right - S(6), knob_x))
+    draw_smooth_circle(screen, (knob_x, bar.centery), S(8), UI_TEXT)
+    draw_smooth_circle(screen, (knob_x, bar.centery), S(4), UI_AMBER)
+
 def remember_youtube_queue(video_id, title=""):
     global youtube_queue, youtube_queue_index, youtube_touch_offset
     video_id = str(video_id or "").strip()
@@ -6067,9 +6389,11 @@ def stage_youtube_choice(video_id, title, epoch=None):
         pass
     return True
 
-def play_youtube_station(video_id, title, audio_url, epoch=None):
+def play_youtube_station(video_id, title, audio_url, epoch=None, resume_ms=None):
     global current_idx, _youtube_play_started_at, _youtube_ended_handled
     global _youtube_was_playing
+    global youtube_position_ms, youtube_length_ms, youtube_seek_target_ms
+    global youtube_seek_started_at, youtube_start_fresh, youtube_hold_zero
     if not audio_url:
         return False
     station = {
@@ -6102,6 +6426,27 @@ def play_youtube_station(video_id, title, audio_url, epoch=None):
     _youtube_play_started_at = time.time()
     _youtube_ended_handled = False
     _youtube_was_playing = False
+    if resume_ms is None:
+        youtube_start_fresh = True
+        youtube_hold_zero = True
+        youtube_position_ms = 0
+        youtube_length_ms = 0
+        youtube_seek_target_ms = None
+    else:
+        youtube_start_fresh = False
+        resume_ms = max(0, int(resume_ms or 0))
+        length_ms = int(saved_playback.get("youtube_length_ms") or 0)
+        if length_ms and resume_ms >= max(0, length_ms - 8000):
+            resume_ms = 0
+        if resume_ms >= 3000:
+            youtube_hold_zero = False
+            youtube_position_ms = resume_ms
+            youtube_seek_target_ms = resume_ms
+            youtube_seek_started_at = 0
+        else:
+            youtube_hold_zero = True
+            youtube_position_ms = 0
+            youtube_seek_target_ms = None
     return bool(play(epoch))
 
 def save_favorites():
@@ -6633,7 +6978,13 @@ def resume_last_playback():
                 print("YouTube restore cancelled", flush=True)
                 return
             if audio_url:
-                play_youtube_station(youtube_id, title, audio_url, epoch)
+                play_youtube_station(
+                    youtube_id,
+                    title,
+                    audio_url,
+                    epoch,
+                    resume_ms=saved_playback.get("youtube_position_ms") or 0,
+                )
                 return
             print(f"Could not restore YouTube item: {err}")
         if playback_epoch != epoch:
@@ -7289,7 +7640,15 @@ def draw_home_card(
         return body
 
     inner_top = layout_y + 26
-    inner_bottom = layout_y + layout_h - (148 if kind == "now_playing" else 10)
+    youtube_home = (
+        kind == "now_playing"
+        and stations
+        and 0 <= current_idx < len(stations)
+        and stations[current_idx].get("youtube_id")
+    )
+    inner_bottom = layout_y + layout_h - (
+        (200 if youtube_home else 148) if kind == "now_playing" else 10
+    )
     inner_h = max(80, inner_bottom - inner_top)
 
     def draw_forecast_rows(rows, top, bottom):
@@ -8200,6 +8559,10 @@ def draw_screensaver():
     place(date_line)
     place(temp_face)
     track = current_display_track() or "TCRADIOS"
+    if current_youtube_id():
+        info = youtube_timeline_public()
+        if info.get("elapsed"):
+            track = f"{info['elapsed']}  {info['remaining']}  {track}"
     track_font = f_sm if f_sm.get_height() <= track_h else f_tiny
     clip = pygame.Rect(side, y, usable, max(track_h, track_font.get_height()))
     blit_scrolling_title(
@@ -8667,6 +9030,8 @@ ui_clock = pygame.time.Clock()
 
 while True:
     now = time.time()
+    clear_youtube_seek_hitboxes()
+    follow_youtube_timeline(now)
     try:
         keep_playback_alive(now)
     except Exception as error:
@@ -8810,6 +9175,8 @@ while True:
             btn_toggle = controls["toggle"]
             btn_next = controls["next"]
             if controls["visible"]:
+                if current_youtube_id():
+                    draw_youtube_timeline()
                 control_font = f_tiny if controls["compact"] else f_sm
                 draw_circle_icon_button(screen, vol_minus_rect, UI_AMBER, "minus")
                 pygame.draw.rect(
@@ -9375,6 +9742,27 @@ while True:
                     skip_playback(1)
                 if btn_toggle.collidepoint(event.pos):
                     toggle_playback()
+                if (
+                    youtube_back_rect.width
+                    and youtube_back_rect.collidepoint(event.pos)
+                ):
+                    seek_youtube_by(-60000)
+                    save_playback_state(force=True)
+                    continue
+                if (
+                    youtube_forward_rect.width
+                    and youtube_forward_rect.collidepoint(event.pos)
+                ):
+                    seek_youtube_by(60000)
+                    save_playback_state(force=True)
+                    continue
+                if (
+                    youtube_seek_rect.width
+                    and youtube_seek_rect.collidepoint(event.pos)
+                ):
+                    adjusting_youtube_seek = True
+                    youtube_position_ms = youtube_ms_from_x(event.pos[0])
+                    continue
                 if vol_minus_rect.collidepoint(event.pos):
                     apply_live_volume(vol_level - 5)
                     show_volume_bar = True
@@ -9392,6 +9780,11 @@ while True:
                     volume_bar_timer = time.time()
 
             elif event.type == pygame.MOUSEBUTTONUP:
+                if adjusting_youtube_seek:
+                    adjusting_youtube_seek = False
+                    queue_youtube_seek(youtube_position_ms)
+                    save_playback_state(force=True)
+                    continue
                 dx = event.pos[0] - touch_start_pos[0]
                 dy = event.pos[1] - touch_start_pos[1]
                 dt = time.time() - touch_start_time
@@ -9426,6 +9819,8 @@ while True:
                     save_playback_state(force=True)
                 adjusting_volume = False
 
+            elif event.type == pygame.MOUSEMOTION and adjusting_youtube_seek:
+                youtube_position_ms = youtube_ms_from_x(event.pos[0])
             elif event.type == pygame.MOUSEMOTION and adjusting_volume:
                 if event.pos[0] >= vol_bar_rect.x and event.pos[0] <= vol_bar_rect.right:
                     apply_live_volume(
