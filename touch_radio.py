@@ -4582,34 +4582,42 @@ except Exception:
 # must sit on that layout (glow, artwork) are drawn as matching ellipses.
 BASE_W, BASE_H = 320, 480
 OFFICIAL_7_W, OFFICIAL_7_H = 720, 1280
-# GoodTFT LCD35 at 270° is 480×320. A 320×240 floor keeps that panel and
-# still rejects an empty SDL mode. The old 640×480 floor threw the 3.5-inch
-# size away and drew the clock on a 720×1280 buffer past the visible glass.
-PANEL_MIN_W, PANEL_MIN_H = 320, 240
 _Rect = pygame.Rect
 
-def _panel_size_ok(width, height):
-    return width >= PANEL_MIN_W and height >= PANEL_MIN_H
+def _is_seven_inch(width, height):
+    """Official 7-inch is 800×480 or 720×1280. Anything smaller is the 3.5-inch panel."""
+    return width >= 640 and height >= 480
+
+def _open_fixed(size, flags):
+    try:
+        surface = pygame.display.set_mode(size, flags)
+    except Exception:
+        surface = pygame.display.set_mode(size)
+    return surface, surface.get_width(), surface.get_height()
 
 def _open_touchscreen():
+    """Keep two layouts. The 7-inch UI fills that panel. The 3.5-inch UI stays
+    320×480, which is the size its touch calibration presses. Stretching the
+    7-inch layout onto the 3.5-inch glass puts the buttons off the finger.
+    """
     flags = pygame.FULLSCREEN | pygame.NOFRAME
+    probed = None
     try:
         surface = pygame.display.set_mode((0, 0), flags)
-        width, height = surface.get_size()
-        if _panel_size_ok(width, height):
-            return surface, width, height
+        probed = surface.get_size()
+        if _is_seven_inch(*probed):
+            return surface, probed[0], probed[1]
     except Exception:
-        pass
-    for size in ((OFFICIAL_7_W, OFFICIAL_7_H), (480, 320), (320, 480)):
+        probed = None
+    if probed is None:
         try:
-            surface = pygame.display.set_mode(size, flags)
+            surface = pygame.display.set_mode((OFFICIAL_7_W, OFFICIAL_7_H), flags)
             width, height = surface.get_size()
-            if _panel_size_ok(width, height):
+            if _is_seven_inch(width, height):
                 return surface, width, height
         except Exception:
-            continue
-    surface = pygame.display.set_mode((OFFICIAL_7_W, OFFICIAL_7_H))
-    return surface, surface.get_width(), surface.get_height()
+            pass
+    return _open_fixed((BASE_W, BASE_H), flags)
 
 screen, SCREEN_W, SCREEN_H = _open_touchscreen()
 SCALE_X = SCREEN_W / float(BASE_W)
@@ -4651,7 +4659,8 @@ def header_edge_buttons(header):
     close = _Rect(header.right - side, top, side, side)
     return qr, close
 
-print(f"Touchscreen {SCREEN_W}x{SCREEN_H} (fill {SCALE_X:.2f}x{SCALE_Y:.2f})")
+panel = "7-inch" if _is_seven_inch(SCREEN_W, SCREEN_H) else "3.5-inch"
+print(f"{panel} touchscreen {SCREEN_W}x{SCREEN_H} (fill {SCALE_X:.2f}x{SCALE_Y:.2f})")
 
 # --- UNICODE FONT SETUP (Tamil Support) ---
 TAMIL_RANGE = range(0x0B80, 0x0BFF + 1)
