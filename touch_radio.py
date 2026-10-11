@@ -4582,23 +4582,34 @@ except Exception:
 # must sit on that layout (glow, artwork) are drawn as matching ellipses.
 BASE_W, BASE_H = 320, 480
 OFFICIAL_7_W, OFFICIAL_7_H = 720, 1280
+# GoodTFT LCD35 at 270° is 480×320. A 320×240 floor keeps that panel and
+# still rejects an empty SDL mode. The old 640×480 floor threw the 3.5-inch
+# size away and drew the clock on a 720×1280 buffer past the visible glass.
+PANEL_MIN_W, PANEL_MIN_H = 320, 240
 _Rect = pygame.Rect
+
+def _panel_size_ok(width, height):
+    return width >= PANEL_MIN_W and height >= PANEL_MIN_H
 
 def _open_touchscreen():
     flags = pygame.FULLSCREEN | pygame.NOFRAME
     try:
         surface = pygame.display.set_mode((0, 0), flags)
         width, height = surface.get_size()
-        if width >= 640 and height >= 480:
+        if _panel_size_ok(width, height):
             return surface, width, height
     except Exception:
         pass
-    try:
-        surface = pygame.display.set_mode((OFFICIAL_7_W, OFFICIAL_7_H), flags)
-        return surface, surface.get_width(), surface.get_height()
-    except Exception:
-        surface = pygame.display.set_mode((OFFICIAL_7_W, OFFICIAL_7_H))
-        return surface, surface.get_width(), surface.get_height()
+    for size in ((OFFICIAL_7_W, OFFICIAL_7_H), (480, 320), (320, 480)):
+        try:
+            surface = pygame.display.set_mode(size, flags)
+            width, height = surface.get_size()
+            if _panel_size_ok(width, height):
+                return surface, width, height
+        except Exception:
+            continue
+    surface = pygame.display.set_mode((OFFICIAL_7_W, OFFICIAL_7_H))
+    return surface, surface.get_width(), surface.get_height()
 
 screen, SCREEN_W, SCREEN_H = _open_touchscreen()
 SCALE_X = SCREEN_W / float(BASE_W)
