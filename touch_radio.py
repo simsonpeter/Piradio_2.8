@@ -5486,8 +5486,11 @@ def draw_youtube_timeline():
     if not current_youtube_id():
         return
     info = youtube_timeline_public()
-    youtube_back_rect = pygame.Rect(8, 234, 40, 26)
-    youtube_forward_rect = pygame.Rect(272, 234, 40, 26)
+    # Own row under the song title, with a wide gap before volume at y=288.
+    label_y = 186
+    row_y = 206
+    youtube_back_rect = pygame.Rect(8, row_y, 46, 32)
+    youtube_forward_rect = pygame.Rect(266, row_y, 46, 32)
     back_body = draw_modern_button(screen, youtube_back_rect, UI_SURFACE_RAISED, UI_BLUE, 10)
     forward_body = draw_modern_button(
         screen, youtube_forward_rect, UI_SURFACE_RAISED, UI_AMBER, 10
@@ -5498,14 +5501,13 @@ def draw_youtube_timeline():
     )
     elapsed = f_tiny.render(info["elapsed"], True, UI_TEXT)
     remaining = f_tiny.render(info["remaining"], True, UI_AMBER)
-    screen.blit(elapsed, (52, 228))
+    screen.blit(elapsed, (12, label_y))
     screen.blit(
         remaining,
-        (268 - remaining.get_width(), 228)
+        (308 - remaining.get_width(), label_y)
     )
-    bar = pygame.Rect(52, 246, 216, 8)
-    # Stay above the volume buttons. A tall hit box was stealing those presses.
-    youtube_seek_rect = pygame.Rect(bar.x, 234, bar.width, 26)
+    bar = pygame.Rect(62, row_y + 11, 196, 10)
+    youtube_seek_rect = pygame.Rect(bar.x, row_y, bar.width, 32)
     pygame.draw.rect(screen, (37, 48, 72), bar, border_radius=6)
     ratio = 0
     if info["length_ms"] > 0:
@@ -6901,9 +6903,9 @@ PAGE_ORDER = [
     "radio", "favorites", "forecast", "clock",
     "alarm", "system", "languages", "settings", "youtube"
 ]
-btn_open_pages = pygame.Rect(16, 422, 228, 46)
+btn_open_pages = pygame.Rect(16, 428, 228, 44)
 fab_open = False
-btn_fab = pygame.Rect(256, 416, 54, 54)
+btn_fab = pygame.Rect(258, 422, 50, 50)
 btn_sleep = pygame.Rect(16, 248, 140, 52)
 btn_saver = pygame.Rect(164, 248, 140, 52)
 btn_alarm = pygame.Rect(16, 308, 140, 52)
@@ -6911,13 +6913,13 @@ btn_mute = pygame.Rect(164, 308, 140, 52)
 vol_rect = pygame.Rect(0, 0, 0, 0)
 btn_qr = pygame.Rect(15, 13, 42, 40)
 btn_exit = pygame.Rect(268, 13, 37, 40)
-logo_rect = pygame.Rect(104, 72, LOGO_SIZE, LOGO_SIZE)
-vol_minus_rect = pygame.Rect(10, 270, 46, 46)
-vol_plus_rect = pygame.Rect(264, 270, 46, 46)
-vol_bar_rect = pygame.Rect(64, 284, 192, 14)
-btn_prev = pygame.Rect(12, 329, 92, 53)
-btn_toggle = pygame.Rect(114, 325, 92, 61)
-btn_next = pygame.Rect(216, 329, 92, 53)
+logo_rect = pygame.Rect(126, 68, 68, 68)
+vol_minus_rect = pygame.Rect(10, 288, 42, 42)
+vol_plus_rect = pygame.Rect(268, 288, 42, 42)
+vol_bar_rect = pygame.Rect(60, 300, 200, 12)
+btn_prev = pygame.Rect(12, 356, 92, 46)
+btn_toggle = pygame.Rect(114, 352, 92, 54)
+btn_next = pygame.Rect(216, 356, 92, 46)
 btn_pages = pygame.Rect(70, 430, 180, 38)
 menu_card_rects = [
     pygame.Rect(16 + (index % 2) * 152, 68 + (index // 2) * 70, 136, 62)
@@ -7419,11 +7421,15 @@ while True:
         try: is_playing = player.get_state() == vlc.State.Playing
         except: is_playing = False
 
-        # Smaller artwork area leaves breathing room between sections
-        pygame.draw.circle(screen, (17, 31, 53), (160, 128), 60)
-        pygame.draw.circle(screen, (40, 58, 91), (160, 128), 58, 1)
-        logo_rect = pygame.Rect(104, 72, LOGO_SIZE, LOGO_SIZE)
-        screen.blit(logo, logo_rect)
+        # Artwork sits under the header so the title, time, and volume each
+        # get their own band.
+        art_size = 68
+        art_top = 68
+        art_center = (160, art_top + art_size // 2)
+        pygame.draw.circle(screen, (17, 31, 53), art_center, art_size // 2 + 2)
+        pygame.draw.circle(screen, (40, 58, 91), art_center, art_size // 2, 1)
+        logo_rect = pygame.Rect(160 - art_size // 2, art_top, art_size, art_size)
+        screen.blit(pygame.transform.smoothscale(logo, (art_size, art_size)), logo_rect)
 
         if is_playing:
             pulse = (math.sin(time.time() * 3) + 1) / 2
@@ -7432,53 +7438,42 @@ while True:
                 int(UI_BLUE[1] * 0.75),
                 int(UI_BLUE[2] * 0.75)
             )
-            pygame.draw.circle(screen, pulse_color, (160, 128), 58 + int(pulse * 4), 2)
+            pygame.draw.circle(
+                screen, pulse_color, art_center,
+                art_size // 2 + int(pulse * 4), 2
+            )
         else:
-            pygame.draw.circle(screen, UI_MUTED, (160, 128), 58, 1)
+            pygame.draw.circle(screen, UI_MUTED, art_center, art_size // 2, 1)
 
-        # Now-playing: Tamil on top, English transliteration under it
+        # Song title stays in this band. The time row begins at y=186.
         display_text = sanitize_text(meta_text)
         roman_text = transliterate_tamil(display_text)
-        if roman_text:
-            name_area = pygame.Rect(16, 192, 288, 28)
-            roman_area = pygame.Rect(16, 220, 288, 20)
-            name_render = f_sm.render(display_text, True, UI_TEXT)
+        name_area = pygame.Rect(12, 142, 296, 28)
+        name_render = f_sm.render(display_text, True, UI_TEXT)
+        screen.set_clip(name_area)
+        if name_render.get_width() <= name_area.width - 8:
+            name_x = name_area.centerx - name_render.get_width() // 2
+        else:
+            scroll_x -= 2
+            if scroll_x < -name_render.get_width():
+                scroll_x = name_area.right
+            name_x = scroll_x
+        screen.blit(name_render, (name_x, name_area.y + 4))
+        screen.set_clip(None)
+        if roman_text and not current_youtube_id():
             roman_render = f_tiny.render(
-                fit_label(roman_text, 34), True, UI_MUTED
+                fit_label(roman_text, 36), True, UI_MUTED
             )
-            screen.set_clip(name_area.inflate(-12, 0))
-            if name_render.get_width() <= name_area.width - 24:
-                name_x = name_area.centerx - name_render.get_width() // 2
-            else:
-                scroll_x -= 2
-                if scroll_x < -name_render.get_width():
-                    scroll_x = name_area.right
-                name_x = scroll_x
-            screen.blit(name_render, (name_x, name_area.y + 4))
-            screen.set_clip(None)
             screen.blit(
                 roman_render,
-                (roman_area.centerx - roman_render.get_width() // 2, roman_area.y)
+                (160 - roman_render.get_width() // 2, 172)
             )
-        else:
-            name_area = pygame.Rect(16, 198, 288, 34)
-            name_render = f_lg.render(display_text, True, UI_TEXT)
-            screen.set_clip(name_area.inflate(-12, 0))
-            if name_render.get_width() <= name_area.width - 24:
-                name_x = name_area.centerx - name_render.get_width() // 2
-            else:
-                scroll_x -= 2
-                if scroll_x < -name_render.get_width():
-                    scroll_x = name_area.right
-                name_x = scroll_x
-            screen.blit(name_render, (name_x, name_area.y + 5))
-            screen.set_clip(None)
 
         if current_youtube_id():
             draw_youtube_timeline()
         else:
-            alarm_chip = pygame.Rect(18, 242, 128, 22)
-            sleep_chip = pygame.Rect(174, 242, 128, 22)
+            alarm_chip = pygame.Rect(18, 196, 136, 28)
+            sleep_chip = pygame.Rect(166, 196, 136, 28)
             if alarm_system.alarm_enabled:
                 draw_modern_button(screen, alarm_chip, (57, 48, 31), (112, 88, 41), 10)
                 draw_centered_text(
@@ -7492,10 +7487,10 @@ while True:
                 draw_modern_button(screen, sleep_chip, (35, 40, 67), (75, 61, 126), 10)
                 draw_centered_text(screen, f_tiny, sleep_label, sleep_color, sleep_chip)
 
-        # Volume strip: circular vector − / + so glyphs never become boxes
-        vol_minus_rect = pygame.Rect(10, 270, 46, 46)
-        vol_plus_rect = pygame.Rect(264, 270, 46, 46)
-        vol_bar_rect = pygame.Rect(64, 284, 192, 14)
+        # Volume strip sits below the time row with a clear gap.
+        vol_minus_rect = pygame.Rect(10, 288, 42, 42)
+        vol_plus_rect = pygame.Rect(268, 288, 42, 42)
+        vol_bar_rect = pygame.Rect(60, 300, 200, 12)
         draw_circle_icon_button(screen, vol_minus_rect, UI_AMBER, "minus")
         pygame.draw.rect(screen, (37, 48, 72), vol_bar_rect, border_radius=8)
         fill_width = int(vol_bar_rect.width * vol_level / 100)
@@ -7506,16 +7501,16 @@ while True:
             pygame.draw.rect(screen, UI_BLUE, fill_rect, border_radius=8)
         knob_x = vol_bar_rect.x + int(vol_bar_rect.width * vol_level / 100)
         knob_x = max(vol_bar_rect.x + 8, min(vol_bar_rect.right - 8, knob_x))
-        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), 9, UI_TEXT)
+        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), 8, UI_TEXT)
         draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), 4, UI_BLUE)
         vol_pct_surf = f_tiny.render(f"{vol_level}%", True, UI_TEXT)
-        screen.blit(vol_pct_surf, (160 - vol_pct_surf.get_width() // 2, 302))
+        screen.blit(vol_pct_surf, (160 - vol_pct_surf.get_width() // 2, 318))
         draw_circle_icon_button(screen, vol_plus_rect, UI_GREEN, "plus")
 
         # Primary transport controls
-        btn_prev = pygame.Rect(12, 329, 92, 53)
-        btn_toggle = pygame.Rect(114, 325, 92, 61)
-        btn_next = pygame.Rect(216, 329, 92, 53)
+        btn_prev = pygame.Rect(12, 356, 92, 46)
+        btn_toggle = pygame.Rect(114, 352, 92, 54)
+        btn_next = pygame.Rect(216, 356, 92, 46)
         draw_pulsing_border(
             screen,
             btn_toggle,
