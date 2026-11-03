@@ -1,0 +1,108 @@
+"""Tamil Audio Bible module for PiRadio. Separate VLC player, persistent book/chapter."""
+import json
+from pathlib import Path
+import pygame
+import vlc
+
+NAMES = ("Genesis Exodus Leviticus Numbers Deuteronomy Joshua Judges Ruth").split()+[
+"1 Samuel","2 Samuel","1 Kings","2 Kings","1 Chronicles","2 Chronicles","Ezra","Nehemiah","Esther","Job","Psalms","Proverbs","Ecclesiastes","Song of Songs","Isaiah","Jeremiah","Lamentations","Ezekiel","Daniel","Hosea","Joel","Amos","Obadiah","Jonah","Micah","Nahum","Habakkuk","Zephaniah","Haggai","Zechariah","Malachi","Matthew","Mark","Luke","John","Acts","Romans","1 Corinthians","2 Corinthians","Galatians","Ephesians","Philippians","Colossians","1 Thessalonians","2 Thessalonians","1 Timothy","2 Timothy","Titus","Philemon","Hebrews","James","1 Peter","2 Peter","1 John","2 John","3 John","Jude","Revelation"]
+COUNTS=[50,40,27,36,34,24,21,4,31,24,22,25,29,36,10,13,10,42,150,31,12,8,66,52,5,48,12,14,3,9,1,4,7,3,3,3,2,14,4,28,16,24,21,28,16,16,13,6,6,4,4,5,3,6,4,3,1,13,5,5,3,5,1,1,1,22]
+SLUGS=[n.replace(" ","_") for n in NAMES]
+SLUGS[21]="Song_Of_Solomon"
+BASE="https://info2.sermon-online.com/tamil/Bible/Tamil-Audio_Bible_Complete_OT_NT_MP3/"
+STATE=Path.home()/".piradio_tamil_bible.json"
+
+class BiblePlayer:
+    def __init__(self):
+        self.book=0;self.chapter=1;self.list_page=0;self.selecting=False
+        self.player=vlc.MediaPlayer();self.playing=False;self.started=False
+        self.status="Choose PLAY";self.last_state=None
+        try:
+            data=json.loads(STATE.read_text())
+            self.book=max(0,min(65,int(data.get("book",0))))
+            self.chapter=max(1,min(COUNTS[self.book],int(data.get("chapter",1))))
+        except (OSError,ValueError,TypeError):pass
+    def save(self):
+        try:STATE.write_text(json.dumps({"book":self.book,"chapter":self.chapter}))
+        except OSError:pass
+    def url(self):
+        return BASE+f"{self.book+1:02d}{self.chapter:03d}-The_Book_Of_{SLUGS[self.book]}_Chapter-{self.chapter:03d}.mp3"
+    def stop(self):
+        self.player.stop();self.playing=False;self.started=False;self.status="Stopped"
+    def play(self,stop_radio=None):
+        if stop_radio:stop_radio()
+        self.player.stop()
+        self.player.set_media(vlc.Media(self.url()))
+        self.player.play()
+        self.playing=True;self.started=False;self.status="Loading chapter..."
+        self.save()
+    def shift(self,delta,stop_radio=None):
+        if delta>0:
+            if self.chapter<COUNTS[self.book]:self.chapter+=1
+            else:self.book=(self.book+1)%66;self.chapter=1
+        else:
+            if self.chapter>1:self.chapter-=1
+            else:self.book=(self.book-1)%66;self.chapter=COUNTS[self.book]
+        self.save()
+        if self.playing:self.play(stop_radio)
+    def tick(self,stop_radio=None):
+        if not self.playing:return
+        state=self.player.get_state()
+        if state==vlc.State.Playing:self.started=True;self.status="Playing"
+        elif state==vlc.State.Error:self.stop();self.status="Stream unavailable"
+        elif state==vlc.State.Ended and self.started:self.shift(1,stop_radio)
+    def render(self,screen,font,small):
+        screen.fill((10,20,39))
+        def label(s,y,f=font,color=(242,244,250)):
+            img=f.render(s,True,color);screen.blit(img,((320-img.get_width())//2,y))
+        def btn(rect,title):
+            pygame.draw.rect(screen,(29,72,95),rect,border_radius=10)
+            img=small.render(title,True,(255,255,255))
+            screen.blit(img,(rect.centerx-img.get_width()//2,rect.centery-img.get_height()//2))
+        label("TAMIL AUDIO BIBLE",12,small,(238,193,104))
+        if self.selecting:
+            for i in range(8):
+                b=self.list_page*8+i
+                if b>=66:break
+                btn(pygame.Rect(14,48+i*44,292,40),f"{b+1}. {NAMES[b]}")
+            btn(pygame.Rect(12,414,92,44),"BACK")
+            btn(pygame.Rect(113,414,92,44),"< LIST")
+            btn(pygame.Rect(214,414,92,44),"LIST >")
+            return
+        label(f"{self.book+1} / 66",60,small)
+        label(NAMES[self.book],91,small)
+        label(f"CHAPTER {self.chapter} / {COUNTS[self.book]}",143,small)
+        label(self.status,191,small,(238,193,104))
+        for rect,title in [
+            ((12,235,92,50),"< BOOK"),((114,235,92,50),"BOOKS"),((216,235,92,50),"BOOK >"),
+            ((12,301,92,52),"PREV"),((114,301,92,52),"STOP" if self.playing else "PLAY"),((216,301,92,52),"NEXT"),
+            ((62,404,196,48),"BACK TO RADIO")]:
+            btn(pygame.Rect(*rect),title)
+    def touch(self,pos,stop_radio=None):
+        x,y=pos
+        if self.selecting:
+            if y>=414:
+                if x<108:self.selecting=False
+                elif x<210:self.list_page=max(0,self.list_page-1)
+                else:self.list_page=min(8,self.list_page+1)
+            elif 48<=y<400:
+                idx=self.list_page*8+(y-48)//44
+                if idx<66:
+                    was_playing=self.playing
+                    self.book=idx;self.chapter=1;self.selecting=False;self.save()
+                    if was_playing:self.play(stop_radio)
+            return False
+        if 235<=y<290:
+            if x<108:self.book=(self.book-1)%66;self.chapter=1
+            elif x<210:self.list_page=self.book//8;self.selecting=True;return False
+            else:self.book=(self.book+1)%66;self.chapter=1
+            self.save()
+            if self.playing:self.play(stop_radio)
+        elif 301<=y<358:
+            if x<108:self.shift(-1,stop_radio)
+            elif x<210:
+                if self.playing:self.stop()
+                else:self.play(stop_radio)
+            else:self.shift(1,stop_radio)
+        elif y>=404:self.stop();return True
+        return False
