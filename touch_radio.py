@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from datetime import datetime, timedelta
 from flask import Flask, render_template_string, Response, jsonify, request
 import subprocess
+from tamil_bible import BiblePlayer
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -4770,6 +4771,7 @@ refresh_ui_palette()
 
 instance = vlc.Instance('--no-video')
 player = instance.media_player_new()
+bible_player = BiblePlayer()
 
 URL = "https://raw.githubusercontent.com/simsonpeter/Tcradios/refs/heads/main/stations.json"
 LANGUAGE_BASE_URL = (
@@ -5863,6 +5865,7 @@ def draw_menu_screen(now):
         ("LANGUAGES", "More streams"),
         ("SETTINGS", "Audio • Wi-Fi"),
         ("YOUTUBE", "Search and play"),
+        ("TAMIL BIBLE", "Audio chapters"),
     ]
     for index, (title, subtitle) in enumerate(labels):
         rect = menu_card_rects[index]
@@ -6467,7 +6470,7 @@ touch_start_time = 0
 active_page = "radio"
 PAGE_ORDER = [
     "radio", "favorites", "forecast", "clock",
-    "alarm", "system", "languages", "settings", "youtube"
+    "alarm", "system", "languages", "settings", "youtube", "bible"
 ]
 btn_open_pages = pygame.Rect(16, 422, 228, 46)
 fab_open = False
@@ -6482,7 +6485,8 @@ menu_card_rects = [
     pygame.Rect(16 + (index % 2) * 152, 68 + (index // 2) * 70, 136, 62)
     for index in range(8)
 ]
-menu_card_rects.append(pygame.Rect(16, 348, 288, 62))
+menu_card_rects.append(pygame.Rect(16, 348, 136, 62))
+menu_card_rects.append(pygame.Rect(168, 348, 136, 62))
 YOUTUBE_PRESETS = (
     ("LOFI", "lofi hip hop radio"),
     ("JAZZ", "smooth jazz radio"),
@@ -7126,7 +7130,10 @@ while True:
                 draw_youtube_screen(now)
             elif active_page == "wifi":
                 draw_wifi_screen(now)
+            elif active_page == "bible":
+                bible_player.render(screen, f_lg, f_sm)
     
+    bible_player.tick(player.stop)
     for event in pygame.event.get():
         if event.type == pygame.MOUSEBUTTONDOWN:
             was_auto_dimmed = (
@@ -7164,10 +7171,16 @@ while True:
             if show_qr:
                 show_qr = False
                 continue
+            if active_page == "bible":
+                if bible_player.touch(event.pos, player.stop):
+                    active_page = "radio"
+                continue
             if active_page == "menu":
                 for page_index, card in enumerate(menu_card_rects):
                     if card.collidepoint(event.pos):
                         active_page = PAGE_ORDER[page_index]
+                        if active_page == "bible":
+                            player.stop()
                         break
                 continue
 
@@ -7523,6 +7536,7 @@ while True:
                 and abs(dx) > 45
                 and abs(dx) > abs(dy)
                 and dt < 2.5
+                and active_page != "bible"
             ):
                 youtube_keyboard_open = False
                 fab_open = False
