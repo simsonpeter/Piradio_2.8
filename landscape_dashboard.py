@@ -8,7 +8,7 @@ from fa_icons import draw_icon
 BG=(237,242,250); INK=(24,40,68); MUTED=(98,115,143)
 BLUE=(23,110,225); NAVY=(13,48,105); WHITE=(255,255,255)
 SIDEBAR=pygame.Rect(0,55,145,425)
-NAV=("HOME","RADIO","BIBLE","YOUTUBE","FAVORITES","HISTORY","SETTINGS")
+NAV=("HOME","RADIO","BIBLE","YOUTUBE","FAVORITES","CLOCK","SETTINGS")
 NAV_ICONS=("library","radio","bible","youtube","favorites","clock","settings")
 CARDS=("RADIO","BIBLE","YOUTUBE","FAVORITES")
 CARD_ICONS=("radio","bible","youtube","favorites")
