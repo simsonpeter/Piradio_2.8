@@ -7456,9 +7456,10 @@ while True:
                 active_page = "menu"
                 continue
             if btn_exit.collidepoint(event.pos):
-                save_playback_state(force=True)
-                pygame.quit()
-                sys.exit()
+                # The top-right control is HOME, never an app-exit target.
+                fab_open = False
+                active_page = "menu"
+                continue
             if btn_qr.collidepoint(event.pos):
                 show_qr = True
                 continue
