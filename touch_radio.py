@@ -7098,7 +7098,7 @@ while True:
             press_time = time.monotonic()
             if press_time - last_touch_down_time >= 0.14:
                 last_touch_down_time = press_time
-                if landscape_bible_hit(bible_player, event.pos, player.stop) == "home":
+                if landscape_bible_hit(bible_player, (round((event.pos[0]-165)*800/615), round((event.pos[1]-69)*480/369)), player.stop) == "home":
                     active_page = "menu"
             continue
         if active_page == "bible" and event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
@@ -7133,12 +7133,12 @@ while True:
         # touch positions into the original page's 320px control grid.
         if active_page not in ("menu", "radio", "bible") and event.type in (
                 pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
-            mapped = (max(0, min(319, round(event.pos[0] * 320 / 800))),
+            mapped = (max(0, min(319, round((event.pos[0]-349) * 320 / 246))),
                       max(0, min(479, event.pos[1])))
             attributes = event.dict.copy()
             attributes["pos"] = mapped
             if "rel" in attributes:
-                attributes["rel"] = (round(attributes["rel"][0] * 320 / 800),
+                attributes["rel"] = (round(attributes["rel"][0] * 320 / 246),
                                      attributes["rel"][1])
             event = pygame.event.Event(event.type, attributes)
         if event.type == pygame.MOUSEBUTTONDOWN:
