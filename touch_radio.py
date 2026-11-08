@@ -4492,6 +4492,7 @@ except Exception as e:
 # surface, while the right-hand panel provides large navigation targets.
 from landscape_ui import draw_companion_panel, companion_hit
 from landscape_dashboard import draw_dashboard, hit as landscape_hit
+from landscape_bible import draw as draw_landscape_bible, hit as landscape_bible_hit
 try:
     landscape_display = pygame.display.set_mode((800, 480), pygame.FULLSCREEN | pygame.NOFRAME)
 except Exception:
@@ -7077,6 +7078,15 @@ while True:
     
     bible_player.tick(player.stop)
     for event in pygame.event.get():
+        if active_page == "bible" and event.type == pygame.MOUSEBUTTONDOWN:
+            press_time = time.monotonic()
+            if press_time - last_touch_down_time >= 0.14:
+                last_touch_down_time = press_time
+                if landscape_bible_hit(bible_player, event.pos, player.stop) == "home":
+                    active_page = "menu"
+            continue
+        if active_page == "bible" and event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
+            continue
         if active_page in ("menu", "radio") and event.type == pygame.MOUSEBUTTONDOWN:
             # Native landscape dashboard owns all its visible touch targets.
             press_time = time.monotonic()
@@ -7105,7 +7115,7 @@ while True:
         # Secondary pages use a single full-width canvas, not the old
         # 320px-left + 480px-right companion panel. Map physical 800px
         # touch positions into the original page's 320px control grid.
-        if active_page not in ("menu", "radio") and event.type in (
+        if active_page not in ("menu", "radio", "bible") and event.type in (
                 pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
             mapped = (max(0, min(319, round(event.pos[0] * 320 / 800))),
                       max(0, min(479, event.pos[1])))
@@ -7578,9 +7588,10 @@ while True:
             bible_player.playing, bible_player.paused,
             f"Book {bible_player.book+1} - Chapter {bible_player.chapter}",
             vol_level)
+    elif active_page == "bible":
+        draw_landscape_bible(landscape_display, bible_player, f_lg, f_sm, f_tiny)
     else:
-        # Full-screen single-page fallback while native 800px secondary
-        # layouts are developed. Never show two competing interfaces.
+        # Remaining secondary pages still need native landscape layouts.
         pygame.transform.smoothscale(screen, (800, 480), landscape_display)
     pygame.display.flip()
     time.sleep(0.05)
