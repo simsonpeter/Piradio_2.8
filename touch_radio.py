@@ -7063,6 +7063,12 @@ while True:
                 draw_wifi_screen(now)
             elif active_page == "bible":
                 bible_player.render(screen, f_lg, f_sm, ios_ui_mode)
+            if active_page not in ("radio", "menu", "bible", "wifi"):
+                # Universal Home control; does not touch the audio engine.
+                home_corner = pygame.Rect(262, 9, 48, 40)
+                raised_card(screen, home_corner, ios_ui_mode, 12, 1)
+                draw_icon(screen, "library", home_corner.center, 21,
+                          IOS_THEMES[ios_ui_mode]["ink"])
     
     bible_player.tick(player.stop)
     for event in pygame.event.get():
@@ -7101,6 +7107,10 @@ while True:
                 continue
             if show_qr:
                 show_qr = False
+                continue
+            if active_page not in ("radio", "menu", "bible", "wifi") and pygame.Rect(262, 9, 48, 40).collidepoint(event.pos):
+                youtube_keyboard_open = False
+                active_page = "menu"
                 continue
             if active_page == "bible":
                 if bible_player.touch(event.pos, player.stop):
