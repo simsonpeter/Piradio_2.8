@@ -20,7 +20,7 @@ def scenic_background(s):
     pygame.draw.circle(s,(246,173,83),(690,96),32)
 SIDEBAR=pygame.Rect(0,55,145,425)
 NAV=("HOME","RADIO","BIBLE","YOUTUBE","FAVORITES","CLOCK","SETTINGS")
-NAV_ICONS=("library","radio","bible","youtube","favorites","clock","settings")
+NAV_ICONS=("home","radio","bible","youtube","favorites","clock","settings")
 CARDS=("RADIO","BIBLE","YOUTUBE","FAVORITES")
 CARD_ICONS=("radio","bible","youtube","favorites")
 NAV_RECTS={n:pygame.Rect(8,67+i*49,130,44) for i,n in enumerate(NAV)}
@@ -54,9 +54,9 @@ def _icon(s,name,rect,size=24,color=BLUE):
     try:draw_icon(s,name,rect.center,size,color)
     except Exception:pass
 
-def _card(s,rect,radius=14):
-    pygame.draw.rect(s,(155,180,214),rect.move(0,3),border_radius=radius)
-    pygame.draw.rect(s,WHITE,rect,border_radius=radius)
+def _card(s,rect,radius=17):
+    pygame.draw.rect(s,(5,25,54),rect.move(0,4),border_radius=radius)
+    pygame.draw.rect(s,(235,244,255),rect,border_radius=radius)
     pygame.draw.rect(s,(168,192,223),rect,1,border_radius=radius)
 
 def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
@@ -73,10 +73,9 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
     for name,icon in zip(NAV,NAV_ICONS):
         r=NAV_RECTS[name]
         selected=(name=="HOME" and active_page=="menu") or (name=="RADIO" and active_page=="radio")
-        if selected:pygame.draw.rect(s,BLUE,r,border_radius=12)
-        else:pygame.draw.rect(s,(18,69,124),r,border_radius=12)
-        _icon(s,icon,pygame.Rect(r.x+7,r.y+8,28,28),20,WHITE if selected else BLUE)
-        _text(s,tiny,name,(r.x+40,r.y+14),WHITE,84)
+        pygame.draw.rect(s,GOLD if selected else (18,69,124),r,border_radius=14)
+        _icon(s,icon,pygame.Rect(r.x+7,r.y+8,28,28),20,INK if selected else WHITE)
+        _text(s,small,name.title(),(r.x+39,r.y+10),INK if selected else WHITE,90)
     # Distinct Home launcher and Radio player, both in the same themed shell.
     import datetime, math
     now=datetime.datetime.now()
@@ -101,7 +100,7 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
         info=pygame.Rect(575,73,211,260)
         pygame.draw.rect(s,(7,42,102),clock,border_radius=22)
         pygame.draw.rect(s,(18,100,195),info,border_radius=22)
-        time_font=pygame.font.Font(None,118)
+        time_font=pygame.font.SysFont("dejavusans",100,bold=True)
         time_label=time_font.render(now.strftime("%H:%M"),True,WHITE)
         s.blit(time_label,time_label.get_rect(center=(clock.centerx,168)))
         date_label=small.render(now.strftime("%A, %d %b %Y"),True,WHITE)
@@ -114,7 +113,7 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
             rect=CARD_RECTS[name]
             _card(s,rect,12)
             _icon(s,CARD_ICONS[i],pygame.Rect(rect.x+5,rect.y+5,33,33),22,BLUE)
-            _text(s,tiny,name,(rect.x+42,rect.y+14),INK,100)
+            _text(s,small,name.title(),(rect.x+42,rect.y+10),INK,100)
     pygame.draw.rect(s,(5,35,83),MINI,border_radius=16)
     pygame.draw.rect(s,GOLD,MINI,2,border_radius=16)
     _icon(s,"bible" if bible_playing else "radio",pygame.Rect(166,410,43,43),29,WHITE)
@@ -150,9 +149,10 @@ def draw_shell(s,font,small,tiny,active_page,station,metadata,playing,bible_play
                 "FAVORITES":"favorites","CLOCK":"clock","SETTINGS":"settings"}[name]
         selected=active_page==target
         pygame.draw.rect(s,GOLD if selected else (18,69,124),rect,border_radius=12)
-        _icon(s,icon,pygame.Rect(rect.x+7,rect.y+8,28,28),20,WHITE if selected else BLUE)
-        _text(s,tiny,name,(rect.x+40,rect.y+14),INK if selected else WHITE,84)
+        _icon(s,icon,pygame.Rect(rect.x+7,rect.y+8,28,28),20,INK if selected else WHITE)
+        _text(s,small,name.title(),(rect.x+39,rect.y+10),INK if selected else WHITE,90)
     pygame.draw.rect(s,NAVY,MINI,border_radius=16)
+    pygame.draw.rect(s,GOLD,MINI,2,border_radius=16)
     _icon(s,"bible" if bible_playing else "radio",pygame.Rect(166,410,43,43),28,WHITE)
     _text(s,small,bible_name if bible_playing else station,(218,410),WHITE,380)
     _text(s,tiny,"Tamil Bible" if bible_playing else (metadata or "Now playing"),(218,436),(181,209,248),380)
