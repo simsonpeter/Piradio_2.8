@@ -7093,7 +7093,7 @@ while True:
                 if kind == "page":
                     active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
-                                   "HISTORY":"favorites","SETTINGS":"settings"}.get(value,"menu")
+                                   "CLOCK":"clock","SETTINGS":"settings"}.get(value,"menu")
                 elif kind == "audio":
                     if value == "pause":
                         if bible_player.playing:bible_player.toggle_pause()
