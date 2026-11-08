@@ -70,3 +70,44 @@ def draw_landscape_shell(surface, font, small, mode="light"):
         label = small.render(name, True, ink)
         surface.blit(label, label.get_rect(center=rect.center))
     return layout
+
+def draw_companion_panel(display, font, small, mode, active_page, station, metadata,
+                         bible_title, bible_playing, radio_playing):
+    """Right-side 480px landscape companion panel; left 320px remains legacy UI."""
+    from ios_ipod_ui import THEMES, raised_card
+    colors = THEMES[mode]
+    ink, muted = colors["ink"], colors["muted"]
+    panel = pygame.Rect(320, 0, 480, 480)
+    pygame.draw.rect(display, colors["bg"], panel)
+    title = font.render("PiRadio 7-inch", True, ink)
+    display.blit(title, (344, 22))
+    display.blit(small.render("LANDSCAPE  |  OFFICIAL TOUCHSCREEN", True, muted), (344, 55))
+    info = pygame.Rect(340, 90, 440, 140)
+    raised_card(display, info, mode, 18, 2)
+    source = "TAMIL AUDIO BIBLE" if bible_playing else "NOW PLAYING"
+    display.blit(small.render(source, True, muted), (356, 106))
+    name = bible_title if bible_playing else station
+    display.blit(font.render(str(name)[:32], True, ink), (356, 136))
+    detail = "Bible audio" if bible_playing else (metadata or ("LIVE RADIO" if radio_playing else "READY"))
+    display.blit(small.render(str(detail)[:52], True, muted), (356, 183))
+    pages = ("HOME", "RADIO", "BIBLE", "YOUTUBE", "FAVORITES")
+    result = {}
+    for i, name in enumerate(pages):
+        x = 340 + (i % 3) * 149
+        y = 250 + (i // 3) * 94
+        rect = pygame.Rect(x, y, 137, 76)
+        raised_card(display, rect, mode, 14, 2)
+        label = small.render(name, True, ink)
+        display.blit(label, label.get_rect(center=rect.center))
+        result[name] = rect
+    return result
+
+def companion_hit(pos):
+    if pos[0] < 320:
+        return None
+    for i, name in enumerate(("HOME", "RADIO", "BIBLE", "YOUTUBE", "FAVORITES")):
+        x = 340 + (i % 3) * 149
+        y = 250 + (i // 3) * 94
+        if pygame.Rect(x, y, 137, 76).collidepoint(pos):
+            return name
+    return "PANEL"
