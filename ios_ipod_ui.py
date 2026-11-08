@@ -9,12 +9,12 @@ PREFERENCE = Path.home() / ".piradio_ios_theme"
 THEMES = {
     "dark": {"bg": (12, 17, 30), "card": (29, 39, 58), "ink": (247, 249, 253),
              "muted": (160, 175, 195), "edge": (61, 76, 99)},
-    "light": {"bg": (239, 243, 249), "card": (255, 255, 255), "ink": (24, 36, 56),
-              "muted": (93, 108, 128), "edge": (211, 221, 235)},
+    "light": {"bg": (242, 242, 239), "card": (255, 255, 255), "ink": (29, 41, 57),
+              "muted": (103, 115, 131), "edge": (220, 225, 229)},
 }
-ACCENTS = [(57, 133, 244), (234, 71, 104), (73, 174, 150), (143, 104, 221),
-           (247, 160, 62), (91, 141, 228), (56, 175, 202), (109, 128, 153),
-           (222, 101, 139), (63, 153, 208)]
+ACCENTS = [(64, 104, 176), (179, 92, 119), (56, 139, 132), (119, 98, 164),
+           (193, 135, 61), (79, 116, 169), (68, 143, 157), (105, 118, 139),
+           (182, 80, 104), (64, 104, 176)]
 LABELS = ["RADIO", "FAVORITES", "WEATHER", "CLOCK", "ALARM", "SYSTEM",
           "LANGUAGES", "SETTINGS", "YOUTUBE", "TAMIL BIBLE"]
 SUBTITLES = ["Now playing", "Saved stations", "Forecast", "Time",
@@ -26,9 +26,9 @@ TOGGLE = pygame.Rect(246, 12, 60, 34)
 def load_mode():
     try:
         mode = PREFERENCE.read_text(encoding="utf-8").strip()
-        return mode if mode in THEMES else "dark"
+        return mode if mode in THEMES else "light"
     except OSError:
-        return "dark"
+        return "light"
 
 
 def toggle_mode(mode):
@@ -93,7 +93,7 @@ def draw_mini_player(surface, font, mode, title, playing, bible=False):
     pygame.draw.rect(surface, colors["card"], MINI_BAR, border_radius=13)
     pygame.draw.rect(surface, colors["edge"], MINI_BAR, 1, border_radius=13)
     tile = pygame.Rect(15, 443, 28, 28)
-    pygame.draw.rect(surface, (57, 133, 244), tile, border_radius=8)
+    pygame.draw.rect(surface, ACCENTS[9 if bible else 0], tile, border_radius=8)
     draw_icon(surface, "bible" if bible else "radio", tile.center, 17, (255,255,255))
     label = title[:26]
     rendered = font.render(label, True, colors["ink"])
