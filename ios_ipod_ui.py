@@ -79,3 +79,36 @@ def draw_player_frame(surface, mode):
                      border_radius=22)
     pygame.draw.rect(surface, colors["edge"], (10, 67, 300, 178), 1,
                      border_radius=22)
+
+
+MINI_BAR = pygame.Rect(8, 438, 304, 38)
+MINI_ACTION = pygame.Rect(262, 438, 50, 38)
+
+
+def draw_mini_player(surface, font, mode, title, playing, bible=False):
+    """Compact playback bar on the launcher, with a separate play/pause target."""
+    colors = THEMES[mode]
+    pygame.draw.rect(surface, colors["card"], MINI_BAR, border_radius=13)
+    pygame.draw.rect(surface, colors["edge"], MINI_BAR, 1, border_radius=13)
+    tile = pygame.Rect(15, 443, 28, 28)
+    pygame.draw.rect(surface, (57, 133, 244), tile, border_radius=8)
+    _center(surface, font, "B" if bible else "R", (255,255,255), tile)
+    label = title[:26]
+    rendered = font.render(label, True, colors["ink"])
+    surface.blit(rendered, (49, 448))
+    action = font.render("II" if playing else ">", True, colors["ink"])
+    surface.blit(action, action.get_rect(center=MINI_ACTION.center))
+
+
+def draw_youtube_skin(surface, font, tiny, mode, title, playing):
+    """Noninteractive visual header above the existing YouTube search/results UI."""
+    colors = THEMES[mode]
+    banner = pygame.Rect(8, 7, 304, 52)
+    pygame.draw.rect(surface, colors["card"], banner, border_radius=17)
+    pygame.draw.rect(surface, colors["edge"], banner, 1, border_radius=17)
+    pygame.draw.rect(surface, (222, 70, 85), (18, 15, 37, 36), border_radius=10)
+    _center(surface, font, "Y", (255,255,255), pygame.Rect(18,15,37,36))
+    heading = font.render("YouTube Player", True, colors["ink"])
+    surface.blit(heading, (64, 12))
+    subtitle = tiny.render((title or "Search and play")[:29], True, colors["muted"])
+    surface.blit(subtitle, (64, 35))
