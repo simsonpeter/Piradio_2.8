@@ -13,10 +13,10 @@ NAV_ICONS=("library","radio","bible","youtube","favorites","clock","settings")
 CARDS=("RADIO","BIBLE","YOUTUBE","FAVORITES")
 CARD_ICONS=("radio","bible","youtube","favorites")
 NAV_RECTS={n:pygame.Rect(8,67+i*49,130,44) for i,n in enumerate(NAV)}
-CARD_RECTS={n:pygame.Rect(157+i*157,295,149,82) for i,n in enumerate(CARDS)}
-PREV=pygame.Rect(445,195,54,54)
-PAUSE=pygame.Rect(525,186,72,72)
-NEXT=pygame.Rect(623,195,54,54)
+CARD_RECTS={n:pygame.Rect(158+i*158,346,150,43) for i,n in enumerate(CARDS)}
+PREV=pygame.Rect(588,226,49,48)
+PAUSE=pygame.Rect(652,226,49,48)
+NEXT=pygame.Rect(716,226,49,48)
 VOLUME=pygame.Rect(421,268,240,20)
 MINI=pygame.Rect(157,399,629,65)
 MINI_PREV=pygame.Rect(634,410,43,44)
@@ -84,6 +84,9 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
     _text(s,small,bible_name if bible_playing else station,(596,147),WHITE,170)
     _text(s,tiny,"Paused" if bible_paused else ("Bible audio" if bible_playing else (metadata or "Live radio")),(596,183),(199,225,255),172)
     _text(s,tiny,"PiRadio Pro",(596,292),(204,230,255),175)
+    for rect,icon in ((PREV,"prev"),(PAUSE,"pause" if playing else "play"),(NEXT,"next")):
+        display_rect=pygame.Rect(588+(0 if icon=="prev" else 64 if icon in ("pause","play") else 128),226,49,48)
+        _icon(s,icon,display_rect,26,WHITE)
     for i,name in enumerate(CARDS):
         rect=pygame.Rect(158+i*158,346,150,43)
         _card(s,rect,12)
