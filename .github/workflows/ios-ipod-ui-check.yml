@@ -9,6 +9,7 @@ on:
       - 'touch_radio.py'
       - 'ios_ipod_ui.py'
       - 'tamil_bible.py'
+      - 'fa_icons.py'
 
 jobs:
   syntax:
@@ -16,4 +17,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check Python syntax without requiring Pi hardware
-        run: python3 -m py_compile touch_radio.py ios_ipod_ui.py tamil_bible.py
+        run: python3 -m py_compile touch_radio.py ios_ipod_ui.py tamil_bible.py fa_icons.py
