@@ -3,21 +3,21 @@ No portrait surface scaling. Hit targets map to existing legacy actions.
 """
 import pygame
 from datetime import datetime
-from landscape_dashboard import BG,BLUE,WHITE,INK,MUTED,_card,_text
+from landscape_dashboard import BG,BLUE,WHITE,INK,MUTED,GOLD,_card,_text
 PANEL=pygame.Rect(160,65,625,322)
 TARGETS={}
 def title(s,f,text):
-    _text(s,f,text,(181,77),INK,550)
+    _text(s,f,text,(181,77),GOLD,550)
 def button(s,font,text,rect,target=None,active=False):
     _card(s,rect,13)
-    if active:pygame.draw.rect(s,(225,239,255),rect,border_radius=13)
+    if active:pygame.draw.rect(s,(248,207,111),rect,border_radius=13)
     label=font.render(str(text),True,BLUE if active else INK)
     s.blit(label,label.get_rect(center=rect.center))
     if target is not None:TARGETS[(rect.x,rect.y,rect.w,rect.h)]=target
 def draw(s,page,font,small,tiny,**v):
     TARGETS.clear()
     _card(s,PANEL,18)
-    pygame.draw.rect(s,(218,232,250),PANEL.inflate(-10,-10),border_radius=15)
+    pygame.draw.rect(s,(16,56,108),PANEL.inflate(-10,-10),border_radius=15)
     title(s,font,page.upper())
     if page=="clock":
         now=datetime.now()
@@ -49,7 +49,7 @@ def draw(s,page,font,small,tiny,**v):
             button(s,small,station.get("name","Empty slot"),r,(84+(i%2)*152,155+(i//2)*96) if idx is not None else None)
             if station:_text(s,tiny,station.get("genre","Radio"),(x+14,y+61),MUTED,155)
     elif page=="settings":
-        _text(s,small,"SOUND OUTPUT",(180,127),MUTED)
+        _text(s,small,"SOUND OUTPUT",(180,127),GOLD)
         for i,name in enumerate(("AUTO","JACK","HDMI","BLUETOOTH")):
             button(s,tiny,name,pygame.Rect(180+i*147,155,134,48),(49+i*76,116))
         _text(s,small,"DISPLAY BRIGHTNESS",(180,222),MUTED)
