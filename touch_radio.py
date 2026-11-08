@@ -7146,8 +7146,8 @@ while True:
             event=pygame.event.Event(event.type,attributes)
         elif active_page not in ("menu","radio","bible") and event.type in (
                 pygame.MOUSEBUTTONDOWN,pygame.MOUSEBUTTONUP,pygame.MOUSEMOTION):
-            mapped=(max(0,min(319,round((event.pos[0]-349)*320/246))),
-                    max(0,min(479,event.pos[1])))
+            mapped=(max(0,min(319,round((event.pos[0]-365)*320/210))),
+                    max(0,min(479,round((event.pos[1]-73)*480/315))))
             attributes=event.dict.copy();attributes["pos"]=mapped
             if "rel" in attributes:attributes["rel"]=(0,0)
             event=pygame.event.Event(event.type,attributes)
