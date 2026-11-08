@@ -9,7 +9,7 @@ import subprocess
 from tamil_bible import BiblePlayer
 from fa_icons import draw_icon
 from ios_ipod_ui import (draw_home, draw_player_frame, draw_mini_player,
-    draw_youtube_skin, MINI_BAR, MINI_ACTION, THEMES as IOS_THEMES, load_mode, toggle_mode, TOGGLE)
+    draw_youtube_skin, raised_card, MINI_BAR, MINI_ACTION, THEMES as IOS_THEMES, load_mode, toggle_mode, TOGGLE)
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -4592,8 +4592,8 @@ def refresh_ui_palette():
     UI_MUTED = (230, 234, 244)
     if globals().get("ios_ui_mode", "light") == "light":
         # Pearl White for legacy pages (Settings, Favorites, Clock, System).
-        UI_BG_TOP = (242, 242, 239)
-        UI_BG_BOTTOM = (237, 239, 243)
+        UI_BG_TOP = (231, 235, 241)
+        UI_BG_BOTTOM = (225, 231, 239)
         UI_SURFACE = (255, 255, 255)
         UI_SURFACE_RAISED = (230, 234, 240)
         UI_TEXT = (29, 41, 57)
@@ -6902,8 +6902,8 @@ while True:
         screen.fill(bg)
         btn_qr = pygame.Rect(15, 12, 45, 38)
         btn_exit = pygame.Rect(266, 12, 39, 38)
-        pygame.draw.rect(screen, card, btn_qr, border_radius=13)
-        pygame.draw.rect(screen, card, btn_exit, border_radius=13)
+        raised_card(screen, btn_qr, ios_ui_mode, 13, 2)
+        raised_card(screen, btn_exit, ios_ui_mode, 13, 2)
         draw_centered_text(screen, f_sm, "QR", ink, btn_qr)
         draw_centered_text(screen, f_sm, "X", ink, btn_exit)
         draw_centered_text(screen, f_lg, "Now Playing", ink, pygame.Rect(65, 12, 190, 38))
@@ -6914,8 +6914,9 @@ while True:
 
         # Large artwork tile, album-title strip and playback status.
         artwork = pygame.Rect(35, 61, 250, 193)
-        pygame.draw.rect(screen, card, artwork, border_radius=23)
-        pygame.draw.rect(screen, edge, artwork, 1, border_radius=23)
+        raised_card(screen, artwork, ios_ui_mode, 23, 4)
+        pygame.draw.rect(screen, (232, 239, 249) if ios_ui_mode == "light" else card,
+                         (44, 70, 232, 112), border_radius=18)
         logo_rect = pygame.Rect(112, 77, LOGO_SIZE, LOGO_SIZE)
         screen.blit(logo, logo_rect)
         display_text = sanitize_text(meta_text)
@@ -6930,15 +6931,17 @@ while True:
         else:
             status_surface = f_tiny.render("LIVE RADIO" if is_playing else "PAUSED", True, muted)
             screen.blit(status_surface, status_surface.get_rect(center=(160, 213)))
-        pygame.draw.circle(screen, (44, 184, 127) if is_playing else muted, (160, 242), 4)
+        pygame.draw.circle(screen, (44, 151, 113) if is_playing else muted, (160, 242), 4)
 
         # iPod-style horizontal volume bar; retain existing hardware touch regions.
         vol_minus_rect = pygame.Rect(13, 276, 42, 42)
         vol_plus_rect = pygame.Rect(265, 276, 42, 42)
         vol_bar_rect = pygame.Rect(65, 292, 190, 9)
+        volume_card = pygame.Rect(13, 266, 294, 70)
+        raised_card(screen, volume_card, ios_ui_mode, 15, 2)
         draw_centered_text(screen, f_lg, "-", ink, vol_minus_rect)
         draw_centered_text(screen, f_lg, "+", ink, vol_plus_rect)
-        pygame.draw.rect(screen, edge, vol_bar_rect, border_radius=5)
+        pygame.draw.rect(screen, (199, 211, 228) if ios_ui_mode == "light" else edge, vol_bar_rect, border_radius=5)
         fill = int(vol_bar_rect.width * max(0, min(100, vol_level)) / 100)
         if fill:
             pygame.draw.rect(screen, blue, (vol_bar_rect.x, vol_bar_rect.y, fill, 9), border_radius=5)
@@ -6955,14 +6958,16 @@ while True:
             (btn_toggle, "pause" if is_playing else "play", True),
             (btn_next, "next", False),
         ):
-            pygame.draw.ellipse(screen, ink if active else card, rect)
-            pygame.draw.ellipse(screen, edge, rect, 1)
+            if not active:
+                pygame.draw.ellipse(screen, (210, 218, 229) if ios_ui_mode == "light" else edge, rect.move(0, 3))
+            pygame.draw.ellipse(screen, blue if active else card, rect)
+            pygame.draw.ellipse(screen, blue if active else edge, rect, 1)
             draw_icon(screen, kind, rect.center, 28 if active else 23,
-                      bg if active else ink)
+                      (255, 255, 255) if active else ink)
 
         btn_open_pages = pygame.Rect(18, 426, 225, 42)
         btn_fab = pygame.Rect(260, 423, 49, 49)
-        pygame.draw.rect(screen, card, btn_open_pages, border_radius=16)
+        raised_card(screen, btn_open_pages, ios_ui_mode, 16, 2)
         draw_icon(screen, "library", (68, 447), 18, ink)
         draw_centered_text(screen, f_sm, "LIBRARY", ink, pygame.Rect(93, 426, 139, 42))
 
