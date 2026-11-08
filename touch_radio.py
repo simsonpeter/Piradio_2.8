@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from flask import Flask, render_template_string, Response, jsonify, request
 import subprocess
 from tamil_bible import BiblePlayer
+from fa_icons import draw_icon
 from ios_ipod_ui import (draw_home, draw_player_frame, draw_mini_player,
     draw_youtube_skin, MINI_BAR, MINI_ACTION, THEMES as IOS_THEMES, load_mode, toggle_mode, TOGGLE)
 
@@ -6945,24 +6946,14 @@ while True:
         ):
             pygame.draw.ellipse(screen, ink if active else card, rect)
             pygame.draw.ellipse(screen, edge, rect, 1)
-            color = bg if active else ink
-            cx, cy = rect.center
-            if kind == "pause":
-                pygame.draw.rect(screen, color, (cx - 11, cy - 13, 8, 26), border_radius=2)
-                pygame.draw.rect(screen, color, (cx + 3, cy - 13, 8, 26), border_radius=2)
-            elif kind == "play":
-                pygame.draw.polygon(screen, color, [(cx - 8, cy - 15), (cx - 8, cy + 15), (cx + 15, cy)])
-            elif kind == "prev":
-                pygame.draw.rect(screen, color, (cx - 15, cy - 12, 4, 24))
-                pygame.draw.polygon(screen, color, [(cx + 11, cy - 13), (cx - 10, cy), (cx + 11, cy + 13)])
-            else:
-                pygame.draw.polygon(screen, color, [(cx - 11, cy - 13), (cx + 10, cy), (cx - 11, cy + 13)])
-                pygame.draw.rect(screen, color, (cx + 11, cy - 12, 4, 24))
+            draw_icon(screen, kind, rect.center, 28 if active else 23,
+                      bg if active else ink)
 
         btn_open_pages = pygame.Rect(18, 426, 225, 42)
         btn_fab = pygame.Rect(260, 423, 49, 49)
         pygame.draw.rect(screen, card, btn_open_pages, border_radius=16)
-        draw_centered_text(screen, f_sm, "LIBRARY", ink, btn_open_pages)
+        draw_icon(screen, "library", (68, 447), 18, ink)
+        draw_centered_text(screen, f_sm, "LIBRARY", ink, pygame.Rect(93, 426, 139, 42))
 
         if fab_open:
             dim = pygame.Surface((320, 480), pygame.SRCALPHA)
