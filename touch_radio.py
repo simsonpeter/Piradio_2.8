@@ -7,7 +7,8 @@ from datetime import datetime, timedelta
 from flask import Flask, render_template_string, Response, jsonify, request
 import subprocess
 from tamil_bible import BiblePlayer
-from ios_ipod_ui import draw_home, draw_player_frame, load_mode, toggle_mode, TOGGLE
+from ios_ipod_ui import (draw_home, draw_player_frame, draw_mini_player,
+    draw_youtube_skin, MINI_BAR, MINI_ACTION, load_mode, toggle_mode, TOGGLE)
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -5857,6 +5858,10 @@ def fit_tail(text, length=28):
 def draw_menu_screen(now):
     # The existing PAGE_ORDER and card hitboxes remain the navigation source.
     draw_home(screen, f_sm, f_tiny, menu_card_rects, ios_ui_mode)
+    bible_active = bible_player.playing
+    radio_active = not bible_active and player.get_state() == vlc.State.Playing
+    title = (bible_player.status + ' - Bible' if bible_active else (stations[current_idx]['name'] if stations else 'TC RADIOS'))
+    draw_mini_player(screen, f_tiny, ios_ui_mode, title, bible_active and not bible_player.paused or radio_active, bible_active)
 
 def draw_favorites_screen(now):
     draw_page_base("FAVORITES", now)
@@ -7104,10 +7109,11 @@ while True:
                 draw_language_stations_screen(now)
             elif active_page == "youtube":
                 draw_youtube_screen(now)
+                draw_youtube_skin(screen, f_sm, f_tiny, ios_ui_mode, 'Search and play', False)
             elif active_page == "wifi":
                 draw_wifi_screen(now)
             elif active_page == "bible":
-                bible_player.render(screen, f_lg, f_sm)
+                bible_player.render(screen, f_lg, f_sm, ios_ui_mode)
     
     bible_player.tick(player.stop)
     for event in pygame.event.get():
@@ -7152,6 +7158,15 @@ while True:
                     active_page = "radio"
                 continue
             if active_page == "menu":
+                if MINI_BAR.collidepoint(event.pos):
+                    if MINI_ACTION.collidepoint(event.pos):
+                        if bible_player.playing:
+                            bible_player.toggle_pause()
+                        else:
+                            player.pause()
+                    else:
+                        active_page = "bible" if bible_player.playing else "radio"
+                    continue
                 if TOGGLE.collidepoint(event.pos):
                     ios_ui_mode = toggle_mode(ios_ui_mode)
                     continue
