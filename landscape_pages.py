@@ -17,15 +17,27 @@ def button(s,font,text,rect,target=None,active=False):
 def draw(s,page,font,small,tiny,**v):
     TARGETS.clear()
     _card(s,PANEL,18)
+    pygame.draw.rect(s,(218,232,250),PANEL.inflate(-10,-10),border_radius=15)
     title(s,font,page.upper())
     if page=="clock":
         now=datetime.now()
-        _text(s,font,now.strftime("%H:%M"),(215,154),INK,250)
-        _text(s,small,now.strftime("%A, %d %B %Y"),(215,217),MUTED,330)
-        _card(s,pygame.Rect(524,135,226,122))
-        _text(s,font,str(v.get("temp","--"))+"°C",(554,160),BLUE,150)
-        _text(s,small,str(v.get("city","")),(554,211),MUTED,170)
-        _text(s,small,"Now playing: "+str(v.get("station","")),(213,300),INK,525)
+        clock_box=pygame.Rect(179,119,578,240)
+        pygame.draw.rect(s,(19,55,107),clock_box,border_radius=23)
+        pygame.draw.rect(s,(34,80,145),clock_box,2,border_radius=23)
+        # Render at native 800x480 resolution; never enlarge a portrait clock.
+        big=pygame.font.Font(None,142)
+        time_surface=big.render(now.strftime("%H:%M"),True,(248,252,255))
+        s.blit(time_surface,time_surface.get_rect(center=(445,205)))
+        date=small.render(now.strftime("%A, %d %B %Y").upper(),True,(167,205,255))
+        s.blit(date,date.get_rect(center=(445,290)))
+        weather=pygame.Rect(615,149,128,150)
+        pygame.draw.rect(s,(41,94,161),weather,border_radius=16)
+        temperature=str(v.get("temp","--"))+"°C"
+        t=font.render(temperature,True,(248,252,255))
+        s.blit(t,t.get_rect(center=(weather.centerx,202)))
+        city=tiny.render(str(v.get("city","")),True,(185,216,255))
+        s.blit(city,city.get_rect(center=(weather.centerx,252)))
+        _text(s,tiny,"NOW PLAYING  •  "+str(v.get("station","")),(200,337),(190,218,255),535)
     elif page=="favorites":
         button(s,small,"ADD / REMOVE CURRENT",pygame.Rect(515,74,251,51),(160,83))
         fav=v.get("favorites",[]);stations=v.get("stations",[])
