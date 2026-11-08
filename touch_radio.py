@@ -6924,18 +6924,16 @@ while True:
                          (44, 70, 232, 112), border_radius=18)
         logo_rect = pygame.Rect(112, 77, LOGO_SIZE, LOGO_SIZE)
         screen.blit(logo, logo_rect)
-        display_text = sanitize_text(meta_text)
-        roman_text = transliterate_tamil(display_text)
-        station_name = display_text or (stations[current_idx]['name'] if stations else "TC RADIOS")
-        title_font = f_sm
-        title_surface = title_font.render(fit_label(station_name, 28), True, ink)
+        # Keep the station identity stable; show ICY/VLC NowPlaying separately.
+        station_name = sanitize_text(stations[current_idx]['name']) if stations else "TC RADIOS"
+        track_text = sanitize_text(meta_text)
+        if track_text.casefold() == station_name.casefold():
+            track_text = ""
+        title_surface = f_sm.render(fit_label(station_name, 28), True, ink)
         screen.blit(title_surface, title_surface.get_rect(center=(160, 192)))
-        if roman_text:
-            roman_surface = f_tiny.render(fit_label(roman_text, 34), True, muted)
-            screen.blit(roman_surface, roman_surface.get_rect(center=(160, 213)))
-        else:
-            status_surface = f_tiny.render("LIVE RADIO" if is_playing else "PAUSED", True, muted)
-            screen.blit(status_surface, status_surface.get_rect(center=(160, 213)))
+        detail = track_text if track_text else ("LIVE RADIO" if is_playing else "PAUSED")
+        detail_surface = f_tiny.render(fit_label(detail, 38), True, muted)
+        screen.blit(detail_surface, detail_surface.get_rect(center=(160, 213)))
         pygame.draw.circle(screen, (44, 151, 113) if is_playing else muted, (160, 242), 4)
 
         # iPod-style horizontal volume bar; retain existing hardware touch regions.
