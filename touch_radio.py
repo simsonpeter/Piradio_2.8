@@ -7102,20 +7102,19 @@ while True:
             continue
         if active_page in ("menu", "radio") and event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
             continue
-        if event.type == pygame.MOUSEBUTTONDOWN and event.pos[0] >= 320:
-            destination = companion_hit(event.pos)
-            if destination in ("HOME", "RADIO", "BIBLE", "YOUTUBE", "FAVORITES"):
-                active_page = {"HOME": "menu", "RADIO": "radio",
-                               "BIBLE": "bible", "YOUTUBE": "youtube",
-                               "FAVORITES": "favorites"}[destination]
-                fab_open = False
-                youtube_keyboard_open = False
-            # Right panel never reaches 320px legacy controls.
-            continue
-        if event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION) and event.pos[0] >= 320:
-            adjusting_volume = False
-            touch_consumed = False
-            continue
+        # Secondary pages use a single full-width canvas, not the old
+        # 320px-left + 480px-right companion panel. Map physical 800px
+        # touch positions into the original page's 320px control grid.
+        if active_page not in ("menu", "radio") and event.type in (
+                pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
+            mapped = (max(0, min(319, round(event.pos[0] * 320 / 800))),
+                      max(0, min(479, event.pos[1])))
+            attributes = event.dict.copy()
+            attributes["pos"] = mapped
+            if "rel" in attributes:
+                attributes["rel"] = (round(attributes["rel"][0] * 320 / 800),
+                                     attributes["rel"][1])
+            event = pygame.event.Event(event.type, attributes)
         if event.type == pygame.MOUSEBUTTONDOWN:
             # Ignore rapid duplicate press events from noisy resistive touch.
             press_time = time.monotonic()
@@ -7580,10 +7579,8 @@ while True:
             f"Book {bible_player.book+1} - Chapter {bible_player.chapter}",
             vol_level)
     else:
-        draw_companion_panel(
-            landscape_display, f_lg, f_sm, ios_ui_mode, active_page,
-            current_station, current_meta,
-            f"{bible_player.book + 1}. {bible_player.chapter}",
-            bible_player.playing, player.get_state() == vlc.State.Playing)
+        # Full-screen single-page fallback while native 800px secondary
+        # layouts are developed. Never show two competing interfaces.
+        pygame.transform.smoothscale(screen, (800, 480), landscape_display)
     pygame.display.flip()
     time.sleep(0.05)
