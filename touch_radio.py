@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from flask import Flask, render_template_string, Response, jsonify, request
 import subprocess
 from tamil_bible import BiblePlayer
+from ios_ipod_ui import draw_home, draw_player_frame, load_mode, toggle_mode, TOGGLE
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -5854,36 +5855,9 @@ def fit_tail(text, length=28):
     return truncate_display(text, length, tail=True)
 
 def draw_menu_screen(now):
-    draw_page_base("TC RADIOS", now)
-    labels = [
-        ("NOW PLAYING", "Radio controls"),
-        ("FAVORITES", "Quick stations"),
-        ("FORECAST", "Five days"),
-        ("CLOCK", "Time dashboard"),
-        ("ALARM / SLEEP", "Timers"),
-        ("SYSTEM", "Pi status"),
-        ("LANGUAGES", "More streams"),
-        ("SETTINGS", "Audio • Wi-Fi"),
-        ("YOUTUBE", "Search and play"),
-        ("TAMIL BIBLE", "Audio chapters"),
-    ]
-    for index, (title, subtitle) in enumerate(labels):
-        rect = menu_card_rects[index]
-        border = (
-            UI_PINK if index == 8
-            else (UI_BLUE, UI_PURPLE, UI_AMBER)[index % 3]
-        )
-        body = draw_modern_button(screen, rect, border, border, 16)
-        title_surface = f_sm.render(title, True, contrasting_text(body))
-        screen.blit(
-            title_surface,
-            (rect.centerx - title_surface.get_width() // 2, rect.y + 12)
-        )
-        subtitle_surface = f_tiny.render(subtitle, True, contrasting_muted(body))
-        screen.blit(
-            subtitle_surface,
-            (rect.centerx - subtitle_surface.get_width() // 2, rect.y + 34)
-        )
+    # The existing PAGE_ORDER and card hitboxes remain the navigation source.
+    draw_home(screen, f_sm, f_tiny, menu_card_rects, ios_ui_mode)
+
 def draw_favorites_screen(now):
     draw_page_base("FAVORITES", now)
     add_border = UI_PINK if current_idx in favorite_indices else UI_GREEN
@@ -6468,6 +6442,7 @@ volume_bar_timer = 0
 touch_start_pos = (0,0)
 touch_start_time = 0
 active_page = "radio"
+ios_ui_mode = load_mode()
 PAGE_ORDER = [
     "radio", "favorites", "forecast", "clock",
     "alarm", "system", "languages", "settings", "youtube", "bible"
@@ -6482,11 +6457,9 @@ btn_mute = pygame.Rect(164, 308, 140, 52)
 vol_rect = pygame.Rect(0, 0, 0, 0)
 btn_pages = pygame.Rect(70, 430, 180, 38)
 menu_card_rects = [
-    pygame.Rect(16 + (index % 2) * 152, 68 + (index // 2) * 70, 136, 62)
-    for index in range(8)
+    pygame.Rect(8 + (index % 2) * 154, 78 + (index // 2) * 72, 150, 66)
+    for index in range(10)
 ]
-menu_card_rects.append(pygame.Rect(16, 348, 136, 62))
-menu_card_rects.append(pygame.Rect(168, 348, 136, 62))
 YOUTUBE_PRESETS = (
     ("LOFI", "lofi hip hop radio"),
     ("JAZZ", "smooth jazz radio"),
@@ -6924,6 +6897,9 @@ while True:
         try: is_playing = player.get_state() == vlc.State.Playing
         except: is_playing = False
 
+        if active_page == "radio":
+            draw_player_frame(screen, ios_ui_mode)
+
         # Smaller artwork area leaves breathing room between sections
         pygame.draw.circle(screen, (17, 31, 53), (160, 128), 60)
         pygame.draw.circle(screen, (40, 58, 91), (160, 128), 58, 1)
@@ -7176,6 +7152,9 @@ while True:
                     active_page = "radio"
                 continue
             if active_page == "menu":
+                if TOGGLE.collidepoint(event.pos):
+                    ios_ui_mode = toggle_mode(ios_ui_mode)
+                    continue
                 for page_index, card in enumerate(menu_card_rects):
                     if card.collidepoint(event.pos):
                         active_page = PAGE_ORDER[page_index]
