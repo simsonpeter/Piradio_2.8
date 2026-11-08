@@ -8,7 +8,7 @@ from flask import Flask, render_template_string, Response, jsonify, request
 import subprocess
 from tamil_bible import BiblePlayer
 from ios_ipod_ui import (draw_home, draw_player_frame, draw_mini_player,
-    draw_youtube_skin, MINI_BAR, MINI_ACTION, load_mode, toggle_mode, TOGGLE)
+    draw_youtube_skin, MINI_BAR, MINI_ACTION, THEMES as IOS_THEMES, load_mode, toggle_mode, TOGGLE)
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -6877,155 +6877,75 @@ while True:
         screen.blit(ui_background, (0, 0))
         draw_animated_ui_glow(screen, now)
 
-        # Compact header
-        header_rect = pygame.Rect(8, 7, 304, 52)
-        pygame.draw.rect(screen, UI_SURFACE, header_rect, border_radius=17)
-        pygame.draw.rect(screen, (54, 75, 112), header_rect, 1, border_radius=17)
-        pygame.draw.line(screen, UI_BLUE, (28, 58), (145, 58), 2)
-        pygame.draw.line(screen, UI_PURPLE, (175, 58), (292, 58), 2)
+        # V2: true iPod-inspired radio screen, independent of the old palette.
+        palette = IOS_THEMES[ios_ui_mode]
+        bg, card, ink, muted, edge = (palette[k] for k in
+            ("bg", "card", "ink", "muted", "edge"))
+        blue = (57, 133, 244)
+        screen.fill(bg)
+        btn_qr = pygame.Rect(15, 12, 45, 38)
+        btn_exit = pygame.Rect(266, 12, 39, 38)
+        pygame.draw.rect(screen, card, btn_qr, border_radius=13)
+        pygame.draw.rect(screen, card, btn_exit, border_radius=13)
+        draw_centered_text(screen, f_sm, "QR", ink, btn_qr)
+        draw_centered_text(screen, f_sm, "X", ink, btn_exit)
+        draw_centered_text(screen, f_lg, "Now Playing", ink, pygame.Rect(65, 12, 190, 38))
+        try:
+            is_playing = player.get_state() == vlc.State.Playing
+        except Exception:
+            is_playing = False
 
-        btn_qr = pygame.Rect(15, 13, 42, 40)
-        qr_body = draw_modern_button(screen, btn_qr, UI_BLUE, UI_BLUE, 12)
-        draw_centered_text(screen, f_sm, "QR", contrasting_text(qr_body), btn_qr)
-
-        title_rect = pygame.Rect(65, 10, 190, 38)
-        draw_centered_text(screen, f_lg, "TC RADIOS", UI_TEXT, title_rect)
-        if show_startup_ip and now < ip_display_time:
-            ip_surface = f_tiny.render(f"{current_ip}:8080", True, UI_MUTED)
-            screen.blit(ip_surface, (160 - ip_surface.get_width() // 2, 43))
-
-        btn_exit = pygame.Rect(268, 13, 37, 40)
-        draw_modern_button(screen, btn_exit, (75, 30, 55), UI_PINK, 12)
-        pygame.draw.line(screen, UI_TEXT, (279, 24), (294, 40), 3)
-        pygame.draw.line(screen, UI_TEXT, (294, 24), (279, 40), 3)
-
-        try: is_playing = player.get_state() == vlc.State.Playing
-        except: is_playing = False
-
-        if active_page == "radio":
-            draw_player_frame(screen, ios_ui_mode)
-
-        # Smaller artwork area leaves breathing room between sections
-        pygame.draw.circle(screen, (17, 31, 53), (160, 128), 60)
-        pygame.draw.circle(screen, (40, 58, 91), (160, 128), 58, 1)
-        logo_rect = pygame.Rect(104, 72, LOGO_SIZE, LOGO_SIZE)
+        # Large artwork tile, album-title strip and playback status.
+        artwork = pygame.Rect(35, 61, 250, 193)
+        pygame.draw.rect(screen, card, artwork, border_radius=23)
+        pygame.draw.rect(screen, edge, artwork, 1, border_radius=23)
+        logo_rect = pygame.Rect(112, 77, LOGO_SIZE, LOGO_SIZE)
         screen.blit(logo, logo_rect)
-
-        if is_playing:
-            pulse = (math.sin(time.time() * 3) + 1) / 2
-            pulse_color = (
-                int(UI_BLUE[0] * 0.75),
-                int(UI_BLUE[1] * 0.75),
-                int(UI_BLUE[2] * 0.75)
-            )
-            pygame.draw.circle(screen, pulse_color, (160, 128), 58 + int(pulse * 4), 2)
-        else:
-            pygame.draw.circle(screen, UI_MUTED, (160, 128), 58, 1)
-
-        # Now-playing: Tamil on top, English transliteration under it
         display_text = sanitize_text(meta_text)
         roman_text = transliterate_tamil(display_text)
+        station_name = display_text or (stations[current_idx]['name'] if stations else "TC RADIOS")
+        title_font = f_sm
+        title_surface = title_font.render(fit_label(station_name, 28), True, ink)
+        screen.blit(title_surface, title_surface.get_rect(center=(160, 192)))
         if roman_text:
-            name_area = pygame.Rect(16, 192, 288, 28)
-            roman_area = pygame.Rect(16, 220, 288, 20)
-            name_render = f_sm.render(display_text, True, UI_TEXT)
-            roman_render = f_tiny.render(
-                fit_label(roman_text, 34), True, UI_MUTED
-            )
-            screen.set_clip(name_area.inflate(-12, 0))
-            if name_render.get_width() <= name_area.width - 24:
-                name_x = name_area.centerx - name_render.get_width() // 2
-            else:
-                scroll_x -= 2
-                if scroll_x < -name_render.get_width():
-                    scroll_x = name_area.right
-                name_x = scroll_x
-            screen.blit(name_render, (name_x, name_area.y + 4))
-            screen.set_clip(None)
-            screen.blit(
-                roman_render,
-                (roman_area.centerx - roman_render.get_width() // 2, roman_area.y)
-            )
+            roman_surface = f_tiny.render(fit_label(roman_text, 34), True, muted)
+            screen.blit(roman_surface, roman_surface.get_rect(center=(160, 213)))
         else:
-            name_area = pygame.Rect(16, 198, 288, 34)
-            name_render = f_lg.render(display_text, True, UI_TEXT)
-            screen.set_clip(name_area.inflate(-12, 0))
-            if name_render.get_width() <= name_area.width - 24:
-                name_x = name_area.centerx - name_render.get_width() // 2
-            else:
-                scroll_x -= 2
-                if scroll_x < -name_render.get_width():
-                    scroll_x = name_area.right
-                name_x = scroll_x
-            screen.blit(name_render, (name_x, name_area.y + 5))
-            screen.set_clip(None)
+            status_surface = f_tiny.render("LIVE RADIO" if is_playing else "PAUSED", True, muted)
+            screen.blit(status_surface, status_surface.get_rect(center=(160, 213)))
+        pygame.draw.circle(screen, (44, 184, 127) if is_playing else muted, (160, 242), 4)
 
-        # Status chips appear only when active; controls remain in the dock
-        alarm_chip = pygame.Rect(18, 242, 128, 22)
-        sleep_chip = pygame.Rect(174, 242, 128, 22)
-        if alarm_system.alarm_enabled:
-            draw_modern_button(screen, alarm_chip, (57, 48, 31), (112, 88, 41), 10)
-            draw_centered_text(
-                screen, f_tiny, f"ALARM {alarm_system.alarm_time}",
-                UI_AMBER, alarm_chip
-            )
-        if alarm_system.sleep_timer_enabled:
-            rem = alarm_system.get_sleep_remaining()
-            sleep_label = f"SLEEP {rem} MIN"
-            sleep_color = UI_GREEN if rem > 5 else UI_PINK
-            draw_modern_button(screen, sleep_chip, (35, 40, 67), (75, 61, 126), 10)
-            draw_centered_text(screen, f_tiny, sleep_label, sleep_color, sleep_chip)
+        # iPod-style horizontal volume bar; retain existing hardware touch regions.
+        vol_minus_rect = pygame.Rect(13, 276, 42, 42)
+        vol_plus_rect = pygame.Rect(265, 276, 42, 42)
+        vol_bar_rect = pygame.Rect(65, 292, 190, 9)
+        draw_centered_text(screen, f_lg, "-", ink, vol_minus_rect)
+        draw_centered_text(screen, f_lg, "+", ink, vol_plus_rect)
+        pygame.draw.rect(screen, edge, vol_bar_rect, border_radius=5)
+        fill = int(vol_bar_rect.width * max(0, min(100, vol_level)) / 100)
+        if fill:
+            pygame.draw.rect(screen, blue, (vol_bar_rect.x, vol_bar_rect.y, fill, 9), border_radius=5)
+        knob_x = vol_bar_rect.x + fill
+        pygame.draw.circle(screen, ink, (max(69, min(251, knob_x)), 296), 9)
+        draw_centered_text(screen, f_tiny, f"VOLUME {vol_level}%", muted, pygame.Rect(80, 314, 160, 17))
 
-        # Volume strip: circular vector − / + so glyphs never become boxes
-        vol_minus_rect = pygame.Rect(10, 270, 46, 46)
-        vol_plus_rect = pygame.Rect(264, 270, 46, 46)
-        vol_bar_rect = pygame.Rect(64, 284, 192, 14)
-        draw_circle_icon_button(screen, vol_minus_rect, UI_AMBER, "minus")
-        pygame.draw.rect(screen, (37, 48, 72), vol_bar_rect, border_radius=8)
-        fill_width = int(vol_bar_rect.width * vol_level / 100)
-        if fill_width > 0:
-            fill_rect = pygame.Rect(
-                vol_bar_rect.x, vol_bar_rect.y, max(14, fill_width), vol_bar_rect.height
-            )
-            pygame.draw.rect(screen, UI_BLUE, fill_rect, border_radius=8)
-        knob_x = vol_bar_rect.x + int(vol_bar_rect.width * vol_level / 100)
-        knob_x = max(vol_bar_rect.x + 8, min(vol_bar_rect.right - 8, knob_x))
-        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), 9, UI_TEXT)
-        draw_smooth_circle(screen, (knob_x, vol_bar_rect.centery), 4, UI_BLUE)
-        vol_pct_surf = f_tiny.render(f"{vol_level}%", True, UI_TEXT)
-        screen.blit(vol_pct_surf, (160 - vol_pct_surf.get_width() // 2, 302))
-        draw_circle_icon_button(screen, vol_plus_rect, UI_GREEN, "plus")
+        # Three prominent round transport buttons with existing hitbox names.
+        btn_prev = pygame.Rect(32, 345, 67, 58)
+        btn_toggle = pygame.Rect(119, 338, 82, 73)
+        btn_next = pygame.Rect(221, 345, 67, 58)
+        for rect, label, active in (
+            (btn_prev, "|<", False),
+            (btn_toggle, "II" if is_playing else ">", True),
+            (btn_next, ">|", False),
+        ):
+            pygame.draw.ellipse(screen, blue if active else card, rect)
+            pygame.draw.ellipse(screen, blue if active else edge, rect, 1)
+            draw_centered_text(screen, f_lg, label, (255,255,255) if active else ink, rect)
 
-        # Primary transport controls
-        btn_prev = pygame.Rect(12, 329, 92, 53)
-        btn_toggle = pygame.Rect(114, 325, 92, 61)
-        btn_next = pygame.Rect(216, 329, 92, 53)
-        draw_pulsing_border(
-            screen,
-            btn_toggle,
-            UI_AMBER if is_playing else UI_GREEN,
-            now
-        )
-        prev_body = draw_modern_button(screen, btn_prev, UI_BLUE, UI_BLUE, 16)
-        toggle_color = UI_AMBER if is_playing else UI_GREEN
-        toggle_body = draw_modern_button(
-            screen, btn_toggle, toggle_color, toggle_color, 18
-        )
-        next_body = draw_modern_button(screen, btn_next, UI_PURPLE, UI_PURPLE, 16)
-        draw_centered_text(screen, f_sm, "PREV", contrasting_text(prev_body), btn_prev)
-        draw_centered_text(
-            screen, f_sm, "PAUSE" if is_playing else "PLAY",
-            contrasting_text(toggle_body),
-            btn_toggle
-        )
-        draw_centered_text(screen, f_sm, "NEXT", contrasting_text(next_body), btn_next)
-
-        pages_body = draw_modern_button(
-            screen, btn_open_pages, UI_BLUE, UI_BLUE, 16
-        )
-        draw_centered_text(
-            screen, f_sm, "PAGES", contrasting_text(pages_body), btn_open_pages
-        )
+        btn_open_pages = pygame.Rect(18, 426, 225, 42)
+        btn_fab = pygame.Rect(260, 423, 49, 49)
+        pygame.draw.rect(screen, card, btn_open_pages, border_radius=16)
+        draw_centered_text(screen, f_sm, "LIBRARY", ink, btn_open_pages)
 
         if fab_open:
             dim = pygame.Surface((320, 480), pygame.SRCALPHA)
