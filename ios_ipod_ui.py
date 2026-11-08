@@ -3,6 +3,7 @@ No audio or navigation state is owned by this module.
 """
 from pathlib import Path
 import pygame
+from fa_icons import draw_icon
 
 PREFERENCE = Path.home() / ".piradio_ios_theme"
 THEMES = {
@@ -62,8 +63,9 @@ def draw_home(surface, small, tiny, card_rects, mode):
         # Icon tile is deliberately drawn rather than loading external artwork.
         tile = pygame.Rect(rect.x + 10, rect.y + 8, 32, 32)
         pygame.draw.rect(surface, ACCENTS[index], tile, border_radius=9)
-        symbols = ["R", "F", "W", "C", "A", "S", "L", "S", "Y", "B"]
-        _center(surface, small, symbols[index], (255, 255, 255), tile)
+        icons = ["radio", "favorites", "weather", "clock", "alarm",
+                 "system", "languages", "settings", "youtube", "bible"]
+        draw_icon(surface, icons[index], tile.center, 19, (255,255,255))
         text = tiny.render(LABELS[index], True, colors["ink"])
         surface.blit(text, (rect.x + 48, rect.y + 13))
         detail = tiny.render(SUBTITLES[index], True, colors["muted"])
@@ -92,12 +94,11 @@ def draw_mini_player(surface, font, mode, title, playing, bible=False):
     pygame.draw.rect(surface, colors["edge"], MINI_BAR, 1, border_radius=13)
     tile = pygame.Rect(15, 443, 28, 28)
     pygame.draw.rect(surface, (57, 133, 244), tile, border_radius=8)
-    _center(surface, font, "B" if bible else "R", (255,255,255), tile)
+    draw_icon(surface, "bible" if bible else "radio", tile.center, 17, (255,255,255))
     label = title[:26]
     rendered = font.render(label, True, colors["ink"])
     surface.blit(rendered, (49, 448))
-    action = font.render("II" if playing else ">", True, colors["ink"])
-    surface.blit(action, action.get_rect(center=MINI_ACTION.center))
+    draw_icon(surface, "pause" if playing else "play", MINI_ACTION.center, 19, colors["ink"])
 
 
 def draw_youtube_skin(surface, font, tiny, mode, title, playing):
@@ -107,7 +108,7 @@ def draw_youtube_skin(surface, font, tiny, mode, title, playing):
     pygame.draw.rect(surface, colors["card"], banner, border_radius=17)
     pygame.draw.rect(surface, colors["edge"], banner, 1, border_radius=17)
     pygame.draw.rect(surface, (222, 70, 85), (18, 15, 37, 36), border_radius=10)
-    _center(surface, font, "Y", (255,255,255), pygame.Rect(18,15,37,36))
+    draw_icon(surface, "youtube", (36,33), 22, (255,255,255))
     heading = font.render("YouTube Player", True, colors["ink"])
     surface.blit(heading, (64, 12))
     subtitle = tiny.render((title or "Search and play")[:29], True, colors["muted"])
