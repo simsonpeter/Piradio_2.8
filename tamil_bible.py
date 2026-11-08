@@ -62,11 +62,11 @@ class BiblePlayer:
     def render(self,screen,font,small,mode="dark"):
         """iPod-style Bible screen; existing touch targets and VLC engine retained."""
         light = mode == "light"
-        bg = (239,243,249) if light else (12,17,30)
+        bg = (242,242,239) if light else (12,17,30)
         card = (255,255,255) if light else (29,39,58)
-        ink = (24,36,56) if light else (247,249,253)
-        muted = (93,108,128) if light else (160,175,195)
-        blue = (57,133,244)
+        ink = (29,41,57) if light else (247,249,253)
+        muted = (103,115,131) if light else (160,175,195)
+        blue = (64,104,176) if light else (111,155,223)
         gold = (220,156,54)
         screen.fill(bg)
         def label(s, y, f=small, color=None):
