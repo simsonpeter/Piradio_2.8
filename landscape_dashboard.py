@@ -94,7 +94,7 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
         _text(s,tiny,name,(rect.x+42,rect.y+14),INK,100)
     pygame.draw.rect(s,NAVY,MINI,border_radius=16)
     _icon(s,"bible" if bible_playing else "radio",pygame.Rect(166,410,43,43),29,WHITE)
-    _text(s,small,current,(218,410),WHITE,385)
+    _text(s,small,bible_name if bible_playing else station,(218,410),WHITE,385)
     _text(s,tiny,"Tamil Bible" if bible_playing else (metadata or "Now playing"),(218,436),(181,209,248),385)
     for rect,icon in ((MINI_PREV,"prev"),(MINI_PAUSE,"pause" if playing else "play"),(MINI_NEXT,"next")):
         _icon(s,icon,rect,25,WHITE)
