@@ -55,7 +55,8 @@ class BiblePlayer:
     def cycle_speed(self):
         speeds=(0.75,1.0,1.25,1.5)
         self.speed=speeds[(speeds.index(self.speed)+1)%len(speeds)]
-        self.player.set_rate(self.speed)
+        try:self.player.set_rate(self.speed)
+        except Exception:self.status="Speed unavailable"
         self.save()
     def toggle_pause(self):
         if not self.playing:
@@ -76,7 +77,9 @@ class BiblePlayer:
         if not self.playing:return
         state=self.player.get_state()
         if state==vlc.State.Playing:
-            if not self.started:self.player.set_rate(self.speed)
+            if not self.started:
+                try:self.player.set_rate(self.speed)
+                except Exception:pass
             self.started=True;self.paused=False;self.status="Playing"
         elif state==vlc.State.Paused:self.paused=True;self.status="Paused"
         elif state==vlc.State.Error:self.stop();self.status="Stream unavailable"
