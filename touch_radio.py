@@ -6881,7 +6881,12 @@ while True:
         palette = IOS_THEMES[ios_ui_mode]
         bg, card, ink, muted, edge = (palette[k] for k in
             ("bg", "card", "ink", "muted", "edge"))
-        blue = (57, 133, 244)
+        blue = (178, 193, 210) if ios_ui_mode == 'dark' else (53, 91, 135)
+        bg = (12, 14, 18) if ios_ui_mode == "dark" else (244, 245, 247)
+        card = (29, 32, 39) if ios_ui_mode == "dark" else (255, 255, 255)
+        ink = (245, 246, 248) if ios_ui_mode == "dark" else (29, 33, 40)
+        muted = (163, 171, 182) if ios_ui_mode == "dark" else (112, 120, 131)
+        edge = (57, 62, 72) if ios_ui_mode == "dark" else (219, 224, 230)
         screen.fill(bg)
         btn_qr = pygame.Rect(15, 12, 45, 38)
         btn_exit = pygame.Rect(266, 12, 39, 38)
@@ -6933,14 +6938,26 @@ while True:
         btn_prev = pygame.Rect(32, 345, 67, 58)
         btn_toggle = pygame.Rect(119, 338, 82, 73)
         btn_next = pygame.Rect(221, 345, 67, 58)
-        for rect, label, active in (
-            (btn_prev, "|<", False),
-            (btn_toggle, "II" if is_playing else ">", True),
-            (btn_next, ">|", False),
+        for rect, kind, active in (
+            (btn_prev, "prev", False),
+            (btn_toggle, "pause" if is_playing else "play", True),
+            (btn_next, "next", False),
         ):
-            pygame.draw.ellipse(screen, blue if active else card, rect)
-            pygame.draw.ellipse(screen, blue if active else edge, rect, 1)
-            draw_centered_text(screen, f_lg, label, (255,255,255) if active else ink, rect)
+            pygame.draw.ellipse(screen, ink if active else card, rect)
+            pygame.draw.ellipse(screen, edge, rect, 1)
+            color = bg if active else ink
+            cx, cy = rect.center
+            if kind == "pause":
+                pygame.draw.rect(screen, color, (cx - 11, cy - 13, 8, 26), border_radius=2)
+                pygame.draw.rect(screen, color, (cx + 3, cy - 13, 8, 26), border_radius=2)
+            elif kind == "play":
+                pygame.draw.polygon(screen, color, [(cx - 8, cy - 15), (cx - 8, cy + 15), (cx + 15, cy)])
+            elif kind == "prev":
+                pygame.draw.rect(screen, color, (cx - 15, cy - 12, 4, 24))
+                pygame.draw.polygon(screen, color, [(cx + 11, cy - 13), (cx - 10, cy), (cx + 11, cy + 13)])
+            else:
+                pygame.draw.polygon(screen, color, [(cx - 11, cy - 13), (cx + 10, cy), (cx - 11, cy + 13)])
+                pygame.draw.rect(screen, color, (cx + 11, cy - 12, 4, 24))
 
         btn_open_pages = pygame.Rect(18, 426, 225, 42)
         btn_fab = pygame.Rect(260, 423, 49, 49)
