@@ -5,8 +5,8 @@ import pygame
 from ios_ipod_ui import raised_card, THEMES
 from fa_icons import draw_icon
 
-BG=(237,242,250); INK=(24,40,68); MUTED=(98,115,143)
-BLUE=(23,110,225); NAVY=(13,48,105); WHITE=(255,255,255)
+BG=(207,221,239); INK=(18,37,69); MUTED=(73,98,134)
+BLUE=(18,99,206); NAVY=(12,43,94); WHITE=(239,246,255)
 SIDEBAR=pygame.Rect(0,55,145,425)
 NAV=("HOME","RADIO","BIBLE","YOUTUBE","FAVORITES","CLOCK","SETTINGS")
 NAV_ICONS=("library","radio","bible","youtube","favorites","clock","settings")
@@ -44,21 +44,21 @@ def _icon(s,name,rect,size=24,color=BLUE):
     except Exception:pass
 
 def _card(s,rect,radius=14):
-    pygame.draw.rect(s,(209,221,238),rect.move(0,3),border_radius=radius)
+    pygame.draw.rect(s,(155,180,214),rect.move(0,3),border_radius=radius)
     pygame.draw.rect(s,WHITE,rect,border_radius=radius)
-    pygame.draw.rect(s,(218,229,242),rect,1,border_radius=radius)
+    pygame.draw.rect(s,(168,192,223),rect,1,border_radius=radius)
 
 def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
                    bible_playing,bible_paused,bible_name,volume):
     """Render native 800x480 screen; no fixed 320px UI stretching."""
     s.fill(BG)
-    pygame.draw.rect(s,WHITE,(0,0,800,55))
+    pygame.draw.rect(s,(222,235,252),(0,0,800,55))
     pygame.draw.line(s,(212,223,239),(0,54),(800,54))
     _icon(s,"radio",pygame.Rect(15,7,38,38),29)
     _text(s,font,"PiRadio Pro",(55,12))
     _text(s,tiny,"Radio  •  Tamil Bible  •  YouTube",(225,20),MUTED,320)
     _text(s,tiny,"7-inch  |  Wi-Fi",(670,20),MUTED,120)
-    pygame.draw.rect(s,(227,235,248),SIDEBAR)
+    pygame.draw.rect(s,(178,199,227),SIDEBAR)
     for name,icon in zip(NAV,NAV_ICONS):
         r=NAV_RECTS[name]
         selected=(name=="HOME" and active_page=="menu") or (name=="RADIO" and active_page=="radio")
