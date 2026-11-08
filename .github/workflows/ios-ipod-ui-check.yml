@@ -1,0 +1,19 @@
+name: PiRadio UI syntax check
+
+on:
+  push:
+    branches:
+      - feature/ios-ipod-hybrid-ui
+  pull_request:
+    paths:
+      - 'touch_radio.py'
+      - 'ios_ipod_ui.py'
+      - 'tamil_bible.py'
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Python syntax without requiring Pi hardware
+        run: python3 -m py_compile touch_radio.py ios_ipod_ui.py tamil_bible.py
