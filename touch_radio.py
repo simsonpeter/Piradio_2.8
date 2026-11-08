@@ -7496,22 +7496,8 @@ while True:
             dx = event.pos[0] - touch_start_pos[0]
             dy = event.pos[1] - touch_start_pos[1]
             dt = time.time() - touch_start_time
-            if (
-                active_page in PAGE_ORDER
-                and abs(dx) > 45
-                and abs(dx) > abs(dy)
-                and dt < 2.5
-                and active_page not in ("bible", "radio", "youtube", "settings")
-            ):
-                youtube_keyboard_open = False
-                fab_open = False
-                page_index = PAGE_ORDER.index(active_page)
-                direction = 1 if dx < 0 else -1
-                active_page = PAGE_ORDER[
-                    (page_index + direction) % len(PAGE_ORDER)
-                ]
-                adjusting_volume = False
-                continue
+            # Page-swipe navigation disabled: it caused accidental page changes
+            # after button taps on the compact touchscreen. Use HOME instead.
 
             if active_page == "radio" and logo_rect.collidepoint(touch_start_pos):
                 dy = touch_start_pos[1] - event.pos[1]
