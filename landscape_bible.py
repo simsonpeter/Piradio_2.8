@@ -3,8 +3,8 @@ import pygame
 from tamil_bible import NAMES, COUNTS
 from fa_icons import draw_icon
 
-BG=(237,242,250); WHITE=(255,255,255); INK=(24,40,68)
-MUTED=(99,115,140); BLUE=(23,110,225); BORDER=(211,225,241)
+BG=(12,43,85); WHITE=(237,246,255); INK=(22,45,84)
+MUTED=(111,148,192); BLUE=(25,116,211); BORDER=(72,132,196)
 BUTTONS={
  "home":pygame.Rect(674,12,108,46),
  "book_prev":pygame.Rect(20,325,166,52),
@@ -20,7 +20,7 @@ BUTTONS={
  "list_next":pygame.Rect(409,342,140,49),
 }
 def card(s,r):
-    pygame.draw.rect(s,WHITE,r,border_radius=17)
+    pygame.draw.rect(s,(226,238,252),r,border_radius=17)
     pygame.draw.rect(s,BORDER,r,1,border_radius=17)
 def label(s,f,text,rect,color=INK):
     txt=str(text)
@@ -34,8 +34,8 @@ def button(s,f,name,text,selected=False):
     label(s,f,text,r,WHITE if selected else INK)
 def draw(s,player,font,small,tiny):
     s.fill(BG)
-    pygame.draw.rect(s,WHITE,(0,0,800,70))
-    label(s,font,"TAMIL AUDIO BIBLE",pygame.Rect(24,9,400,52))
+    pygame.draw.rect(s,(8,33,73),(0,0,800,70))
+    label(s,font,"TAMIL AUDIO BIBLE",pygame.Rect(24,9,400,52),(246,191,77))
     button(s,small,"home","HOME")
     if player.selecting:
         card(s,pygame.Rect(20,78,760,255))
