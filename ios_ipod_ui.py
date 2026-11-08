@@ -9,8 +9,8 @@ PREFERENCE = Path.home() / ".piradio_ios_theme"
 THEMES = {
     "dark": {"bg": (12, 17, 30), "card": (29, 39, 58), "ink": (247, 249, 253),
              "muted": (160, 175, 195), "edge": (61, 76, 99)},
-    "light": {"bg": (242, 242, 239), "card": (255, 255, 255), "ink": (29, 41, 57),
-              "muted": (103, 115, 131), "edge": (220, 225, 229)},
+    "light": {"bg": (231, 235, 241), "card": (255, 255, 255), "ink": (29, 41, 57),
+              "muted": (103, 115, 131), "edge": (195, 205, 219)},
 }
 ACCENTS = [(64, 104, 176), (179, 92, 119), (56, 139, 132), (119, 98, 164),
            (193, 135, 61), (79, 116, 169), (68, 143, 157), (105, 118, 139),
@@ -21,6 +21,18 @@ SUBTITLES = ["Now playing", "Saved stations", "Forecast", "Time",
              "Sleep timer", "Device status", "Stations", "Preferences",
              "Videos", "66 books"]
 TOGGLE = pygame.Rect(246, 12, 60, 34)
+
+
+def raised_card(surface, rect, mode="light", radius=16, elevation=3):
+    """Low-cost layered shadows and crisp borders for 320x480 framebuffer."""
+    colors = THEMES[mode]
+    if mode == "light":
+        for offset, shade in ((elevation+2, (208, 215, 225)),
+                              (elevation, (216, 223, 232))):
+            pygame.draw.rect(surface, shade, rect.move(0, offset),
+                             border_radius=radius)
+    pygame.draw.rect(surface, colors["card"], rect, border_radius=radius)
+    pygame.draw.rect(surface, colors["edge"], rect, 1, border_radius=radius)
 
 
 def load_mode():
@@ -51,15 +63,13 @@ def draw_home(surface, small, tiny, card_rects, mode):
     surface.fill(colors["bg"])
     title = small.render("PiRadio", True, colors["ink"])
     surface.blit(title, (17, 16))
-    pygame.draw.rect(surface, colors["card"], TOGGLE, border_radius=16)
-    pygame.draw.rect(surface, colors["edge"], TOGGLE, 1, border_radius=16)
+    raised_card(surface, TOGGLE, mode)
     _center(surface, tiny, "LIGHT" if mode == "dark" else "DARK",
             colors["ink"], TOGGLE)
     subtitle = tiny.render("Your music, your Bible.", True, colors["muted"])
     surface.blit(subtitle, (17, 48))
     for index, rect in enumerate(card_rects):
-        pygame.draw.rect(surface, colors["card"], rect, border_radius=16)
-        pygame.draw.rect(surface, colors["edge"], rect, 1, border_radius=16)
+        raised_card(surface, rect, mode)
         # Icon tile is deliberately drawn rather than loading external artwork.
         tile = pygame.Rect(rect.x + 10, rect.y + 8, 32, 32)
         pygame.draw.rect(surface, ACCENTS[index], tile, border_radius=9)
@@ -70,8 +80,7 @@ def draw_home(surface, small, tiny, card_rects, mode):
         surface.blit(text, (rect.x + 48, rect.y + 13))
         detail = tiny.render(SUBTITLES[index], True, colors["muted"])
         surface.blit(detail, (rect.x + 48, rect.y + 33))
-    _center(surface, tiny, "iPod player  |  iOS library", colors["muted"],
-            pygame.Rect(12, 449, 296, 24))
+    # Mini-player occupies y=438..476; no overlapping footer.
 
 
 def draw_player_frame(surface, mode):
@@ -90,8 +99,7 @@ MINI_ACTION = pygame.Rect(262, 438, 50, 38)
 def draw_mini_player(surface, font, mode, title, playing, bible=False):
     """Compact playback bar on the launcher, with a separate play/pause target."""
     colors = THEMES[mode]
-    pygame.draw.rect(surface, colors["card"], MINI_BAR, border_radius=13)
-    pygame.draw.rect(surface, colors["edge"], MINI_BAR, 1, border_radius=13)
+    raised_card(surface, MINI_BAR, mode, 13, 1)
     tile = pygame.Rect(15, 443, 28, 28)
     pygame.draw.rect(surface, ACCENTS[9 if bible else 0], tile, border_radius=8)
     draw_icon(surface, "bible" if bible else "radio", tile.center, 17, (255,255,255))
@@ -105,8 +113,7 @@ def draw_youtube_skin(surface, font, tiny, mode, title, playing):
     """Noninteractive visual header above the existing YouTube search/results UI."""
     colors = THEMES[mode]
     banner = pygame.Rect(8, 7, 304, 52)
-    pygame.draw.rect(surface, colors["card"], banner, border_radius=17)
-    pygame.draw.rect(surface, colors["edge"], banner, 1, border_radius=17)
+    raised_card(surface, banner, mode, 17)
     pygame.draw.rect(surface, (222, 70, 85), (18, 15, 37, 36), border_radius=10)
     draw_icon(surface, "youtube", (36,33), 22, (255,255,255))
     heading = font.render("YouTube Player", True, colors["ink"])
