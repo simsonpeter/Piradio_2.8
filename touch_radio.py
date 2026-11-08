@@ -4491,7 +4491,7 @@ except Exception as e:
 # 7-inch landscape: keep the original 320x480 renderer as a safe offscreen
 # surface, while the right-hand panel provides large navigation targets.
 from landscape_ui import draw_companion_panel, companion_hit
-from landscape_dashboard import draw_dashboard, hit as landscape_hit
+from landscape_dashboard import draw_dashboard, hit as landscape_hit, draw_shell, shell_hit
 from landscape_bible import draw as draw_landscape_bible, hit as landscape_bible_hit
 try:
     landscape_display = pygame.display.set_mode((800, 480), pygame.FULLSCREEN | pygame.NOFRAME)
@@ -7078,6 +7078,22 @@ while True:
     
     bible_player.tick(player.stop)
     for event in pygame.event.get():
+        if active_page not in ("menu", "radio") and event.type == pygame.MOUSEBUTTONDOWN:
+            shell_action = shell_hit(event.pos)
+            if shell_action:
+                kind, value = shell_action
+                if kind == "page":
+                    active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
+                                   "YOUTUBE":"youtube","FAVORITES":"favorites",
+                                   "CLOCK":"clock","SETTINGS":"settings"}[value]
+                elif value == "pause":
+                    if bible_player.playing:bible_player.toggle_pause()
+                    else:player.pause()
+                elif bible_player.playing:
+                    bible_player.shift(-1 if value=="prev" else 1,player.stop)
+                else:
+                    skip_playback(-1 if value=="prev" else 1)
+                continue
         if active_page == "bible" and event.type == pygame.MOUSEBUTTONDOWN:
             press_time = time.monotonic()
             if press_time - last_touch_down_time >= 0.14:
@@ -7588,10 +7604,23 @@ while True:
             bible_player.playing, bible_player.paused,
             f"Book {bible_player.book+1} - Chapter {bible_player.chapter}",
             vol_level)
-    elif active_page == "bible":
-        draw_landscape_bible(landscape_display, bible_player, f_lg, f_sm, f_tiny)
     else:
-        # Remaining secondary pages still need native landscape layouts.
-        pygame.transform.smoothscale(screen, (800, 480), landscape_display)
+        # The shell is consistent on every page. The original page is
+        # rendered within the right content area without stretching.
+        bible_name = f"Book {bible_player.book+1} - Chapter {bible_player.chapter}"
+        radio_playing = player.get_state() == vlc.State.Playing
+        if active_page == "bible":
+            bible_canvas = pygame.Surface((800,480))
+            draw_landscape_bible(bible_canvas,bible_player,f_lg,f_sm,f_tiny)
+            content = pygame.transform.smoothscale(bible_canvas,(615,369))
+        else:
+            content = pygame.transform.smoothscale(screen,(246,369))
+        draw_shell(landscape_display,f_lg,f_sm,f_tiny,active_page,
+                   current_station,current_meta,
+                   (bible_player.playing and not bible_player.paused) if bible_player.playing else radio_playing,
+                   bible_player.playing,bible_name)
+        content_x = 165 if active_page == "bible" else 349
+        landscape_display.blit(content,(content_x,69))
+    pygame.display.flip()
     pygame.display.flip()
     time.sleep(0.05)
