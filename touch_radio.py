@@ -5525,7 +5525,7 @@ def apply_wifi_result():
             threading.Thread(target=retry_github_stations, daemon=True).start()
         if wifi_setup_required:
             wifi_setup_required = False
-            active_page = "radio"
+            active_page = "youtube"
     elif kind == 'error':
         wifi_status_text = str(pending[1])[:80]
 
@@ -5862,7 +5862,7 @@ def draw_page_base(title, now):
 
 def draw_pages_button():
     body = draw_modern_button(screen, btn_pages, UI_BLUE, UI_BLUE, 16)
-    draw_centered_text(screen, f_sm, "PAGES", contrasting_text(body), btn_pages)
+    draw_centered_text(screen, f_sm, "HOME", contrasting_text(body), btn_pages)
 
 def fit_label(text, length=16):
     return truncate_display(text, length)
@@ -5874,9 +5874,14 @@ def draw_menu_screen(now):
     # The existing PAGE_ORDER and card hitboxes remain the navigation source.
     draw_home(screen, f_sm, f_tiny, menu_card_rects, ios_ui_mode)
     bible_active = bible_player.playing
+    station = stations[current_idx] if stations else {}
+    youtube_active = not bible_active and bool(station.get("youtube_id"))
     radio_active = not bible_active and player.get_state() == vlc.State.Playing
-    title = (bible_player.status + ' - Bible' if bible_active else (stations[current_idx]['name'] if stations else 'TC RADIOS'))
-    draw_mini_player(screen, f_tiny, ios_ui_mode, title, bible_active and not bible_player.paused or radio_active, bible_active)
+    title = (f"{NAMES[bible_player.book]} - Ch {bible_player.chapter}" if bible_active
+             else station.get("name", "TC RADIOS"))
+    draw_mini_player(screen, f_tiny, ios_ui_mode, title,
+                     (not bible_player.paused if bible_active else radio_active),
+                     bible_active, youtube=youtube_active)
 
 def draw_favorites_screen(now):
     draw_page_base("FAVORITES", now)
@@ -6969,7 +6974,7 @@ while True:
         btn_fab = pygame.Rect(260, 423, 49, 49)
         raised_card(screen, btn_open_pages, ios_ui_mode, 16, 2)
         draw_icon(screen, "library", (68, 447), 18, ink)
-        draw_centered_text(screen, f_sm, "LIBRARY", ink, pygame.Rect(93, 426, 139, 42))
+        draw_centered_text(screen, f_sm, "HOME", ink, pygame.Rect(93, 426, 139, 42))
 
         if fab_open:
             dim = pygame.Surface((320, 480), pygame.SRCALPHA)
@@ -7099,7 +7104,7 @@ while True:
                 continue
             if active_page == "bible":
                 if bible_player.touch(event.pos, player.stop):
-                    active_page = "radio"
+                    active_page = "menu"
                 continue
             if active_page == "menu":
                 if MINI_BAR.collidepoint(event.pos):
@@ -7109,7 +7114,8 @@ while True:
                         else:
                             player.pause()
                     else:
-                        active_page = "bible" if bible_player.playing else "radio"
+                        active_page = ("bible" if bible_player.playing else
+                                       "youtube" if stations and stations[current_idx].get("youtube_id") else "radio")
                     continue
                 if TOGGLE.collidepoint(event.pos):
                     ios_ui_mode = toggle_mode(ios_ui_mode)
@@ -7117,8 +7123,6 @@ while True:
                 for page_index, card in enumerate(menu_card_rects):
                     if card.collidepoint(event.pos):
                         active_page = PAGE_ORDER[page_index]
-                        if active_page == "bible":
-                            player.stop()
                         break
                 continue
 
