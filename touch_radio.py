@@ -4493,6 +4493,7 @@ except Exception as e:
 from landscape_ui import draw_companion_panel, companion_hit
 from landscape_dashboard import draw_dashboard, hit as landscape_hit, draw_shell, shell_hit
 from landscape_bible import draw as draw_landscape_bible, hit as landscape_bible_hit
+from landscape_pages import draw as draw_landscape_page, hit as landscape_page_hit
 try:
     landscape_display = pygame.display.set_mode((800, 480), pygame.FULLSCREEN | pygame.NOFRAME)
 except Exception:
@@ -7128,19 +7129,24 @@ while True:
             continue
         if active_page in ("menu", "radio") and event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
             continue
-        # Secondary pages use a single full-width canvas, not the old
-        # 320px-left + 480px-right companion panel. Map physical 800px
-        # touch positions into the original page's 320px control grid.
-        if active_page not in ("menu", "radio", "bible") and event.type in (
-                pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
-            mapped = (max(0, min(319, round((event.pos[0]-349) * 320 / 246))),
-                      max(0, min(479, event.pos[1])))
-            attributes = event.dict.copy()
-            attributes["pos"] = mapped
-            if "rel" in attributes:
-                attributes["rel"] = (round(attributes["rel"][0] * 320 / 246),
-                                     attributes["rel"][1])
-            event = pygame.event.Event(event.type, attributes)
+        # Native secondary panels map their hit targets to the existing
+        # business-logic controls; the sidebar and mini-player remain separate.
+        if active_page in ("favorites","clock","settings","youtube") and event.type in (
+                pygame.MOUSEBUTTONDOWN,pygame.MOUSEBUTTONUP,pygame.MOUSEMOTION):
+            target=landscape_page_hit(event.pos)
+            if target is None:
+                continue
+            attributes=event.dict.copy()
+            attributes["pos"]=target
+            if "rel" in attributes:attributes["rel"]=(0,0)
+            event=pygame.event.Event(event.type,attributes)
+        elif active_page not in ("menu","radio","bible") and event.type in (
+                pygame.MOUSEBUTTONDOWN,pygame.MOUSEBUTTONUP,pygame.MOUSEMOTION):
+            mapped=(max(0,min(319,round((event.pos[0]-349)*320/246))),
+                    max(0,min(479,event.pos[1])))
+            attributes=event.dict.copy();attributes["pos"]=mapped
+            if "rel" in attributes:attributes["rel"]=(0,0)
+            event=pygame.event.Event(event.type,attributes)
         if event.type == pygame.MOUSEBUTTONDOWN:
             # Ignore rapid duplicate press events from noisy resistive touch.
             press_time = time.monotonic()
@@ -7609,18 +7615,26 @@ while True:
         # rendered within the right content area without stretching.
         bible_name = f"Book {bible_player.book+1} - Chapter {bible_player.chapter}"
         radio_playing = player.get_state() == vlc.State.Playing
-        if active_page == "bible":
-            bible_canvas = pygame.Surface((800,480))
-            draw_landscape_bible(bible_canvas,bible_player,f_lg,f_sm,f_tiny)
-            content = pygame.transform.smoothscale(bible_canvas,(615,369))
-        else:
-            content = pygame.transform.smoothscale(screen,(246,369))
         draw_shell(landscape_display,f_lg,f_sm,f_tiny,active_page,
                    current_station,current_meta,
                    (bible_player.playing and not bible_player.paused) if bible_player.playing else radio_playing,
                    bible_player.playing,bible_name)
-        content_x = 165 if active_page == "bible" else 349
-        landscape_display.blit(content,(content_x,69))
+        if active_page == "bible":
+            bible_canvas=pygame.Surface((800,480))
+            draw_landscape_bible(bible_canvas,bible_player,f_lg,f_sm,f_tiny)
+            # Reserve bottom 80px for the persistent audio mini-player.
+            content=pygame.transform.smoothscale(bible_canvas.subsurface((0,0,800,400)),(615,310))
+            landscape_display.blit(content,(165,74))
+        elif active_page in ("favorites","clock","settings","youtube"):
+            draw_landscape_page(landscape_display,active_page,f_lg,f_sm,f_tiny,
+                                station=current_station,temp=current_temp,
+                                city=device_settings.weather_name,
+                                favorites=favorite_indices,stations=stations,
+                                presets=YOUTUBE_PRESETS,status=youtube_touch_status)
+        else:
+            # Legacy pages are contained above the player, without overlap.
+            content=pygame.transform.smoothscale(screen,(210,315))
+            landscape_display.blit(content,(365,73))
     pygame.display.flip()
     pygame.display.flip()
     time.sleep(0.05)
