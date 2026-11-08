@@ -19,13 +19,19 @@ class BiblePlayer:
         self.book=0;self.chapter=1;self.list_page=0;self.selecting=False
         self.player=vlc.MediaPlayer();self.playing=False;self.started=False
         self.status="Choose PLAY";self.last_state=None;self.paused=False
+        self.speed=1.0;self.bookmarks=[];self.history=[]
         try:
             data=json.loads(STATE.read_text())
             self.book=max(0,min(65,int(data.get("book",0))))
             self.chapter=max(1,min(COUNTS[self.book],int(data.get("chapter",1))))
+            self.speed=float(data.get("speed",1.0))
+            if self.speed not in (0.75,1.0,1.25,1.5):self.speed=1.0
+            self.bookmarks=[list(p) for p in data.get("bookmarks",[]) if isinstance(p,list) and len(p)==2][:30]
+            self.history=[list(p) for p in data.get("history",[]) if isinstance(p,list) and len(p)==2][:30]
         except (OSError,ValueError,TypeError):pass
     def save(self):
-        try:STATE.write_text(json.dumps({"book":self.book,"chapter":self.chapter}))
+        try:STATE.write_text(json.dumps({"book":self.book,"chapter":self.chapter,"speed":self.speed,
+                                               "bookmarks":self.bookmarks,"history":self.history}))
         except OSError:pass
     def url(self):
         return BASE+f"{self.book+1:02d}{self.chapter:03d}-The_Book_Of_{SLUGS[self.book]}_Chapter-{self.chapter:03d}.mp3"
@@ -36,7 +42,20 @@ class BiblePlayer:
         self.player.stop()
         self.player.set_media(vlc.Media(self.url()))
         self.player.play()
+        self.history=[[self.book,self.chapter]]+[p for p in self.history if p!=[self.book,self.chapter]]
+        self.history=self.history[:30]
         self.playing=True;self.paused=False;self.started=False;self.status="Loading chapter..."
+        self.save()
+    def toggle_bookmark(self):
+        position=[self.book,self.chapter]
+        if position in self.bookmarks:self.bookmarks.remove(position)
+        else:self.bookmarks.insert(0,position)
+        self.bookmarks=self.bookmarks[:30]
+        self.save()
+    def cycle_speed(self):
+        speeds=(0.75,1.0,1.25,1.5)
+        self.speed=speeds[(speeds.index(self.speed)+1)%len(speeds)]
+        self.player.set_rate(self.speed)
         self.save()
     def toggle_pause(self):
         if not self.playing:
@@ -56,7 +75,9 @@ class BiblePlayer:
     def tick(self,stop_radio=None):
         if not self.playing:return
         state=self.player.get_state()
-        if state==vlc.State.Playing:self.started=True;self.paused=False;self.status="Playing"
+        if state==vlc.State.Playing:
+            if not self.started:self.player.set_rate(self.speed)
+            self.started=True;self.paused=False;self.status="Playing"
         elif state==vlc.State.Paused:self.paused=True;self.status="Paused"
         elif state==vlc.State.Error:self.stop();self.status="Stream unavailable"
         elif state==vlc.State.Ended and self.started:self.shift(1,stop_radio)
@@ -122,7 +143,9 @@ class BiblePlayer:
                           (255,255,255) if highlight else ink)
             else:
                 btn(button_rect,title,highlight)
-        label(f"{self.book+1} OF 66 BOOKS",370,small,muted)
+        btn(pygame.Rect(12,364,114,34),
+            "SAVED" if [self.book,self.chapter] in self.bookmarks else "BOOKMARK")
+        btn(pygame.Rect(194,364,114,34),f"{self.speed:g}x SPEED")
     def touch(self,pos,stop_radio=None):
         x,y=pos
         if 246<=x<312 and 7<=y<41:
@@ -151,5 +174,8 @@ class BiblePlayer:
                 if self.playing:self.toggle_pause()
                 else:self.play(stop_radio)
             else:self.shift(1,stop_radio)
+        elif 364<=y<399:
+            if x<132:self.toggle_bookmark()
+            elif x>=188:self.cycle_speed()
         elif y>=404:return True
         return False
