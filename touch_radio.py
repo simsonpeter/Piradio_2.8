@@ -4497,10 +4497,6 @@ try:
 except Exception:
     landscape_display = pygame.display.set_mode((800, 480))
 screen = pygame.Surface((320, 480))
-if False:
-    screen = pygame.display.set_mode((320, 480), pygame.FULLSCREEN | pygame.NOFRAME)
-except:
-    screen = pygame.display.set_mode((320, 480))
 
 # Cover application initialization with the same branding as the boot splash.
 screen.fill((0, 0, 0))
