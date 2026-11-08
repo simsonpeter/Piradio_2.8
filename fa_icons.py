@@ -18,7 +18,7 @@ CODES = {
     "bible": 0xf02d, "library": 0xf00a, "play": 0xf04b,
     "pause": 0xf04c, "prev": 0xf048, "next": 0xf051,
     "volume": 0xf028, "close": 0xf00d, "qr": 0xf029,
-    "sun": 0xf185, "moon": 0xf186,
+    "sun": 0xf185, "moon": 0xf186, "home": 0xf015, "search": 0xf002, "wifi": 0xf1eb, "plus": 0xf067, "minus": 0xf068, "chevron-left": 0xf053, "chevron-right": 0xf054,
 }
 _font_cache = {}
 
