@@ -5877,7 +5877,7 @@ def draw_menu_screen(now):
     station = stations[current_idx] if stations else {}
     youtube_active = not bible_active and bool(station.get("youtube_id"))
     radio_active = not bible_active and player.get_state() == vlc.State.Playing
-    title = (f"{NAMES[bible_player.book]} - Ch {bible_player.chapter}" if bible_active
+    title = (f"Bible {bible_player.book+1} - Chapter {bible_player.chapter}" if bible_active
              else station.get("name", "TC RADIOS"))
     draw_mini_player(screen, f_tiny, ios_ui_mode, title,
                      (not bible_player.paused if bible_active else radio_active),
