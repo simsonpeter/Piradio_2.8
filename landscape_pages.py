@@ -3,7 +3,7 @@ No portrait surface scaling. Hit targets map to existing legacy actions.
 """
 import pygame
 from datetime import datetime
-from landscape_dashboard import BG,BLUE,WHITE,INK,MUTED,GOLD,_card,_text
+from landscape_dashboard import BG,BLUE,WHITE,INK,MUTED,GOLD,_card,_text,_icon
 PANEL=pygame.Rect(160,65,625,322)
 TARGETS={}
 def title(s,f,text):
