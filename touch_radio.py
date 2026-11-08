@@ -4488,7 +4488,15 @@ except Exception as e:
     f_tiny = pygame.font.Font(None, 12)
     f_weather = pygame.font.Font(None, 42)
 
+# 7-inch landscape: keep the original 320x480 renderer as a safe offscreen
+# surface, while the right-hand panel provides large navigation targets.
+from landscape_ui import draw_companion_panel, companion_hit
 try:
+    landscape_display = pygame.display.set_mode((800, 480), pygame.FULLSCREEN | pygame.NOFRAME)
+except Exception:
+    landscape_display = pygame.display.set_mode((800, 480))
+screen = pygame.Surface((320, 480))
+if False:
     screen = pygame.display.set_mode((320, 480), pygame.FULLSCREEN | pygame.NOFRAME)
 except:
     screen = pygame.display.set_mode((320, 480))
@@ -7072,6 +7080,20 @@ while True:
     
     bible_player.tick(player.stop)
     for event in pygame.event.get():
+        if event.type == pygame.MOUSEBUTTONDOWN and event.pos[0] >= 320:
+            destination = companion_hit(event.pos)
+            if destination in ("HOME", "RADIO", "BIBLE", "YOUTUBE", "FAVORITES"):
+                active_page = {"HOME": "menu", "RADIO": "radio",
+                               "BIBLE": "bible", "YOUTUBE": "youtube",
+                               "FAVORITES": "favorites"}[destination]
+                fab_open = False
+                youtube_keyboard_open = False
+            # Right panel never reaches 320px legacy controls.
+            continue
+        if event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION) and event.pos[0] >= 320:
+            adjusting_volume = False
+            touch_consumed = False
+            continue
         if event.type == pygame.MOUSEBUTTONDOWN:
             # Ignore rapid duplicate press events from noisy resistive touch.
             press_time = time.monotonic()
@@ -7523,5 +7545,13 @@ while True:
                 volume_bar_timer = time.time()
     
     apply_display_brightness(now)
+    landscape_display.blit(screen, (0, 0))
+    current_station = stations[current_idx].get("name", "TC RADIOS") if stations else "TC RADIOS"
+    current_meta = meta_text if meta_text and meta_text != current_station else ""
+    draw_companion_panel(
+        landscape_display, f_lg, f_sm, ios_ui_mode, active_page,
+        current_station, current_meta,
+        f"{bible_player.book + 1}. {bible_player.chapter}",
+        bible_player.playing, player.get_state() == vlc.State.Playing)
     pygame.display.flip()
     time.sleep(0.05)
