@@ -4570,7 +4570,8 @@ def create_ui_background():
     pygame.draw.circle(glow, (*UI_BLUE, 28), (292, 108), 120)
     pygame.draw.circle(glow, (*UI_PURPLE, 26), (12, 360), 140)
     pygame.draw.circle(glow, (*UI_AMBER, 16), (160, 24), 90)
-    background.blit(glow, (0, 0))
+    if globals().get("ios_ui_mode", "light") != "light":
+        background.blit(glow, (0, 0))
     return background
 
 def refresh_ui_palette():
@@ -4589,6 +4590,19 @@ def refresh_ui_palette():
     UI_SURFACE = mix_colors((10, 12, 16), UI_BLUE, 0.12)
     UI_SURFACE_RAISED = mix_colors((16, 18, 24), UI_BLUE, 0.2)
     UI_MUTED = (230, 234, 244)
+    if globals().get("ios_ui_mode", "light") == "light":
+        # Pearl White for legacy pages (Settings, Favorites, Clock, System).
+        UI_BG_TOP = (242, 242, 239)
+        UI_BG_BOTTOM = (237, 239, 243)
+        UI_SURFACE = (255, 255, 255)
+        UI_SURFACE_RAISED = (230, 234, 240)
+        UI_TEXT = (29, 41, 57)
+        UI_MUTED = (103, 115, 131)
+        UI_BLUE = (64, 104, 176)
+        UI_PURPLE = (108, 100, 167)
+        UI_AMBER = (190, 130, 58)
+        UI_PINK = (180, 91, 121)
+        UI_GREEN = (46, 139, 112)
     ui_background = create_ui_background()
     ui_palette_theme = current_theme.name
 
@@ -6873,8 +6887,9 @@ while True:
     elif now < greeting_until:
         draw_house_greeting()
     else:
-        if ui_palette_theme != current_theme.name:
+        if ui_palette_theme != current_theme.name or getattr(refresh_ui_palette, "_last_ios_mode", None) != ios_ui_mode:
             refresh_ui_palette()
+            refresh_ui_palette._last_ios_mode = ios_ui_mode
         screen.blit(ui_background, (0, 0))
         draw_animated_ui_glow(screen, now)
 
@@ -6882,12 +6897,8 @@ while True:
         palette = IOS_THEMES[ios_ui_mode]
         bg, card, ink, muted, edge = (palette[k] for k in
             ("bg", "card", "ink", "muted", "edge"))
-        blue = (178, 193, 210) if ios_ui_mode == 'dark' else (53, 91, 135)
-        bg = (12, 14, 18) if ios_ui_mode == "dark" else (244, 245, 247)
-        card = (29, 32, 39) if ios_ui_mode == "dark" else (255, 255, 255)
-        ink = (245, 246, 248) if ios_ui_mode == "dark" else (29, 33, 40)
-        muted = (163, 171, 182) if ios_ui_mode == "dark" else (112, 120, 131)
-        edge = (57, 62, 72) if ios_ui_mode == "dark" else (219, 224, 230)
+        # One shared palette for radio, launcher, Bible and YouTube.
+        blue = (64, 104, 176) if ios_ui_mode == "light" else (137, 166, 220)
         screen.fill(bg)
         btn_qr = pygame.Rect(15, 12, 45, 38)
         btn_exit = pygame.Rect(266, 12, 39, 38)
@@ -6932,7 +6943,7 @@ while True:
         if fill:
             pygame.draw.rect(screen, blue, (vol_bar_rect.x, vol_bar_rect.y, fill, 9), border_radius=5)
         knob_x = vol_bar_rect.x + fill
-        pygame.draw.circle(screen, ink, (max(69, min(251, knob_x)), 296), 9)
+        pygame.draw.circle(screen, blue, (max(69, min(251, knob_x)), 296), 9)
         draw_centered_text(screen, f_tiny, f"VOLUME {vol_level}%", muted, pygame.Rect(80, 314, 160, 17))
 
         # Three prominent round transport buttons with existing hitbox names.
