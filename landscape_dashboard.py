@@ -111,3 +111,33 @@ def hit(pos):
         if rect.collidepoint(pos):return ("audio",name)
     if VOLUME.inflate(0,26).collidepoint(pos):return ("volume",max(0,min(100,round((pos[0]-VOLUME.x)*100/VOLUME.width))))
     return None
+
+def draw_shell(s,font,small,tiny,active_page,station,metadata,playing,bible_playing,bible_name):
+    """Persistent top bar, left navigation, and bottom mini-player."""
+    s.fill(BG)
+    pygame.draw.rect(s,WHITE,(0,0,800,55))
+    pygame.draw.line(s,BORDER if False else (212,223,239),(0,54),(800,54))
+    _text(s,font,"PiRadio Pro",(22,12))
+    _text(s,tiny,"Radio  •  Tamil Bible  •  YouTube",(225,20),MUTED,360)
+    pygame.draw.rect(s,(227,235,248),SIDEBAR)
+    for name,icon in zip(NAV,NAV_ICONS):
+        rect=NAV_RECTS[name]
+        target={"HOME":"menu","RADIO":"radio","BIBLE":"bible","YOUTUBE":"youtube",
+                "FAVORITES":"favorites","CLOCK":"clock","SETTINGS":"settings"}[name]
+        selected=active_page==target
+        pygame.draw.rect(s,BLUE if selected else WHITE,rect,border_radius=12)
+        _icon(s,icon,pygame.Rect(rect.x+7,rect.y+8,28,28),20,WHITE if selected else BLUE)
+        _text(s,tiny,name,(rect.x+40,rect.y+14),WHITE if selected else INK,84)
+    pygame.draw.rect(s,NAVY,MINI,border_radius=16)
+    _icon(s,"bible" if bible_playing else "radio",pygame.Rect(166,410,43,43),28,WHITE)
+    _text(s,small,bible_name if bible_playing else station,(218,410),WHITE,380)
+    _text(s,tiny,"Tamil Bible" if bible_playing else (metadata or "Now playing"),(218,436),(181,209,248),380)
+    for rect,icon in ((MINI_PREV,"prev"),(MINI_PAUSE,"pause" if playing else "play"),(MINI_NEXT,"next")):
+        _icon(s,icon,rect,25,WHITE)
+
+def shell_hit(pos):
+    for name,rect in NAV_RECTS.items():
+        if rect.collidepoint(pos):return ("page",name)
+    for name,rect in (("prev",MINI_PREV),("pause",MINI_PAUSE),("next",MINI_NEXT)):
+        if rect.collidepoint(pos):return ("audio",name)
+    return None
