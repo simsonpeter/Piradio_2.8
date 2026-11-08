@@ -7099,7 +7099,7 @@ while True:
             press_time = time.monotonic()
             if press_time - last_touch_down_time >= 0.14:
                 last_touch_down_time = press_time
-                if landscape_bible_hit(bible_player, (round((event.pos[0]-165)*800/615), round((event.pos[1]-69)*480/369)), player.stop) == "home":
+                if landscape_bible_hit(bible_player, (round((event.pos[0]-165)*800/615), round((event.pos[1]-74)*400/310)), player.stop) == "home":
                     active_page = "menu"
             continue
         if active_page == "bible" and event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
@@ -7131,7 +7131,11 @@ while True:
             continue
         # Native secondary panels map their hit targets to the existing
         # business-logic controls; the sidebar and mini-player remain separate.
-        if active_page in ("favorites","clock","settings","youtube") and event.type in (
+        if active_page in ("favorites","clock","settings") or (active_page=="youtube" and not youtube_keyboard_open):
+            native_page=True
+        else:
+            native_page=False
+        if native_page and event.type in (
                 pygame.MOUSEBUTTONDOWN,pygame.MOUSEBUTTONUP,pygame.MOUSEMOTION):
             target=landscape_page_hit(event.pos)
             if target is None:
@@ -7625,14 +7629,14 @@ while True:
             # Reserve bottom 80px for the persistent audio mini-player.
             content=pygame.transform.smoothscale(bible_canvas.subsurface((0,0,800,400)),(615,310))
             landscape_display.blit(content,(165,74))
-        elif active_page in ("favorites","clock","settings","youtube"):
+        elif active_page in ("favorites","clock","settings","youtube") and not (active_page=="youtube" and youtube_keyboard_open):
             draw_landscape_page(landscape_display,active_page,f_lg,f_sm,f_tiny,
                                 station=current_station,temp=current_temp,
                                 city=device_settings.weather_name,
                                 favorites=favorite_indices,stations=stations,
                                 presets=YOUTUBE_PRESETS,status=youtube_touch_status)
         else:
-            # Legacy pages are contained above the player, without overlap.
+            # Keyboard and remaining legacy pages remain functional.
             content=pygame.transform.smoothscale(screen,(210,315))
             landscape_display.blit(content,(365,73))
     pygame.display.flip()
