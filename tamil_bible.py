@@ -105,7 +105,7 @@ class BiblePlayer:
             ((12,301,92,52),"PREV",False),
             ((114,301,92,52),"RESUME" if self.paused else ("PAUSE" if self.playing else "PLAY"),True),
             ((216,301,92,52),"NEXT",False),
-            ((62,404,196,48),"BACK TO RADIO",False)]:
+            ((62,404,196,48),"HOME",False)]:
             button_rect = pygame.Rect(*rect)
             if title in ("PREV", "NEXT", "PLAY", "PAUSE", "RESUME"):
                 if highlight:
@@ -145,5 +145,5 @@ class BiblePlayer:
                 if self.playing:self.toggle_pause()
                 else:self.play(stop_radio)
             else:self.shift(1,stop_radio)
-        elif y>=404:self.stop();return True
+        elif y>=404:return True
         return False
