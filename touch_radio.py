@@ -7073,6 +7073,12 @@ while True:
     bible_player.tick(player.stop)
     for event in pygame.event.get():
         if event.type == pygame.MOUSEBUTTONDOWN:
+            # Ignore rapid duplicate press events from noisy resistive touch.
+            press_time = time.monotonic()
+            if press_time - last_touch_down_time < 0.14:
+                continue
+            last_touch_down_time = press_time
+            touch_consumed = True
             was_auto_dimmed = (
                 target_display_brightness(now) < device_settings.brightness
             )
@@ -7457,12 +7463,16 @@ while True:
                 sys.exit()
             if btn_qr.collidepoint(event.pos):
                 show_qr = True
+                continue
             if btn_prev.collidepoint(event.pos):
                 skip_playback(-1)
+                continue
             if btn_next.collidepoint(event.pos):
                 skip_playback(1)
+                continue
             if btn_toggle.collidepoint(event.pos):
                 player.pause()
+                continue
             if vol_minus_rect.collidepoint(event.pos):
                 apply_live_volume(vol_level - 5)
                 show_volume_bar = True
@@ -7480,6 +7490,9 @@ while True:
                 volume_bar_timer = time.time()
         
         elif event.type == pygame.MOUSEBUTTONUP:
+            if not touch_consumed:
+                continue
+            touch_consumed = False
             dx = event.pos[0] - touch_start_pos[0]
             dy = event.pos[1] - touch_start_pos[1]
             dt = time.time() - touch_start_time
@@ -7488,7 +7501,7 @@ while True:
                 and abs(dx) > 45
                 and abs(dx) > abs(dy)
                 and dt < 2.5
-                and active_page != "bible"
+                and active_page not in ("bible", "radio", "youtube", "settings")
             ):
                 youtube_keyboard_open = False
                 fab_open = False
