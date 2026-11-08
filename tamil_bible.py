@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import pygame
+from fa_icons import draw_icon
 import vlc
 
 NAMES = ("Genesis Exodus Leviticus Numbers Deuteronomy Joshua Judges Ruth").split()+[
@@ -88,6 +89,7 @@ class BiblePlayer:
             return
         pygame.draw.rect(screen,card,(14,48,292,174),border_radius=20)
         pygame.draw.circle(screen,blue,(160,109),36)
+        draw_icon(screen, "bible", (160,109), 37, (255,255,255))
         pygame.draw.rect(screen,(255,255,255),(145,91,30,36),3,border_radius=4)
         pygame.draw.line(screen,(255,255,255),(160,93),(160,123),2)
         label(NAMES[self.book],152,font)
@@ -100,7 +102,16 @@ class BiblePlayer:
             ((114,301,92,52),"RESUME" if self.paused else ("PAUSE" if self.playing else "PLAY"),True),
             ((216,301,92,52),"NEXT",False),
             ((62,404,196,48),"BACK TO RADIO",False)]:
-            btn(pygame.Rect(*rect),title,highlight)
+            button_rect = pygame.Rect(*rect)
+            if title in ("PREV", "NEXT", "PLAY", "PAUSE", "RESUME"):
+                pygame.draw.rect(screen, blue if highlight else card,
+                                 button_rect, border_radius=15)
+                icon = {"PREV":"prev","NEXT":"next","PLAY":"play",
+                        "PAUSE":"pause","RESUME":"play"}[title]
+                draw_icon(screen, icon, button_rect.center, 25,
+                          (255,255,255) if highlight else ink)
+            else:
+                btn(button_rect,title,highlight)
         label(f"{self.book+1} OF 66 BOOKS",370,small,muted)
     def touch(self,pos,stop_radio=None):
         x,y=pos
