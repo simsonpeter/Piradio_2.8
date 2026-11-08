@@ -4491,6 +4491,7 @@ except Exception as e:
 # 7-inch landscape: keep the original 320x480 renderer as a safe offscreen
 # surface, while the right-hand panel provides large navigation targets.
 from landscape_ui import draw_companion_panel, companion_hit
+from landscape_dashboard import draw_dashboard, hit as landscape_hit
 try:
     landscape_display = pygame.display.set_mode((800, 480), pygame.FULLSCREEN | pygame.NOFRAME)
 except Exception:
@@ -7080,6 +7081,31 @@ while True:
     
     bible_player.tick(player.stop)
     for event in pygame.event.get():
+        if active_page in ("menu", "radio") and event.type == pygame.MOUSEBUTTONDOWN:
+            # Native landscape dashboard owns all its visible touch targets.
+            press_time = time.monotonic()
+            if press_time - last_touch_down_time < 0.14:
+                continue
+            last_touch_down_time = press_time
+            action = landscape_hit(event.pos)
+            if action:
+                kind, value = action
+                if kind == "page":
+                    active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
+                                   "YOUTUBE":"youtube","FAVORITES":"favorites",
+                                   "HISTORY":"favorites","SETTINGS":"settings"}.get(value,"menu")
+                elif kind == "audio":
+                    if value == "pause":
+                        if bible_player.playing:bible_player.toggle_pause()
+                        else:player.pause()
+                    elif bible_player.playing:
+                        bible_player.shift(-1 if value=="prev" else 1,player.stop)
+                    else:skip_playback(-1 if value=="prev" else 1)
+                elif kind == "volume":
+                    apply_live_volume(value)
+            continue
+        if active_page in ("menu", "radio") and event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
+            continue
         if event.type == pygame.MOUSEBUTTONDOWN and event.pos[0] >= 320:
             destination = companion_hit(event.pos)
             if destination in ("HOME", "RADIO", "BIBLE", "YOUTUBE", "FAVORITES"):
@@ -7548,10 +7574,20 @@ while True:
     landscape_display.blit(screen, (0, 0))
     current_station = stations[current_idx].get("name", "TC RADIOS") if stations else "TC RADIOS"
     current_meta = meta_text if meta_text and meta_text != current_station else ""
-    draw_companion_panel(
-        landscape_display, f_lg, f_sm, ios_ui_mode, active_page,
-        current_station, current_meta,
-        f"{bible_player.book + 1}. {bible_player.chapter}",
-        bible_player.playing, player.get_state() == vlc.State.Playing)
+    if active_page in ("menu", "radio"):
+        radio_playing = player.get_state() == vlc.State.Playing
+        draw_dashboard(
+            landscape_display, f_lg, f_sm, f_tiny, active_page,
+            current_station, current_meta,
+            (bible_player.playing and not bible_player.paused) if bible_player.playing else radio_playing,
+            bible_player.playing, bible_player.paused,
+            f"Book {bible_player.book+1} - Chapter {bible_player.chapter}",
+            vol_level)
+    else:
+        draw_companion_panel(
+            landscape_display, f_lg, f_sm, ios_ui_mode, active_page,
+            current_station, current_meta,
+            f"{bible_player.book + 1}. {bible_player.chapter}",
+            bible_player.playing, player.get_state() == vlc.State.Playing)
     pygame.display.flip()
     time.sleep(0.05)
