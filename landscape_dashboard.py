@@ -58,7 +58,7 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
     _text(s,font,"PiRadio Pro",(55,12))
     _text(s,tiny,"Radio  •  Tamil Bible  •  YouTube",(225,20),MUTED,320)
     _text(s,tiny,"7-inch  |  Wi-Fi",(670,20),MUTED,120)
-    pygame.draw.rect(s,(178,199,227),SIDEBAR)
+    pygame.draw.rect(s,(174,199,233),SIDEBAR)
     for name,icon in zip(NAV,NAV_ICONS):
         r=NAV_RECTS[name]
         selected=(name=="HOME" and active_page=="menu") or (name=="RADIO" and active_page=="radio")
@@ -66,32 +66,29 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
         else:_card(s,r,12)
         _icon(s,icon,pygame.Rect(r.x+7,r.y+8,28,28),20,WHITE if selected else BLUE)
         _text(s,tiny,name,(r.x+40,r.y+14),WHITE if selected else INK,84)
-    _card(s,MAIN,19)
-    pygame.draw.rect(s,(20,64,129),ARTWORK,border_radius=17)
-    pygame.draw.circle(s,(40,122,224),ARTWORK.center,65)
-    _icon(s,"radio",ARTWORK,75,WHITE)
-    _text(s,small,"TC RADIOS",(193,240),WHITE,145)
-    current=bible_name if bible_playing else station
-    _text(s,tiny,"TAMIL AUDIO BIBLE" if bible_playing else "LIVE RADIO",(377,93),BLUE)
-    _text(s,font,current,(376,122),INK,395)
-    _text(s,small,("Paused" if bible_paused else "Bible chapter playing") if bible_playing else (metadata or "Live stream"),(376,154),MUTED,395)
-    for i in range(38):
-        h=5+((i*11+7)%22)
-        pygame.draw.rect(s,(94,168,240),(377+i*10,180-h,6,h),border_radius=2)
-    for rect,icon in ((PREV,"prev"),(PAUSE,"pause" if playing else "play"),(NEXT,"next")):
-        pygame.draw.rect(s,BLUE if rect==PAUSE else (233,240,250),rect,border_radius=rect.height//2)
-        _icon(s,icon,rect,30,WHITE if rect==PAUSE else NAVY)
-    _icon(s,"volume",pygame.Rect(384,260,28,28),20,NAVY)
-    pygame.draw.rect(s,(213,224,240),VOLUME,border_radius=8)
-    fill=pygame.Rect(VOLUME.x,VOLUME.y,max(4,int(VOLUME.width*max(0,min(100,volume))/100)),VOLUME.height)
-    pygame.draw.rect(s,BLUE,fill,border_radius=8)
-    _text(s,tiny,f"{volume}%",(672,268),MUTED)
+    # Shared cinematic blue dashboard: true native 800x480 coordinates.
+    # Reserve 399..464 for the persistent mini-player.
+    import datetime
+    now=datetime.datetime.now()
+    clock=pygame.Rect(158,73,405,298)
+    weather=pygame.Rect(575,73,211,298)
+    pygame.draw.rect(s,(7,42,102),clock,border_radius=22)
+    pygame.draw.rect(s,(18,100,195),weather,border_radius=22)
+    time_font=pygame.font.Font(None,112)
+    time_label=time_font.render(now.strftime("%H:%M"),True,WHITE)
+    s.blit(time_label,time_label.get_rect(center=(clock.centerx,168)))
+    date_label=small.render(now.strftime("%A, %d %b %Y"),True,WHITE)
+    s.blit(date_label,date_label.get_rect(center=(clock.centerx,233)))
+    _text(s,tiny,"Radio  •  Tamil Bible  •  YouTube",(197,287),(184,215,252),330)
+    _text(s,small,"NOW PLAYING",(596,106),(195,223,255),165)
+    _text(s,small,bible_name if bible_playing else station,(596,147),WHITE,170)
+    _text(s,tiny,"Paused" if bible_paused else ("Bible audio" if bible_playing else (metadata or "Live radio")),(596,183),(199,225,255),172)
+    _text(s,tiny,"PiRadio Pro",(596,292),(204,230,255),175)
     for i,name in enumerate(CARDS):
-        rect=CARD_RECTS[name]
-        _card(s,rect,15)
-        _icon(s,CARD_ICONS[i],pygame.Rect(rect.centerx-20,rect.y+9,40,35),28,BLUE)
-        label=tiny.render(name,True,INK)
-        s.blit(label,label.get_rect(center=(rect.centerx,rect.y+62)))
+        rect=pygame.Rect(158+i*158,346,150,43)
+        _card(s,rect,12)
+        _icon(s,CARD_ICONS[i],pygame.Rect(rect.x+5,rect.y+5,33,33),22,BLUE)
+        _text(s,tiny,name,(rect.x+42,rect.y+14),INK,100)
     pygame.draw.rect(s,NAVY,MINI,border_radius=16)
     _icon(s,"bible" if bible_playing else "radio",pygame.Rect(166,410,43,43),29,WHITE)
     _text(s,small,current,(218,410),WHITE,385)
