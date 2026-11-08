@@ -82,6 +82,10 @@ class BiblePlayer:
             img=small.render(title,True,color)
             screen.blit(img,img.get_rect(center=rect.center))
         label("TAMIL AUDIO BIBLE",12,small,gold)
+        home_rect = pygame.Rect(246, 7, 66, 34)
+        raised_card(screen,home_rect,mode,11,1)
+        home_text = small.render("HOME",True,ink)
+        screen.blit(home_text,home_text.get_rect(center=home_rect.center))
         if self.selecting:
             for i in range(8):
                 b=self.list_page*8+i
@@ -121,6 +125,8 @@ class BiblePlayer:
         label(f"{self.book+1} OF 66 BOOKS",370,small,muted)
     def touch(self,pos,stop_radio=None):
         x,y=pos
+        if 246<=x<312 and 7<=y<41:
+            return True
         if self.selecting:
             if y>=414:
                 if x<108:self.selecting=False
