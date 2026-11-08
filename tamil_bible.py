@@ -16,7 +16,7 @@ class BiblePlayer:
     def __init__(self):
         self.book=0;self.chapter=1;self.list_page=0;self.selecting=False
         self.player=vlc.MediaPlayer();self.playing=False;self.started=False
-        self.status="Choose PLAY";self.last_state=None
+        self.status="Choose PLAY";self.last_state=None;self.paused=False
         try:
             data=json.loads(STATE.read_text())
             self.book=max(0,min(65,int(data.get("book",0))))
@@ -28,14 +28,20 @@ class BiblePlayer:
     def url(self):
         return BASE+f"{self.book+1:02d}{self.chapter:03d}-The_Book_Of_{SLUGS[self.book]}_Chapter-{self.chapter:03d}.mp3"
     def stop(self):
-        self.player.stop();self.playing=False;self.started=False;self.status="Stopped"
+        self.player.stop();self.playing=False;self.paused=False;self.started=False;self.status="Stopped"
     def play(self,stop_radio=None):
         if stop_radio:stop_radio()
         self.player.stop()
         self.player.set_media(vlc.Media(self.url()))
         self.player.play()
-        self.playing=True;self.started=False;self.status="Loading chapter..."
+        self.playing=True;self.paused=False;self.started=False;self.status="Loading chapter..."
         self.save()
+    def toggle_pause(self):
+        if not self.playing:
+            return
+        self.player.set_pause(0 if self.paused else 1)
+        self.paused=not self.paused
+        self.status="Paused" if self.paused else "Playing"
     def shift(self,delta,stop_radio=None):
         if delta>0:
             if self.chapter<COUNTS[self.book]:self.chapter+=1
@@ -48,7 +54,8 @@ class BiblePlayer:
     def tick(self,stop_radio=None):
         if not self.playing:return
         state=self.player.get_state()
-        if state==vlc.State.Playing:self.started=True;self.status="Playing"
+        if state==vlc.State.Playing:self.started=True;self.paused=False;self.status="Playing"
+        elif state==vlc.State.Paused:self.paused=True;self.status="Paused"
         elif state==vlc.State.Error:self.stop();self.status="Stream unavailable"
         elif state==vlc.State.Ended and self.started:self.shift(1,stop_radio)
     def render(self,screen,font,small):
@@ -75,7 +82,7 @@ class BiblePlayer:
         label(self.status,191,small,(238,193,104))
         for rect,title in [
             ((12,235,92,50),"< BOOK"),((114,235,92,50),"BOOKS"),((216,235,92,50),"BOOK >"),
-            ((12,301,92,52),"PREV"),((114,301,92,52),"STOP" if self.playing else "PLAY"),((216,301,92,52),"NEXT"),
+            ((12,301,92,52),"PREV"),((114,301,92,52),"RESUME" if self.paused else ("PAUSE" if self.playing else "PLAY")),((216,301,92,52),"NEXT"),
             ((62,404,196,48),"BACK TO RADIO")]:
             btn(pygame.Rect(*rect),title)
     def touch(self,pos,stop_radio=None):
@@ -101,7 +108,7 @@ class BiblePlayer:
         elif 301<=y<358:
             if x<108:self.shift(-1,stop_radio)
             elif x<210:
-                if self.playing:self.stop()
+                if self.playing:self.toggle_pause()
                 else:self.play(stop_radio)
             else:self.shift(1,stop_radio)
         elif y>=404:self.stop();return True
