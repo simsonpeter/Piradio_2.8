@@ -58,33 +58,50 @@ class BiblePlayer:
         elif state==vlc.State.Paused:self.paused=True;self.status="Paused"
         elif state==vlc.State.Error:self.stop();self.status="Stream unavailable"
         elif state==vlc.State.Ended and self.started:self.shift(1,stop_radio)
-    def render(self,screen,font,small):
-        screen.fill((10,20,39))
-        def label(s,y,f=font,color=(242,244,250)):
-            img=f.render(s,True,color);screen.blit(img,((320-img.get_width())//2,y))
-        def btn(rect,title):
-            pygame.draw.rect(screen,(29,72,95),rect,border_radius=10)
-            img=small.render(title,True,(255,255,255))
-            screen.blit(img,(rect.centerx-img.get_width()//2,rect.centery-img.get_height()//2))
-        label("TAMIL AUDIO BIBLE",12,small,(238,193,104))
+    def render(self,screen,font,small,mode="dark"):
+        """iPod-style Bible screen; existing touch targets and VLC engine retained."""
+        light = mode == "light"
+        bg = (239,243,249) if light else (12,17,30)
+        card = (255,255,255) if light else (29,39,58)
+        ink = (24,36,56) if light else (247,249,253)
+        muted = (93,108,128) if light else (160,175,195)
+        blue = (57,133,244)
+        gold = (220,156,54)
+        screen.fill(bg)
+        def label(s, y, f=small, color=None):
+            img=f.render(s,True,color or ink)
+            screen.blit(img,((320-img.get_width())//2,y))
+        def btn(rect,title,highlight=False):
+            pygame.draw.rect(screen,blue if highlight else card,rect,border_radius=15)
+            color=(255,255,255) if highlight else ink
+            img=small.render(title,True,color)
+            screen.blit(img,img.get_rect(center=rect.center))
+        label("TAMIL AUDIO BIBLE",12,small,gold)
         if self.selecting:
             for i in range(8):
                 b=self.list_page*8+i
                 if b>=66:break
-                btn(pygame.Rect(14,48+i*44,292,40),f"{b+1}. {NAMES[b]}")
+                btn(pygame.Rect(14,48+i*44,292,40),f"{b+1}. {NAMES[b]}",b==self.book)
             btn(pygame.Rect(12,414,92,44),"BACK")
             btn(pygame.Rect(113,414,92,44),"< LIST")
             btn(pygame.Rect(214,414,92,44),"LIST >")
             return
-        label(f"{self.book+1} / 66",60,small)
-        label(NAMES[self.book],91,small)
-        label(f"CHAPTER {self.chapter} / {COUNTS[self.book]}",143,small)
-        label(self.status,191,small,(238,193,104))
-        for rect,title in [
-            ((12,235,92,50),"< BOOK"),((114,235,92,50),"BOOKS"),((216,235,92,50),"BOOK >"),
-            ((12,301,92,52),"PREV"),((114,301,92,52),"RESUME" if self.paused else ("PAUSE" if self.playing else "PLAY")),((216,301,92,52),"NEXT"),
-            ((62,404,196,48),"BACK TO RADIO")]:
-            btn(pygame.Rect(*rect),title)
+        pygame.draw.rect(screen,card,(14,48,292,174),border_radius=20)
+        pygame.draw.circle(screen,blue,(160,109),36)
+        pygame.draw.rect(screen,(255,255,255),(145,91,30,36),3,border_radius=4)
+        pygame.draw.line(screen,(255,255,255),(160,93),(160,123),2)
+        label(NAMES[self.book],152,font)
+        label(f"CHAPTER {self.chapter} / {COUNTS[self.book]}",185,small,muted)
+        label(self.status,216,small,gold)
+        for rect,title,highlight in [
+            ((12,235,92,50),"< BOOK",False),((114,235,92,50),"BOOKS",False),
+            ((216,235,92,50),"BOOK >",False),
+            ((12,301,92,52),"PREV",False),
+            ((114,301,92,52),"RESUME" if self.paused else ("PAUSE" if self.playing else "PLAY"),True),
+            ((216,301,92,52),"NEXT",False),
+            ((62,404,196,48),"BACK TO RADIO",False)]:
+            btn(pygame.Rect(*rect),title,highlight)
+        label(f"{self.book+1} OF 66 BOOKS",370,small,muted)
     def touch(self,pos,stop_radio=None):
         x,y=pos
         if self.selecting:
