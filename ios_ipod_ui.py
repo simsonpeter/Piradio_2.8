@@ -96,13 +96,14 @@ MINI_BAR = pygame.Rect(8, 438, 304, 38)
 MINI_ACTION = pygame.Rect(262, 438, 50, 38)
 
 
-def draw_mini_player(surface, font, mode, title, playing, bible=False):
+def draw_mini_player(surface, font, mode, title, playing, bible=False, youtube=False):
     """Compact playback bar on the launcher, with a separate play/pause target."""
     colors = THEMES[mode]
     raised_card(surface, MINI_BAR, mode, 13, 1)
     tile = pygame.Rect(15, 443, 28, 28)
-    pygame.draw.rect(surface, ACCENTS[9 if bible else 0], tile, border_radius=8)
-    draw_icon(surface, "bible" if bible else "radio", tile.center, 17, (255,255,255))
+    pygame.draw.rect(surface, ACCENTS[8 if youtube else 9 if bible else 0], tile, border_radius=8)
+    draw_icon(surface, "youtube" if youtube else "bible" if bible else "radio",
+              tile.center, 17, (255,255,255))
     label = title[:26]
     rendered = font.render(label, True, colors["ink"])
     surface.blit(rendered, (49, 448))
