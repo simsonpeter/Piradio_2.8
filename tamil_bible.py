@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import pygame
 from fa_icons import draw_icon
+from ios_ipod_ui import raised_card
 import vlc
 
 NAMES = ("Genesis Exodus Leviticus Numbers Deuteronomy Joshua Judges Ruth").split()+[
@@ -62,7 +63,7 @@ class BiblePlayer:
     def render(self,screen,font,small,mode="dark"):
         """iPod-style Bible screen; existing touch targets and VLC engine retained."""
         light = mode == "light"
-        bg = (242,242,239) if light else (12,17,30)
+        bg = (231,235,241) if light else (12,17,30)
         card = (255,255,255) if light else (29,39,58)
         ink = (29,41,57) if light else (247,249,253)
         muted = (103,115,131) if light else (160,175,195)
@@ -73,7 +74,10 @@ class BiblePlayer:
             img=f.render(s,True,color or ink)
             screen.blit(img,((320-img.get_width())//2,y))
         def btn(rect,title,highlight=False):
-            pygame.draw.rect(screen,blue if highlight else card,rect,border_radius=15)
+            if highlight:
+                pygame.draw.rect(screen,blue,rect,border_radius=15)
+            else:
+                raised_card(screen,rect,mode,15,2)
             color=(255,255,255) if highlight else ink
             img=small.render(title,True,color)
             screen.blit(img,img.get_rect(center=rect.center))
@@ -87,7 +91,7 @@ class BiblePlayer:
             btn(pygame.Rect(113,414,92,44),"< LIST")
             btn(pygame.Rect(214,414,92,44),"LIST >")
             return
-        pygame.draw.rect(screen,card,(14,48,292,174),border_radius=20)
+        raised_card(screen,pygame.Rect(14,48,292,174),mode,20,4)
         pygame.draw.circle(screen,blue,(160,109),36)
         draw_icon(screen, "bible", (160,109), 37, (255,255,255))
         pygame.draw.rect(screen,(255,255,255),(145,91,30,36),3,border_radius=4)
@@ -104,8 +108,10 @@ class BiblePlayer:
             ((62,404,196,48),"BACK TO RADIO",False)]:
             button_rect = pygame.Rect(*rect)
             if title in ("PREV", "NEXT", "PLAY", "PAUSE", "RESUME"):
-                pygame.draw.rect(screen, blue if highlight else card,
-                                 button_rect, border_radius=15)
+                if highlight:
+                    pygame.draw.rect(screen,blue,button_rect,border_radius=15)
+                else:
+                    raised_card(screen,button_rect,mode,15,2)
                 icon = {"PREV":"prev","NEXT":"next","PLAY":"play",
                         "PAUSE":"pause","RESUME":"play"}[title]
                 draw_icon(screen, icon, button_rect.center, 25,
