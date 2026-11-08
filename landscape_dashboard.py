@@ -28,9 +28,15 @@ MAIN=pygame.Rect(155,72,635,208)
 def _text(s,font,value,pos,color=INK,max_width=None):
     value=str(value or "")
     if max_width:
-        while value and font.size(value)[0]>max_width:
+        original=value
+        # UnicodeFont adapters may expose .size as an integer; rendered
+        # surfaces provide a consistent pixel width across font backends.
+        while value and font.render(value, True, color).get_width()>max_width:
             value=value[:-1]
-        if value and value!=str(value):value=value.rstrip()+"…"
+        if value and value!=original:
+            while value and font.render(value+"…", True, color).get_width()>max_width:
+                value=value[:-1]
+            value=value.rstrip()+"…"
     s.blit(font.render(value,True,color),pos)
 
 def _icon(s,name,rect,size=24,color=BLUE):
