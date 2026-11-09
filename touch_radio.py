@@ -7154,7 +7154,7 @@ while True:
                 elif kind == "page":
                     active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
-                                   "CLOCK":"clock","SETTINGS":"settings"}[value]
+                                   "CLOCK":"clock","WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu")
                 elif value == "pause":
                     if bible_player.playing:bible_player.toggle_pause()
                     else:player.pause()
