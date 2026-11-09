@@ -2176,6 +2176,16 @@ HTML_TEMPLATE = """
         </div>
         
         <div class="content" id="main-content">
+            <div class="view" id="view-weather">
+                <div class="section-header"><span class="section-title">Weather &amp; Forecast</span></div>
+                <div class="card" style="background:#141414;border:1px solid #555;border-radius:22px;padding:22px;color:#fff">
+                    <div id="remote-weather-city" style="color:#aaa;letter-spacing:1px">Weather location</div>
+                    <div id="remote-weather-temp" style="font-size:72px;font-weight:750;line-height:1.3">--°</div>
+                    <div id="remote-weather-condition" style="color:#ccc">Loading weather...</div>
+                    <div id="remote-weather-days" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(80px,1fr));gap:9px;margin-top:20px"></div>
+                    <button class="btn-primary" style="margin-top:20px" onclick="loadRemoteWeather()">Refresh forecast</button>
+                </div>
+            </div>
             <div class="view active" id="view-home">
                 <div class="player-card">
                     <div class="big-artwork" id="big-artwork">📻</div>
@@ -2531,6 +2541,10 @@ HTML_TEMPLATE = """
                 <span class="nav-icon">📺</span>
                 <span>YouTube</span>
             </button>
+            <button class="nav-item" onclick="switchView('weather'); loadRemoteWeather()">
+                <span class="nav-icon">☁</span>
+                <span>Weather</span>
+            </button>
             <button class="nav-item" onclick="switchView('links')">
                 <span class="nav-icon">🔗</span>
                 <span>Links</span>
@@ -2656,6 +2670,30 @@ HTML_TEMPLATE = """
                 });
         }
         
+        async function loadRemoteWeather() {
+            try {
+                const response = await fetch(apiBase + '/api/weather/current');
+                if (!response.ok) throw new Error('Weather unavailable');
+                const w = await response.json();
+                document.getElementById('remote-weather-city').textContent = w.city || 'Weather';
+                document.getElementById('remote-weather-temp').textContent = Math.round(Number(w.temp || 0)) + '°';
+                document.getElementById('remote-weather-condition').textContent = (w.condition || 'Current conditions').replace(/_/g, ' ');
+                const days = document.getElementById('remote-weather-days');
+                days.replaceChildren();
+                (w.forecast || []).forEach(day => {
+                    const card = document.createElement('div');
+                    card.style.cssText = 'background:#252525;border:1px solid #444;border-radius:12px;padding:10px;text-align:center';
+                    const date = document.createElement('div');
+                    date.textContent = day.day || '';
+                    const range = document.createElement('strong');
+                    range.textContent = (day.high ?? '--') + '° / ' + (day.low ?? '--') + '°';
+                    card.append(date, range);
+                    days.appendChild(card);
+                });
+            } catch (err) {
+                document.getElementById('remote-weather-condition').textContent = 'Unable to load forecast';
+            }
+        }
         function switchView(view) {
             document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
             document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -3493,6 +3531,15 @@ def get_status():
         "playing": is_playing,
         "volume": vol_level,
         "station": current_idx
+    })
+
+@app.route('/api/weather/current')
+def remote_weather_current():
+    return jsonify({
+        'city': device_settings.weather_name,
+        'temp': current_temp,
+        'condition': weather_type,
+        'forecast': weather_forecast[:5]
     })
 
 @app.route('/api/weather/location', methods=['GET', 'POST'])
