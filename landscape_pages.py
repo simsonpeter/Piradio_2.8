@@ -122,6 +122,8 @@ def draw(s,page,font,small,tiny,**v):
         button(s,tiny,"NEXT",pygame.Rect(548,345,99,36),("bt_page",1))
         button(s,tiny,"BACK",pygame.Rect(662,345,98,36),(160,448))
     elif page=="youtube":
+        if v.get("video_available"):
+            button(s,tiny,"FULLSCREEN VIDEO",pygame.Rect(508,74,255,37),("youtube_video",))
         results=v.get("youtube_results",[])
         offset=v.get("youtube_offset",0)
         button(s,small,"SEARCH YOUTUBE",pygame.Rect(180,117,450,49),(120,92))
