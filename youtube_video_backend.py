@@ -48,7 +48,9 @@ class YouTubeVideoBackend:
         self.process = subprocess.Popen(
             ["mpv", "--no-config", "--force-window=yes", "--fs",
              "--vo=gpu", "--gpu-context=wayland", "--hwdec=no", "--profile=fast",
-             "--ytdl-format=bestvideo[height<=720][vcodec^=avc1]+bestaudio/best[height<=720]",
+             "--cache=yes", "--cache-secs=20", "--demuxer-max-bytes=32MiB",
+             "--video-sync=audio", "--framedrop=vo",
+             "--ytdl-format=bestvideo[height<=480][vcodec^=avc1]+bestaudio/best[height<=480][vcodec^=avc1]/best[height<=480]",
              "--script=" + str(Path(__file__).with_name("mpv_piradio_touch.lua")),
              "--osc=yes", "--input-default-bindings=yes",
              "--input-ipc-server=" + self.socket_path,
