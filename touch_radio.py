@@ -2867,11 +2867,11 @@ HTML_TEMPLATE = """
         function playYouTubeVideo(idx) {
             const video=youtubeResults[idx]; if(!video)return;
             fetch(apiBase+'/api/youtube/video',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'play',video_id:video.id,title:video.title})})
-            .then(r=>r.json()).then(d=>showToast(d.success?'Video started on Pi':(d.error||'Video failed'))).catch(()=>showToast('Video request failed'));
+            .then(r=>r.json()).then(d=>{showToast(d.success?'Video started on Pi':(d.error||'Video failed'));refreshPiVideoRemote();}).catch(()=>showToast('Video request failed'));
         }
         function controlYouTubeVideo(action) {
             fetch(apiBase+'/api/youtube/video',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action})})
-            .then(r=>r.json()).then(d=>showToast(d.success?'Video: '+action:(d.error||'Control failed'))).catch(()=>showToast('Video control failed'));
+            .then(r=>r.json()).then(d=>{showToast(d.success?'Video: '+action:(d.error||'Control failed'));refreshPiVideoRemote();}).catch(()=>showToast('Video control failed'));
         }
         function addLink() {
             const url = document.getElementById('link-url').value.trim();
@@ -3276,6 +3276,27 @@ HTML_TEMPLATE = """
             if (e.key === 'Enter') searchYouTube();
         });
     </script>
+<div id="pi-video-remote" style="display:none;position:fixed;bottom:calc(8px + env(safe-area-inset-bottom));left:8px;right:8px;z-index:99999;background:#101114;color:white;border:1px solid #777;border-radius:14px;padding:12px;box-shadow:0 5px 24px #000a">
+ <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px"><strong>📺 Pi Video Remote</strong><span id="pi-video-state" style="font-size:12px">Playing</span></div>
+ <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
+ <button style="padding:13px 2px;color:white;background:#333;border-radius:9px" onclick="controlYouTubeVideo('pause')">⏯ Pause</button>
+ <button style="padding:13px 2px;color:white;background:#333;border-radius:9px" onclick="controlYouTubeVideo('minimize')">▾ Minimise</button>
+ <button style="padding:13px 2px;color:white;background:#333;border-radius:9px" onclick="controlYouTubeVideo('restore')">⛶ Restore</button>
+ <button style="padding:13px 2px;color:white;background:#9b2525;border-radius:9px" onclick="controlYouTubeVideo('stop')">■ Stop</button>
+ </div></div>
+<script>
+async function refreshPiVideoRemote(){
+ try {
+  const response=await fetch(apiBase+'/api/youtube/video/status',{cache:'no-store'});
+  const data=await response.json();
+  const bar=document.getElementById('pi-video-remote');
+  bar.style.display=data.playing?'block':'none';
+  document.getElementById('pi-video-state').textContent=data.minimized?'Audio only':'Fullscreen video';
+ } catch(e) {}
+}
+setInterval(refreshPiVideoRemote,2000);
+window.addEventListener('load',refreshPiVideoRemote);
+</script>
 </body>
 </html>
 """
@@ -4090,6 +4111,11 @@ def youtube_play():
         return jsonify({'success': True, 'message': f'Playing: {title}'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/youtube/video/status')
+def remote_youtube_video_status():
+    return jsonify({'playing':youtube_video.is_playing(),
+                    'minimized':youtube_video.minimized})
 
 @app.route('/api/youtube/video', methods=['POST'])
 def remote_youtube_video():
