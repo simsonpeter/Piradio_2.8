@@ -4553,6 +4553,26 @@ from landscape_dashboard import draw_dashboard, hit as landscape_hit, draw_shell
 from landscape_bible import draw as draw_landscape_bible, hit as landscape_bible_hit
 from landscape_pages import draw as draw_landscape_page, hit as landscape_page_hit
 import landscape_pages
+from youtube_video_backend import YouTubeVideoBackend
+youtube_video = YouTubeVideoBackend()
+youtube_video_id = None
+
+def start_fullscreen_youtube_video():
+    global youtube_video_id, youtube_touch_status
+    video_id = current_youtube_id()
+    if not video_id:
+        youtube_touch_status = "Play a YouTube audio result first"
+        return
+    try:
+        youtube_video.start_youtube(video_id)
+        player.stop()
+        if bible_player.playing or bible_player.player.is_playing():
+            bible_player.stop()
+        youtube_video_id = video_id
+        youtube_touch_status = "Video started"
+    except Exception as error:
+        youtube_touch_status = "Video error: " + str(error)[:60]
+
 try:
     landscape_display = pygame.display.set_mode((800, 480), pygame.FULLSCREEN | pygame.NOFRAME)
 except Exception:
@@ -5218,6 +5238,8 @@ def play():
     global meta_text, scroll_x, saver_scroll_x, saved_station_url, saved_station_index
     scroll_x = 320
     saver_scroll_x = 320
+    if youtube_video.is_playing():
+        youtube_video.stop()
     if not stations:
         return
     station = stations[current_idx]
@@ -6901,7 +6923,10 @@ while True:
     handle_alarm_fade()
     handle_sleep_timer()
     apply_youtube_touch_result()
-    maybe_advance_youtube_queue()
+    if not youtube_video.is_playing():
+        youtube_video_id = None
+    if not youtube_video.is_playing():
+        maybe_advance_youtube_queue()
     apply_wifi_result()
     
     if now - last_weather_update > 1200:
@@ -7149,6 +7174,9 @@ while True:
             shell_action = shell_hit(event.pos)
             if shell_action:
                 kind, value = shell_action
+                if kind == "open_player" and youtube_video.is_playing():
+                    youtube_video.restore_video()
+                    continue
                 if kind == "open_player":
                     active_page = "bible" if bible_player.playing else ("youtube" if stations and stations[current_idx].get("youtube_id") else "radio")
                 elif kind == "page":
@@ -7220,6 +7248,13 @@ while True:
         if native_page and event.type in (
                 pygame.MOUSEBUTTONDOWN,pygame.MOUSEBUTTONUP,pygame.MOUSEMOTION):
             target=landscape_page_hit(event.pos)
+            if target == ("youtube_video",):
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if youtube_video.is_playing():
+                        youtube_video.restore_video()
+                    else:
+                        start_fullscreen_youtube_video()
+                continue
             if target is None or target == ("bt_navigation",):
                 continue
             # The landscape page displays a six-device slice; translate the
@@ -7740,6 +7775,7 @@ while True:
                                 favorites=favorite_indices,stations=stations,
                                 presets=YOUTUBE_PRESETS,status=youtube_touch_status,
                                 youtube_results=youtube_results_cache,youtube_offset=youtube_touch_offset,
+                                video_available=bool(current_youtube_id()),
                                 devices=touch_bluetooth_devices,bt_status=touch_bluetooth_status,
                                 busy=touch_bluetooth_busy)
         elif active_page == "youtube" and youtube_keyboard_open:
