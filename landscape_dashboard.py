@@ -2,6 +2,7 @@
 Pygame only; audio playback remains owned by touch_radio.py.
 """
 import pygame
+import os
 from ios_ipod_ui import raised_card, THEMES
 from fa_icons import draw_icon
 
@@ -35,6 +36,24 @@ MINI_PAUSE=pygame.Rect(683,406,50,51)
 MINI_NEXT=pygame.Rect(737,410,43,44)
 ARTWORK=pygame.Rect(165,83,183,183)
 MAIN=pygame.Rect(155,72,635,208)
+MINI_OPEN=pygame.Rect(157,399,465,65)
+LOGO_CACHE={}
+
+def _station_art(s,rect,station_data):
+    """Use a supplied local station logo; fall back to a radio symbol."""
+    path=next((station_data.get(k) for k in ("logo","logo_path","image","icon") if isinstance(station_data.get(k),str) and os.path.isfile(station_data.get(k))),None) if isinstance(station_data,dict) else None
+    if path:
+        try:
+            if path not in LOGO_CACHE:
+                LOGO_CACHE[path]=pygame.image.load(path).convert_alpha()
+            original=LOGO_CACHE[path]
+            scale=min((rect.width-12)/original.get_width(),(rect.height-12)/original.get_height())
+            image=pygame.transform.smoothscale(original,(max(1,round(original.get_width()*scale)),max(1,round(original.get_height()*scale))))
+            s.blit(image,image.get_rect(center=rect.center))
+            return
+        except (pygame.error,OSError,ValueError):pass
+    _icon(s,"radio",rect,min(rect.width,rect.height)//2,WHITE)
+
 
 def _text(s,font,value,pos,color=INK,max_width=None):
     value=str(value or "")
@@ -60,7 +79,7 @@ def _card(s,rect,radius=17):
     pygame.draw.rect(s,(59,59,59),rect,1,border_radius=radius)
 
 def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
-                   bible_playing,bible_paused,bible_name,volume):
+                   bible_playing,bible_paused,bible_name,volume,station_data=None,youtube_playing=False):
     """Render native 800x480 screen; no fixed 320px UI stretching."""
     scenic_background(s)
     pygame.draw.rect(s,(0,0,0),(0,0,800,55))
@@ -84,8 +103,7 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
         main=pygame.Rect(399,79,384,265)
         _glow_card(s,art,(16,16,16),(58,58,58),20)
         _glow_card(s,main,(16,16,16),(58,58,58),20)
-        pygame.draw.circle(s,(39,39,39),(275,197),84)
-        pygame.draw.circle(s,(96,165,250),(275,197),34)
+        _station_art(s,pygame.Rect(190,109,170,170),station_data)
         _text(s,small,"TC RADIOS",(212,300),WHITE,145)
         _text(s,tiny,"LIVE RADIO",(422,100),MUTED,175)
         _text(s,font,station,(422,135),WHITE,340)
@@ -116,7 +134,10 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
             _text(s,small,name.title(),(rect.x+42,rect.y+10),WHITE,100)
     _glow_card(s,MINI,(17,17,17),(65,65,65),16)
     
-    _icon(s,"bible" if bible_playing else "radio",pygame.Rect(166,410,43,43),29,WHITE)
+    if bible_playing or youtube_playing:
+        _icon(s,"bible" if bible_playing else "youtube",pygame.Rect(166,410,43,43),29,WHITE)
+    else:
+        _station_art(s,pygame.Rect(166,410,43,43),station_data)
     _text(s,small,bible_name if bible_playing else station,(218,410),WHITE,385)
     _text(s,tiny,"Tamil Bible" if bible_playing else (metadata or "Now playing"),(218,436),MUTED,385)
     for rect,icon in ((MINI_PREV,"prev"),(MINI_PAUSE,"pause" if playing else "play"),(MINI_NEXT,"next")):
@@ -129,13 +150,14 @@ def hit(pos):
         if rect.collidepoint(pos):return ("page",name)
     for name,rect in CARD_RECTS.items():
         if rect.collidepoint(pos):return ("page",name)
+    if MINI_OPEN.collidepoint(pos):return ("open_player",None)
     for name,rect in (("prev",PREV),("pause",PAUSE),("next",NEXT),
                       ("prev",MINI_PREV),("pause",MINI_PAUSE),("next",MINI_NEXT)):
         if rect.collidepoint(pos):return ("audio",name)
     if VOLUME.inflate(0,26).collidepoint(pos):return ("volume",max(0,min(100,round((pos[0]-VOLUME.x)*100/VOLUME.width))))
     return None
 
-def draw_shell(s,font,small,tiny,active_page,station,metadata,playing,bible_playing,bible_name):
+def draw_shell(s,font,small,tiny,active_page,station,metadata,playing,bible_playing,bible_name,station_data=None,youtube_playing=False):
     """Persistent top bar, left navigation, and bottom mini-player."""
     scenic_background(s)
     pygame.draw.rect(s,(0,0,0),(0,0,800,55))
@@ -153,13 +175,17 @@ def draw_shell(s,font,small,tiny,active_page,station,metadata,playing,bible_play
         _text(s,small,name.title(),(rect.x+39,rect.y+10),WHITE,90)
     _glow_card(s,MINI,(17,17,17),(65,65,65),16)
     
-    _icon(s,"bible" if bible_playing else "radio",pygame.Rect(166,410,43,43),28,WHITE)
+    if bible_playing or youtube_playing:
+        _icon(s,"bible" if bible_playing else "youtube",pygame.Rect(166,410,43,43),28,WHITE)
+    else:
+        _station_art(s,pygame.Rect(166,410,43,43),station_data)
     _text(s,small,bible_name if bible_playing else station,(218,410),WHITE,380)
     _text(s,tiny,"Tamil Bible" if bible_playing else (metadata or "Now playing"),(218,436),MUTED,380)
     for rect,icon in ((MINI_PREV,"prev"),(MINI_PAUSE,"pause" if playing else "play"),(MINI_NEXT,"next")):
         _icon(s,icon,rect,25,WHITE)
 
 def shell_hit(pos):
+    if MINI_OPEN.collidepoint(pos):return ("open_player",None)
     for name,rect in NAV_RECTS.items():
         if rect.collidepoint(pos):return ("page",name)
     for name,rect in (("prev",MINI_PREV),("pause",MINI_PAUSE),("next",MINI_NEXT)):
