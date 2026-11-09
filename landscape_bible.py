@@ -5,20 +5,9 @@ from fa_icons import draw_icon
 
 BG=(0,0,0); WHITE=(245,245,245); INK=(245,245,245)
 MUTED=(184,190,200); BLUE=(37,99,235); BORDER=(65,73,85)
-BUTTONS={
- "home":pygame.Rect(674,12,108,46),
- "book_prev":pygame.Rect(20,325,166,52),
- "books":pygame.Rect(194,325,113,52),
- "book_next":pygame.Rect(315,325,166,52),
- "prev":pygame.Rect(498,203,80,65),
- "play":pygame.Rect(594,195,84,80),
- "next":pygame.Rect(695,203,80,65),
- "bookmark":pygame.Rect(498,294,133,54),
- "speed":pygame.Rect(647,294,128,54),
- "list_back":pygame.Rect(20,342,120,49),
- "list_prev":pygame.Rect(255,342,140,49),
- "list_next":pygame.Rect(409,342,140,49),
-}
+BUTTONS={"home":pygame.Rect(680,80,96,40),"book_prev":pygame.Rect(180,326,166,48),"books":pygame.Rect(353,326,171,48),"book_next":pygame.Rect(531,326,241,48),"prev":pygame.Rect(555,212,60,62),"play":pygame.Rect(623,207,73,73),"next":pygame.Rect(704,212,60,62),"bookmark":pygame.Rect(554,286,105,35),"speed":pygame.Rect(666,286,105,35),"list_back":pygame.Rect(181,341,105,35),"list_prev":pygame.Rect(433,341,105,35),"list_next":pygame.Rect(546,341,105,35)}
+LIST_RECTS=[pygame.Rect(183+(i%3)*197,139+(i//3)*47,185,41) for i in range(12)]
+
 def card(s,r):
     pygame.draw.rect(s,(23,23,23),r,border_radius=17)
     pygame.draw.rect(s,BORDER,r,1,border_radius=17)
@@ -33,41 +22,38 @@ def button(s,f,name,text,selected=False):
     pygame.draw.rect(s,BLUE if selected else BORDER,r,1,border_radius=14)
     label(s,f,text,r,WHITE if selected else INK)
 def draw(s,player,font,small,tiny):
-    s.fill(BG)
-    pygame.draw.rect(s,(0,0,0),(0,0,800,70))
-    label(s,font,"TAMIL AUDIO BIBLE",pygame.Rect(24,9,400,52),WHITE)
-    button(s,small,"home","HOME")
+    # Draw at native 800x480 coordinates inside the available content region.
+    pygame.draw.rect(s,BG,pygame.Rect(165,74,620,310),border_radius=12)
+    label(s,font,"TAMIL AUDIO BIBLE",pygame.Rect(181,81,475,43))
+    button(s,tiny,"home","HOME")
     if player.selecting:
-        card(s,pygame.Rect(20,78,760,255))
-        for i in range(12):
+        label(s,tiny,f"ALL 66 BOOKS - PAGE {player.list_page+1}/6",pygame.Rect(181,116,575,22),MUTED)
+        for i,r in enumerate(LIST_RECTS):
             idx=player.list_page*12+i
-            if idx>=66:break
-            col=i%3;row=i//3
-            rect=pygame.Rect(38+col*247,87+row*59,229,51)
-            pygame.draw.rect(s,BLUE if idx==player.book else (38,38,38),rect,border_radius=12)
-            label(s,small,f"{idx+1}. {NAMES[idx]}",rect,WHITE if idx==player.book else INK)
-        button(s,small,"list_back","CLOSE")
-        button(s,small,"list_prev","◀ PREV 12")
-        button(s,small,"list_next","NEXT 12 ▶")
-        label(s,small,f"BOOKS {player.list_page*12+1}–{min(66,(player.list_page+1)*12)} OF 66  •  PAGE {player.list_page+1}/6",pygame.Rect(550,341,224,49),MUTED)
+            if idx>=66:continue
+            pygame.draw.rect(s,BLUE if idx==player.book else (37,37,37),r,border_radius=10)
+            label(s,tiny,f"{idx+1}. {NAMES[idx]}",r)
+        button(s,tiny,"list_back","CLOSE")
+        button(s,tiny,"list_prev","PREV")
+        button(s,tiny,"list_next","NEXT")
         return
-    card(s,pygame.Rect(20,85,445,315))
-    pygame.draw.circle(s,BLUE,(242,161),49)
-    draw_icon(s,"bible",(242,161),47,WHITE)
-    label(s,font,NAMES[player.book],pygame.Rect(35,222,415,46))
-    label(s,small,f"CHAPTER {player.chapter} / {COUNTS[player.book]}",pygame.Rect(35,268,415,38),MUTED)
-    for name,text in (("book_prev",f"◀ {NAMES[(player.book-1)%66]}"),("books","ALL 66 BOOKS"),("book_next",f"{NAMES[(player.book+1)%66]} ▶")):
-        button(s,small,name,text)
-    card(s,pygame.Rect(482,85,298,305))
-    label(s,small,player.status,pygame.Rect(500,105,264,45),MUTED)
+    card(s,pygame.Rect(180,132,358,185))
+    pygame.draw.circle(s,BLUE,(234,188),34)
+    draw_icon(s,"bible",(234,188),32,WHITE)
+    label(s,small,NAMES[player.book],pygame.Rect(275,156,251,53))
+    label(s,tiny,f"CHAPTER {player.chapter} / {COUNTS[player.book]}",pygame.Rect(275,210,251,31),MUTED)
+    label(s,tiny,"SELECT BOOK BELOW",pygame.Rect(190,267,337,29),MUTED)
+    card(s,pygame.Rect(547,132,225,185))
+    label(s,tiny,player.status,pygame.Rect(555,147,210,36),MUTED)
     for name,icon in (("prev","prev"),("play","play" if not player.playing or player.paused else "pause"),("next","next")):
         r=BUTTONS[name]
-        pygame.draw.rect(s,BLUE if name=="play" else (38,38,38),r,border_radius=18)
-        draw_icon(s,icon,r.center,31,WHITE)
-    button(s,tiny,"bookmark","SAVED" if [player.book,player.chapter] in player.bookmarks else "BOOKMARK")
+        pygame.draw.rect(s,BLUE if name=="play" else (38,38,38),r,border_radius=15)
+        draw_icon(s,icon,r.center,27,WHITE)
+    button(s,tiny,"bookmark","BOOKMARK")
     button(s,tiny,"speed",f"{player.speed:g}x SPEED")
-    card(s,pygame.Rect(20,414,760,52))
-    label(s,tiny,f"Now selected: {NAMES[player.book]}  •  Chapter {player.chapter}",pygame.Rect(32,417,735,46),MUTED)
+    for name,txt in (("book_prev",f"◀ {NAMES[(player.book-1)%66]}"),("books","ALL 66 BOOKS"),("book_next",f"{NAMES[(player.book+1)%66]} ▶")):
+        button(s,tiny,name,txt)
+
 def hit(player,pos,stop_radio=None):
     if BUTTONS["home"].collidepoint(pos):return "home"
     if player.selecting:
@@ -77,7 +63,7 @@ def hit(player,pos,stop_radio=None):
         else:
             for i in range(12):
                 idx=player.list_page*12+i
-                if idx<66 and pygame.Rect(38+(i%3)*247,87+(i//3)*59,229,51).collidepoint(pos):
+                if idx<66 and LIST_RECTS[i].collidepoint(pos):
                     was_playing=player.playing
                     player.book=idx;player.chapter=1;player.selecting=False;player.save()
                     if was_playing:player.play(stop_radio)
