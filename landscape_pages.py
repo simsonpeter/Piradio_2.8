@@ -49,6 +49,31 @@ def draw(s,page,font,small,tiny,**v):
         city=tiny.render(str(v.get("city","")),True,MUTED)
         s.blit(city,city.get_rect(center=(weather.centerx,252)))
         _text(s,tiny,"NOW PLAYING  •  "+str(v.get("station","")),(200,337),MUTED,535)
+    elif page=="forecast":
+        _text(s,small,"WEATHER & 5-DAY FORECAST",(181,115),TEXT,560)
+        city=str(v.get("city") or "Selected location")
+        _text(s,tiny,city.upper(),(184,152),MUTED,480)
+        temperature=str(v.get("temp") or "--")
+        if temperature.endswith("°C"):temperature=temperature[:-2]
+        big=pygame.font.Font(None,105)
+        shown=big.render(temperature+"°",True,WHITE)
+        s.blit(shown,(190,172))
+        _text(s,small,str(v.get("weather_type") or "Current conditions").replace("_"," ").title(),(405,211),TEXT,330)
+        forecast=v.get("forecast",[])
+        for i,day in enumerate(forecast[:5]):
+            x=182+i*116
+            rect=pygame.Rect(x,280,106,86)
+            pygame.draw.rect(s,(35,35,35),rect,border_radius=12)
+            pygame.draw.rect(s,(88,88,88),rect,1,border_radius=12)
+            if isinstance(day,dict):
+                dayname=str(day.get("date") or day.get("day") or f"Day {i+1}")[-5:]
+                high=day.get("max",day.get("temperature_2m_max","--"))
+                low=day.get("min",day.get("temperature_2m_min","--"))
+            else:
+                dayname=f"DAY {i+1}";high="--";low="--"
+            _text(s,tiny,dayname,(x+10,294),MUTED,86)
+            _text(s,tiny,f"{high}° / {low}°",(x+9,328),TEXT,91)
+        if not forecast:_text(s,tiny,"Forecast will appear after weather data loads",(183,349),MUTED,555)
     elif page=="favorites":
         button(s,small,"ADD / REMOVE CURRENT",pygame.Rect(515,74,251,51),(160,83))
         fav=v.get("favorites",[]);stations=v.get("stations",[])
