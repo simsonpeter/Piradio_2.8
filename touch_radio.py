@@ -357,11 +357,22 @@ class AudioOutputManager:
             return sink_name
 
     def _restore_bluetooth_default(self):
-        try:
-            self.connect_bluetooth(self.default_bluetooth_address)
-            print(f"Restored Bluetooth default: {self.default_bluetooth_address}")
-        except Exception as e:
-            print(f"Bluetooth restore error: {e}")
+        # BlueZ and PipeWire may not be ready when the graphical app starts.
+        # Retry in the background; never block the touchscreen.
+        address = self.default_bluetooth_address
+        if not address:
+            return
+        for attempt in range(12):
+            if self.default_bluetooth_address != address:
+                return
+            time.sleep(5 if attempt == 0 else 10)
+            try:
+                self.connect_bluetooth(address)
+                print(f"Restored Bluetooth default: {address}")
+                return
+            except Exception as e:
+                print(f"Bluetooth restore attempt {attempt + 1}/12: {e}")
+        print("Bluetooth auto-connect unavailable; reconnect from Settings.")
     
     def scan_outputs(self):
         self.outputs = {
