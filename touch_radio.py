@@ -5167,6 +5167,13 @@ def play():
         meta_text = "LOADING STATIONS"
         return
     try:
+        # One audio source at a time: radio and YouTube share this VLC
+        # player, while Tamil Bible has its own VLC player.
+        # Stop Bible before starting any station or YouTube stream.
+        if bible_player.playing or bible_player.player.is_playing():
+            bible_player.stop()
+        # Explicitly stop the previous stream before loading a new one.
+        player.stop()
         player.set_media(instance.media_new(station['url']))
         player.play()
         player.audio_set_volume(vol_level)
