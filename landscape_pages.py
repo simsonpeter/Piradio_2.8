@@ -97,17 +97,26 @@ def draw(s,page,font,small,tiny,**v):
         button(s,tiny,"NEXT",pygame.Rect(548,345,99,36),("bt_page",1))
         button(s,tiny,"BACK",pygame.Rect(662,345,98,36),(160,448))
     elif page=="youtube":
-        _text(s,small,"Search and play YouTube audio",(180,123),MUTED)
-        button(s,small,"SEARCH YOUTUBE",pygame.Rect(180,154,365,58),(120,92))
-        button(s,small,"GO",pygame.Rect(559,154,198,58),(285,92))
-        presets=v.get("presets",[])
-        for i,item in enumerate(presets[:6]):
-            name=item[0] if isinstance(item,(tuple,list)) else str(item)
-            button(s,tiny,name,pygame.Rect(180+(i%3)*194,226+(i//3)*57,181,48),
-                   (62+(i%3)*102,150+(i//3)*36))
-        button(s,small,"‹",pygame.Rect(180,342,62,39),(42,224))
-        button(s,small,"›",pygame.Rect(695,342,62,39),(278,224))
-        _text(s,tiny,str(v.get("status","")),(260,351),MUTED,415)
+        results=v.get("youtube_results",[])
+        offset=v.get("youtube_offset",0)
+        button(s,small,"SEARCH YOUTUBE",pygame.Rect(180,117,450,49),(120,92))
+        button(s,small,"GO",pygame.Rect(643,117,120,49),(285,92))
+        if results:
+            visible=results[offset:offset+4]
+            for i,video in enumerate(visible):
+                r=pygame.Rect(180,175+i*43,580,39)
+                name=video.get("title") or video.get("name") or "YouTube audio"
+                button(s,tiny,f"{offset+i+1}. {name}",r,(160,266+i*44))
+            _text(s,tiny,f"RESULTS {offset+1}-{offset+len(visible)} OF {len(results)}",(314,351),MUTED,330)
+        else:
+            presets=v.get("presets",[])
+            for i,item in enumerate(presets[:6]):
+                name=item[0] if isinstance(item,(tuple,list)) else str(item)
+                button(s,tiny,name,pygame.Rect(180+(i%3)*194,182+(i//3)*57,181,48),
+                       (62+(i%3)*102,150+(i//3)*36))
+            _text(s,tiny,str(v.get("status","")),(310,350),MUTED,390)
+        button(s,tiny,"◀ PREV",pygame.Rect(180,343,116,38),(42,224))
+        button(s,tiny,"NEXT ▶",pygame.Rect(647,343,116,38),(278,224))
     else:
         _text(s,small,"Select an option from the sidebar",(180,168),MUTED,530)
 def hit(pos):
