@@ -2126,6 +2126,61 @@ HTML_TEMPLATE = """
             color: var(--primary);
             margin-bottom: 8px;
         }
+
+        /* Live screen mirror is isolated from the existing radio remote UI. */
+        #mirror-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 100010;
+            background: #050506;
+            color: #f7f7f7;
+            flex-direction: column;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        #mirror-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: calc(9px + env(safe-area-inset-top)) 12px 9px;
+            background: #151516;
+            border-bottom: 1px solid #414141;
+        }
+        #mirror-toolbar strong { flex: 1; font-size: 15px; }
+        #mirror-toolbar button {
+            background: #303033;
+            border: 1px solid #666;
+            border-radius: 9px;
+            color: #fff;
+            font-size: 15px;
+            min-width: 43px;
+            min-height: 40px;
+            padding: 7px 10px;
+        }
+        #mirror-screen {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            justify-content: center;
+            align-items: stretch;
+            background: #090909;
+            overflow: hidden;
+        }
+        #mirror-frame {
+            border: 0;
+            width: 100%;
+            height: 100%;
+            background: #111;
+        }
+        #mirror-hint {
+            text-align: center;
+            color: #b8b8bd;
+            font-size: 12px;
+            padding: 8px 15px calc(8px + env(safe-area-inset-bottom));
+        }
+        @media (orientation: portrait) {
+            #mirror-hint::before { content: "Rotate your phone for a larger 7-inch view. "; }
+        }
     </style>
 </head>
 <body>
@@ -2169,7 +2224,7 @@ HTML_TEMPLATE = """
         <div class="app-header">
             <div class="app-title">🎵 TC RADIOS</div>
             <div class="header-actions">
-                <button class="icon-btn" onclick="window.open('/simulator', '_blank')" title="Touchscreen Simulator">📱</button>
+                <button class="icon-btn" onclick="openMirror()" title="Live 7-inch Screen Mirror" aria-label="Open live screen mirror">🖥️</button>
                 <button class="icon-btn" onclick="refreshStatus()" title="Refresh">🔄</button>
                 <button class="icon-btn" onclick="showThemeModal()" title="Theme">🎨</button>
             </div>
@@ -2277,6 +2332,7 @@ HTML_TEMPLATE = """
                     <span class="section-title">Now Playing</span>
                 </div>
                 <div class="card" style="display:flex;flex-wrap:wrap;gap:8px">
+                    <button onclick="openMirror()" style="background:#e9e9ed;color:#101014;border-radius:9px">🖥 Live Screen Mirror</button>
                     <button onclick="controlYouTubeVideo('pause')">⏯ Pause / Play</button>
                     <button onclick="controlYouTubeVideo('minimize')">▾ Minimise</button>
                     <button onclick="controlYouTubeVideo('restore')">⛶ Restore</button>
@@ -2562,6 +2618,20 @@ HTML_TEMPLATE = """
         </div>
     </div>
     
+
+    <div id="mirror-overlay" role="dialog" aria-modal="true" aria-label="Live Raspberry Pi screen mirror">
+        <div id="mirror-toolbar">
+            <strong>🖥 Live PiRadio Mirror</strong>
+            <button type="button" onclick="toggleMirrorFullscreen()" title="Fullscreen">⛶</button>
+            <button type="button" onclick="reloadMirror()" title="Reconnect">↻</button>
+            <button type="button" onclick="closeMirror()" title="Close mirror">✕</button>
+        </div>
+        <div id="mirror-screen">
+            <iframe id="mirror-frame" title="Interactive 7-inch Pi display" allowfullscreen referrerpolicy="no-referrer"></iframe>
+        </div>
+        <div id="mirror-hint">Tap the screen to control PiRadio. Requires private Tailscale connection and the mirror setup on your Pi.</div>
+    </div>
+    
     <div class="toast" id="toast"></div>
     
     <script>
@@ -2653,6 +2723,44 @@ HTML_TEMPLATE = """
         function connectManual() {
             const url = document.getElementById('server-url').value.trim();
             if (url) connectTo(url);
+        }
+        
+
+        function mirrorAddress() {
+            // noVNC and the existing remote run on different HTTPS ports.
+            // Both ports are reachable only through the user's Tailscale tailnet.
+            if (window.location.protocol !== 'https:') return '';
+            return 'https://' + window.location.hostname + ':8443/vnc.html?autoconnect=1&resize=scale&path=websockify';
+        }
+        
+        function openMirror() {
+            const url = mirrorAddress();
+            if (!url) {
+                showToast('Open PiRadio using the Tailscale HTTPS URL to access the mirror');
+                return;
+            }
+            const overlay = document.getElementById('mirror-overlay');
+            const frame = document.getElementById('mirror-frame');
+            frame.src = url;
+            overlay.style.display = 'flex';
+        }
+
+        function reloadMirror() {
+            const frame = document.getElementById('mirror-frame');
+            frame.src = mirrorAddress() + '&reconnect=' + Date.now();
+        }
+
+        function closeMirror() {
+            const overlay = document.getElementById('mirror-overlay');
+            overlay.style.display = 'none';
+            document.getElementById('mirror-frame').src = 'about:blank';
+            if (document.fullscreenElement === overlay) document.exitFullscreen().catch(() => {});
+        }
+
+        function toggleMirrorFullscreen() {
+            const overlay = document.getElementById('mirror-overlay');
+            if (document.fullscreenElement === overlay) document.exitFullscreen().catch(() => {});
+            else if (overlay.requestFullscreen) overlay.requestFullscreen().catch(() => showToast('Fullscreen unavailable'));
         }
         
         function connectTo(url) {
