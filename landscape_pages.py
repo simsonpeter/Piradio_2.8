@@ -67,8 +67,8 @@ def draw(s,page,font,small,tiny,**v):
             pygame.draw.rect(s,(88,88,88),rect,1,border_radius=12)
             if isinstance(day,dict):
                 dayname=str(day.get("date") or day.get("day") or f"Day {i+1}")[-5:]
-                high=day.get("max",day.get("temperature_2m_max","--"))
-                low=day.get("min",day.get("temperature_2m_min","--"))
+                high=day.get("high",day.get("max",day.get("temperature_2m_max","--")))
+                low=day.get("low",day.get("min",day.get("temperature_2m_min","--")))
             else:
                 dayname=f"DAY {i+1}";high="--";low="--"
             _text(s,tiny,dayname,(x+10,294),MUTED,86)
