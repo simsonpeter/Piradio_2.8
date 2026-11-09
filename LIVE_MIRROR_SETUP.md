@@ -26,6 +26,10 @@ Use the same phone PWA URL as before, but refresh the app; tap the **screen icon
 
 Expected mirror endpoint: `https://<your-pi>.<your-tailnet>.ts.net:8443/vnc.html?autoconnect=1&resize=scale&path=websockify`. Your exact address comes from `tailscale serve status`.
 
+## If noVNC loads but reports Failed to connect
+
+Raspberry Pi OS WayVNC defaults to encrypted/PAM VNC security types which browser noVNC may not support. The compatibility fix is `bash fix_live_mirror_wayvnc.sh`. It backs up `/etc/wayvnc/config`, changes WayVNC to listen **only** on `127.0.0.1:5900` with VNC-layer authentication disabled, restarts the service and verifies that port 5900 is loopback-only. The noVNC browser connection still uses **private Tailscale Serve HTTPS**. Do not forward port 5900 or use Tailscale Funnel. Other local processes on the Pi can access this VNC listener, so keep SSH/local access locked down. To reverse the change, restore the path printed by the fix script into `/etc/wayvnc/config` and restart `wayvnc`.
+
 ## Troubleshooting
 
 - **Black / disconnected**: Confirm a graphical session is running, VNC is enabled, and your phone has the Tailscale VPN active. Run `sudo systemctl status piradio-mirror-web.service`, `ss -lnt | grep -E ':(5900|6080) '`, and `tailscale serve status`.
