@@ -2656,10 +2656,21 @@ HTML_TEMPLATE = """
         }
         
         function connectTo(url) {
-            if (!url.startsWith('http')) url = 'http://' + url;
-            if (!url.includes(':8080')) url += ':8080';
-            apiBase = url;
-            localStorage.setItem('tc_radio_url', url);
+            // HTTPS endpoints (e.g. Tailscale Serve) must keep their own port.
+            // Local IP addresses without an explicit port still default to 8080.
+            try {
+                const raw = String(url || '').trim();
+                if (!raw) return;
+                const full = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw) ? raw : 'http://' + raw;
+                const target = new URL(full);
+                if (target.protocol !== 'http:' && target.protocol !== 'https:') throw new Error('Invalid protocol');
+                if (target.protocol === 'http:' && !target.port) target.port = '8080';
+                apiBase = target.origin;
+            } catch (error) {
+                showToast('Please enter a valid remote URL');
+                return;
+            }
+            localStorage.setItem('tc_radio_url', apiBase);
             
             fetch(apiBase + '/api/nowplaying')
                 .then(() => {
@@ -3260,9 +3271,15 @@ HTML_TEMPLATE = """
             return div.innerHTML;
         }
         
-        // Auto-connect if URL saved
+        // When served by the Pi itself (including private Tailscale HTTPS),
+        // connect to the same origin instead of an old LAN IP address.
         const savedUrl = localStorage.getItem('tc_radio_url');
-        if (savedUrl) {
+        const hostedHere = location.protocol === 'https:' ||
+                           location.port === '8080' || location.port === '8081';
+        if (hostedHere) {
+            document.getElementById('server-url').value = location.origin;
+            connectTo(location.origin);
+        } else if (savedUrl) {
             document.getElementById('server-url').value = savedUrl;
             connectTo(savedUrl);
         }
