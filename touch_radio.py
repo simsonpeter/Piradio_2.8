@@ -7120,7 +7120,7 @@ while True:
             press_time = time.monotonic()
             if press_time - last_touch_down_time >= 0.14:
                 last_touch_down_time = press_time
-                if landscape_bible_hit(bible_player, (round((event.pos[0]-165)*800/615), round((event.pos[1]-74)*400/310)), player.stop) == "home":
+                if landscape_bible_hit(bible_player, event.pos, player.stop) == "home":
                     active_page = "menu"
             continue
         if active_page == "bible" and event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
@@ -7685,17 +7685,14 @@ while True:
                    stations[current_idx] if stations else None,
                    bool(stations and stations[current_idx].get("youtube_id")) and not bible_player.playing)
         if active_page == "bible":
-            bible_canvas=pygame.Surface((800,480))
-            draw_landscape_bible(bible_canvas,bible_player,f_lg,f_sm,f_tiny)
-            # Reserve bottom 80px for the persistent audio mini-player.
-            content=pygame.transform.smoothscale(bible_canvas.subsurface((0,0,800,400)),(615,310))
-            landscape_display.blit(content,(165,74))
+            draw_landscape_bible(landscape_display,bible_player,f_lg,f_sm,f_tiny)
         elif active_page in ("favorites","clock","settings","bluetooth","youtube") and not (active_page=="youtube" and youtube_keyboard_open):
             draw_landscape_page(landscape_display,active_page,f_lg,f_sm,f_tiny,
                                 station=current_station,temp=current_temp,
                                 city=device_settings.weather_name,
                                 favorites=favorite_indices,stations=stations,
                                 presets=YOUTUBE_PRESETS,status=youtube_touch_status,
+                                youtube_results=youtube_results_cache,youtube_offset=youtube_touch_offset,
                                 devices=touch_bluetooth_devices,bt_status=touch_bluetooth_status,
                                 busy=touch_bluetooth_busy)
         elif active_page == "youtube" and youtube_keyboard_open:
