@@ -69,6 +69,21 @@ def draw(s,page,font,small,tiny,**v):
         button(s,small,"▶",pygame.Rect(360,311,75,52),(277,303))
         button(s,tiny,"Wi-Fi",pygame.Rect(536,311,108,52),(85,378))
         button(s,tiny,"WEB QR",pygame.Rect(651,311,108,52),(234,378))
+    elif page=="bluetooth":
+        _text(s,small,"BLUETOOTH SPEAKERS",(180,117),TEXT)
+        button(s,small,"SEARCH DEVICES" if not v.get("busy") else "SEARCHING...",pygame.Rect(535,92,224,51),(160,96))
+        _text(s,tiny,str(v.get("bt_status","")),(182,154),MUTED,570)
+        devices=v.get("devices",[])
+        for i,device in enumerate(devices[:6]):
+            x=180+(i%2)*296
+            y=182+(i//2)*57
+            rect=pygame.Rect(x,y,281,49)
+            name=device.get("name") or device.get("address","Unknown device")
+            state="CONNECTED" if device.get("connected") else ("CONNECT" if device.get("paired") else "PAIR")
+            button(s,tiny,name,rect,(160,163+i*46),active=device.get("connected",False))
+            _text(s,tiny,state,(x+10,y+32),MUTED,250)
+        if not devices:_text(s,small,"Tap SEARCH DEVICES to find your speaker",(185,210),MUTED,540)
+        button(s,tiny,"BACK TO SETTINGS",pygame.Rect(557,345,201,36),(160,448))
     elif page=="youtube":
         _text(s,small,"Search and play YouTube audio",(180,123),MUTED)
         button(s,small,"SEARCH YOUTUBE",pygame.Rect(180,154,365,58),(120,92))
