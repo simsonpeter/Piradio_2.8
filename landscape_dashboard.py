@@ -39,7 +39,7 @@ MAIN=pygame.Rect(155,72,635,208)
 MINI_OPEN=pygame.Rect(157,399,465,65)
 LOGO_CACHE={}
 
-def _station_art(s,rect,station_data):
+def _station_art(s,rect,station_data,loaded_logo=None):
     """Use a supplied local station logo; fall back to a radio symbol."""
     path=next((station_data.get(k) for k in ("logo","logo_path","image","icon") if isinstance(station_data.get(k),str) and os.path.isfile(station_data.get(k))),None) if isinstance(station_data,dict) else None
     if path:
@@ -52,6 +52,17 @@ def _station_art(s,rect,station_data):
             s.blit(image,image.get_rect(center=rect.center))
             return
         except (pygame.error,OSError,ValueError):pass
+    # The main player already downloads remote artwork from station logo URLs.
+    # Reuse that surface rather than requiring a local filesystem path.
+    if loaded_logo is not None:
+        try:
+            original = loaded_logo
+            scale = min((rect.width-12)/original.get_width(), (rect.height-12)/original.get_height())
+            image = pygame.transform.smoothscale(original, (max(1,round(original.get_width()*scale)), max(1,round(original.get_height()*scale))))
+            s.blit(image, image.get_rect(center=rect.center))
+            return
+        except (pygame.error, ValueError, AttributeError):
+            pass
     _icon(s,"radio",rect,min(rect.width,rect.height)//2,WHITE)
 
 
@@ -79,7 +90,7 @@ def _card(s,rect,radius=17):
     pygame.draw.rect(s,(59,59,59),rect,1,border_radius=radius)
 
 def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
-                   bible_playing,bible_paused,bible_name,volume,station_data=None,youtube_playing=False):
+                   bible_playing,bible_paused,bible_name,volume,station_data=None,youtube_playing=False,loaded_logo=None):
     """Render native 800x480 screen; no fixed 320px UI stretching."""
     scenic_background(s)
     pygame.draw.rect(s,(0,0,0),(0,0,800,55))
@@ -103,7 +114,7 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
         main=pygame.Rect(399,79,384,265)
         _glow_card(s,art,(16,16,16),(58,58,58),20)
         _glow_card(s,main,(16,16,16),(58,58,58),20)
-        _station_art(s,pygame.Rect(190,109,170,170),station_data)
+        _station_art(s,pygame.Rect(190,109,170,170),station_data,loaded_logo)
         _text(s,small,"TC RADIOS",(212,300),WHITE,145)
         _text(s,tiny,"LIVE RADIO",(422,100),MUTED,175)
         _text(s,font,station,(422,135),WHITE,340)
