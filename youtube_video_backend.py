@@ -71,6 +71,34 @@ class YouTubeVideoBackend:
     def seek(self, seconds):
         return self._command("seek", float(seconds), "relative")
 
+    def seek_absolute(self, seconds):
+        """Seek to a specific playback timestamp (seconds)."""
+        return self._command("seek", max(0, float(seconds)), "absolute", "exact")
+
+    def playback_status(self):
+        """Read duration, position and pause state for the phone remote."""
+        if not self.is_playing() or not self.socket_path:
+            return {"playing": False, "position": 0, "duration": 0, "paused": False}
+        result = {"playing": True, "position": 0, "duration": 0, "paused": False}
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.settimeout(1)
+                client.connect(self.socket_path)
+                for prop, key in (("time-pos", "position"), ("duration", "duration"), ("pause", "paused")):
+                    client.sendall((json.dumps({"command": ["get_property", prop]}) + "\n").encode())
+                    buffer = b""
+                    while b"\n" not in buffer:
+                        chunk = client.recv(4096)
+                        if not chunk:
+                            raise ConnectionError("mpv IPC disconnected")
+                        buffer += chunk
+                    response = json.loads(buffer.split(b"\n", 1)[0])
+                    if response.get("error") == "success" and response.get("data") is not None:
+                        result[key] = response["data"]
+        except (OSError, ValueError, ConnectionError):
+            pass
+        return result
+
     def volume(self, value):
         return self._command("set_property", "volume", max(0, min(100, int(value))))
 
