@@ -4115,6 +4115,8 @@ def run_flask():
 threading.Thread(target=run_flask, daemon=True).start()
 
 # --- PYGAME SETUP ---
+# Keep PiRadio visible when a separate mpv fullscreen window takes focus.
+os.environ['SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS'] = '0'
 os.environ['DISPLAY'] = ':0'
 pygame.init()
 pygame.mouse.set_visible(False)
@@ -4564,8 +4566,9 @@ def start_fullscreen_youtube_video():
         youtube_touch_status = "Play a YouTube audio result first"
         return
     try:
-        youtube_video.start_youtube(video_id)
+        # Stop existing audio first so mpv is the only active audio source.
         player.stop()
+        youtube_video.start_youtube(video_id)
         if bible_player.playing or bible_player.player.is_playing():
             bible_player.stop()
         youtube_video_id = video_id
