@@ -7130,7 +7130,19 @@ while True:
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
                                    "CLOCK":"clock","SETTINGS":"settings"}.get(value,"menu")
                 elif kind == "audio":
-                    if value == "pause":
+                    # Radio page controls always operate the radio, even when
+                    # the Bible was the most recently active audio source.
+                    if active_page == "radio":
+                        if value == "pause":
+                            if bible_player.playing:
+                                play()  # switches audio ownership to radio
+                            elif player.get_state() in (vlc.State.Playing, vlc.State.Paused):
+                                player.pause()
+                            else:
+                                play()
+                        else:
+                            skip_playback(-1 if value == "prev" else 1)
+                    elif value == "pause":
                         if bible_player.playing:bible_player.toggle_pause()
                         else:player.pause()
                     elif bible_player.playing:
