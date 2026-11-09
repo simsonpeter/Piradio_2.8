@@ -4491,7 +4491,7 @@ except Exception as e:
 # 7-inch landscape: keep the original 320x480 renderer as a safe offscreen
 # surface, while the right-hand panel provides large navigation targets.
 from landscape_ui import draw_companion_panel, companion_hit
-from landscape_dashboard import draw_dashboard, hit as landscape_hit, draw_shell, shell_hit
+from landscape_dashboard import draw_dashboard, hit as landscape_hit, draw_shell, shell_hit, draw_youtube_keyboard, youtube_keyboard_hit
 from landscape_bible import draw as draw_landscape_bible, hit as landscape_bible_hit
 from landscape_pages import draw as draw_landscape_page, hit as landscape_page_hit
 import landscape_pages
@@ -7164,6 +7164,13 @@ while True:
             attributes["pos"]=target
             if "rel" in attributes:attributes["rel"]=(0,0)
             event=pygame.event.Event(event.type,attributes)
+        elif active_page == "youtube" and youtube_keyboard_open and event.type in (pygame.MOUSEBUTTONDOWN,pygame.MOUSEBUTTONUP,pygame.MOUSEMOTION):
+            target=youtube_keyboard_hit(event.pos)
+            if target is None:
+                continue
+            attributes=event.dict.copy();attributes["pos"]=target
+            if "rel" in attributes:attributes["rel"]=(0,0)
+            event=pygame.event.Event(event.type,attributes)
         elif active_page not in ("menu","radio","bible") and event.type in (
                 pygame.MOUSEBUTTONDOWN,pygame.MOUSEBUTTONUP,pygame.MOUSEMOTION):
             mapped=(max(0,min(319,round((event.pos[0]-365)*320/210))),
@@ -7660,6 +7667,11 @@ while True:
                                 presets=YOUTUBE_PRESETS,status=youtube_touch_status,
                                 devices=touch_bluetooth_devices,bt_status=touch_bluetooth_status,
                                 busy=touch_bluetooth_busy)
+        elif active_page == "youtube" and youtube_keyboard_open:
+            draw_youtube_keyboard(landscape_display,f_lg,f_sm,f_tiny,
+                                  youtube_keyboard_text,youtube_key_rects,
+                                  btn_youtube_search_field,btn_youtube_keyboard_close,
+                                  btn_youtube_search_go)
         else:
             # Keyboard and remaining legacy pages remain functional.
             content=pygame.transform.smoothscale(screen,(210,315))
