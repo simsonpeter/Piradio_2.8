@@ -5,8 +5,8 @@ import pygame
 from ios_ipod_ui import raised_card, THEMES
 from fa_icons import draw_icon
 
-BG=(207,221,239); INK=(18,37,69); MUTED=(166,166,166)
-BLUE=(18,99,206); NAVY=(12,43,94); WHITE=(240,240,240)
+BG=(0,0,0); INK=(245,245,245); MUTED=(166,166,166)
+BLUE=(96,165,250); NAVY=(23,23,23); WHITE=(240,240,240)
 GOLD=(230,230,230)
 SKY=(10,39,79)
 def scenic_background(s):
@@ -74,7 +74,7 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
         r=NAV_RECTS[name]
         selected=(name=="HOME" and active_page=="menu") or (name=="RADIO" and active_page=="radio")
         _glow_card(s,r,(36,36,36) if selected else (12,12,12),(125,125,125) if selected else (48,48,48),14)
-        _icon(s,icon,pygame.Rect(r.x+7,r.y+8,28,28),20,INK if selected else WHITE)
+        _icon(s,icon,pygame.Rect(r.x+7,r.y+8,28,28),20,WHITE)
         _text(s,small,name.title(),(r.x+39,r.y+10),WHITE,90)
     # Distinct Home launcher and Radio player, both in the same themed shell.
     import datetime, math
@@ -84,17 +84,17 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
         main=pygame.Rect(399,79,384,265)
         _glow_card(s,art,(16,16,16),(58,58,58),20)
         _glow_card(s,main,(16,16,16),(58,58,58),20)
-        pygame.draw.circle(s,(32,159,225),(275,197),84)
-        pygame.draw.circle(s,(10,64,127),(275,197),34)
+        pygame.draw.circle(s,(39,39,39),(275,197),84)
+        pygame.draw.circle(s,(96,165,250),(275,197),34)
         _text(s,small,"TC RADIOS",(212,300),WHITE,145)
-        _text(s,tiny,"LIVE RADIO",(422,100),(178,219,255),175)
+        _text(s,tiny,"LIVE RADIO",(422,100),MUTED,175)
         _text(s,font,station,(422,135),WHITE,340)
-        _text(s,small,metadata or "Live streaming",(422,180),(200,229,255),335)
+        _text(s,small,metadata or "Live streaming",(422,180),MUTED,335)
         for rect,icon in ((PREV,"prev"),(PAUSE,"pause" if playing else "play"),(NEXT,"next")):
             _icon(s,icon,rect,30,WHITE)
-        pygame.draw.rect(s,(44,118,189),pygame.Rect(420,292,332,12),border_radius=6)
-        pygame.draw.rect(s,(35,185,238),pygame.Rect(420,292,round(332*max(0,min(100,volume))/100),12),border_radius=6)
-        _text(s,tiny,f"VOLUME {volume}%",(421,314),(206,232,255),230)
+        pygame.draw.rect(s,(48,48,48),pygame.Rect(420,292,332,12),border_radius=6)
+        pygame.draw.rect(s,(96,165,250),pygame.Rect(420,292,round(332*max(0,min(100,volume))/100),12),border_radius=6)
+        _text(s,tiny,f"VOLUME {volume}%",(421,314),MUTED,230)
     else:
         clock=pygame.Rect(158,73,405,260)
         info=pygame.Rect(575,73,211,260)
@@ -105,10 +105,10 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
         s.blit(time_label,time_label.get_rect(center=(clock.centerx,168)))
         date_label=small.render(now.strftime("%A, %d %b %Y"),True,WHITE)
         s.blit(date_label,date_label.get_rect(center=(clock.centerx,245)))
-        _text(s,tiny,"HOME  •  QUICK ACCESS",(184,298),(184,215,252),330)
-        _text(s,small,"NOW PLAYING",(593,111),(195,223,255),177)
+        _text(s,tiny,"HOME  •  QUICK ACCESS",(184,298),MUTED,330)
+        _text(s,small,"NOW PLAYING",(593,111),MUTED,177)
         _text(s,small,bible_name if bible_playing else station,(593,156),WHITE,177)
-        _text(s,tiny,"Bible audio" if bible_playing else (metadata or "Live radio"),(593,205),(199,225,255),175)
+        _text(s,tiny,"Bible audio" if bible_playing else (metadata or "Live radio"),(593,205),MUTED,175)
         for i,name in enumerate(CARDS):
             rect=CARD_RECTS[name]
             _card(s,rect,12)
@@ -118,7 +118,7 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
     
     _icon(s,"bible" if bible_playing else "radio",pygame.Rect(166,410,43,43),29,WHITE)
     _text(s,small,bible_name if bible_playing else station,(218,410),WHITE,385)
-    _text(s,tiny,"Tamil Bible" if bible_playing else (metadata or "Now playing"),(218,436),(181,209,248),385)
+    _text(s,tiny,"Tamil Bible" if bible_playing else (metadata or "Now playing"),(218,436),MUTED,385)
     for rect,icon in ((MINI_PREV,"prev"),(MINI_PAUSE,"pause" if playing else "play"),(MINI_NEXT,"next")):
         _icon(s,icon,rect,25,WHITE)
     return True
@@ -149,13 +149,13 @@ def draw_shell(s,font,small,tiny,active_page,station,metadata,playing,bible_play
                 "FAVORITES":"favorites","CLOCK":"clock","SETTINGS":"settings"}[name]
         selected=active_page==target
         _glow_card(s,rect,(36,36,36) if selected else (12,12,12),(125,125,125) if selected else (48,48,48),12)
-        _icon(s,icon,pygame.Rect(rect.x+7,rect.y+8,28,28),20,INK if selected else WHITE)
+        _icon(s,icon,pygame.Rect(rect.x+7,rect.y+8,28,28),20,WHITE)
         _text(s,small,name.title(),(rect.x+39,rect.y+10),WHITE,90)
     _glow_card(s,MINI,(17,17,17),(65,65,65),16)
     
     _icon(s,"bible" if bible_playing else "radio",pygame.Rect(166,410,43,43),28,WHITE)
     _text(s,small,bible_name if bible_playing else station,(218,410),WHITE,380)
-    _text(s,tiny,"Tamil Bible" if bible_playing else (metadata or "Now playing"),(218,436),(181,209,248),380)
+    _text(s,tiny,"Tamil Bible" if bible_playing else (metadata or "Now playing"),(218,436),MUTED,380)
     for rect,icon in ((MINI_PREV,"prev"),(MINI_PAUSE,"pause" if playing else "play"),(MINI_NEXT,"next")):
         _icon(s,icon,rect,25,WHITE)
 
