@@ -7671,7 +7671,8 @@ while True:
             bible_player.playing, bible_player.paused,
             f"Book {bible_player.book+1} - Chapter {bible_player.chapter}",
             vol_level, stations[current_idx] if stations else None,
-            bool(stations and stations[current_idx].get("youtube_id")) and not bible_player.playing)
+            bool(stations and stations[current_idx].get("youtube_id")) and not bible_player.playing,
+            loaded_logo=logo)
     else:
         # The shell is consistent on every page. The original page is
         # rendered within the right content area without stretching.
