@@ -7139,7 +7139,7 @@ while True:
                 elif kind == "page":
                     active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
-                                   "CLOCK":"clock","SETTINGS":"settings"}.get(value,"menu")
+                                   "CLOCK":"clock","WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu")
                 elif kind == "audio":
                     # Radio page controls always operate the radio, even when
                     # the Bible was the most recently active audio source.
@@ -7166,7 +7166,7 @@ while True:
             continue
         # Native secondary panels map their hit targets to the existing
         # business-logic controls; the sidebar and mini-player remain separate.
-        if active_page in ("favorites","clock","settings","bluetooth") or (active_page=="youtube" and not youtube_keyboard_open):
+        if active_page in ("favorites","clock","forecast","settings","bluetooth") or (active_page=="youtube" and not youtube_keyboard_open):
             native_page=True
         else:
             native_page=False
@@ -7686,9 +7686,9 @@ while True:
                    bool(stations and stations[current_idx].get("youtube_id")) and not bible_player.playing)
         if active_page == "bible":
             draw_landscape_bible(landscape_display,bible_player,f_lg,f_sm,f_tiny)
-        elif active_page in ("favorites","clock","settings","bluetooth","youtube") and not (active_page=="youtube" and youtube_keyboard_open):
+        elif active_page in ("favorites","clock","forecast","settings","bluetooth","youtube") and not (active_page=="youtube" and youtube_keyboard_open):
             draw_landscape_page(landscape_display,active_page,f_lg,f_sm,f_tiny,
-                                station=current_station,temp=current_temp,
+                                station=current_station,temp=current_temp,weather_type=weather_type,forecast=weather_forecast,
                                 city=device_settings.weather_name,
                                 favorites=favorite_indices,stations=stations,
                                 presets=YOUTUBE_PRESETS,status=youtube_touch_status,
