@@ -1,0 +1,29 @@
+name: PiRadio 7-inch live mirror checks
+
+on:
+  push:
+    branches:
+      - feature/7inch-live-mirror
+  pull_request:
+    paths:
+      - touch_radio.py
+      - setup_live_mirror.sh
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Python syntax
+        run: python3 -m py_compile touch_radio.py youtube_video_backend.py
+      - name: Validate mirror setup shell syntax
+        run: bash -n setup_live_mirror.sh
+      - name: Check mirror integration markers
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('touch_radio.py').read_text()
+          for marker in ('function openMirror()', 'function closeMirror()', 'id="mirror-frame"', ':8443/vnc.html', 'Live Screen Mirror'):
+              assert marker in text, f'Missing mirror feature: {marker}'
+          print('Live mirror UI markers present')
+          PY
