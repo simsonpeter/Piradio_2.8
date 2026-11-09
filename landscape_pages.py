@@ -14,13 +14,18 @@ def title(s,f,text):
 def button(s,font,text,rect,target=None,active=False):
     _card(s,rect,13)
     if active:pygame.draw.rect(s,(37,99,235),rect,border_radius=13)
-    label=font.render(str(text),True,TEXT)
+    label_text=str(text)
+    while label_text and font.render(label_text,True,TEXT).get_width()>rect.width-16:
+        label_text=label_text[:-1]
+    if label_text!=str(text) and label_text:
+        label_text=label_text[:-1]+"…"
+    label=font.render(label_text,True,TEXT)
     s.blit(label,label.get_rect(center=rect.center))
     if target is not None:TARGETS[(rect.x,rect.y,rect.w,rect.h)]=target
 def draw(s,page,font,small,tiny,**v):
     TARGETS.clear()
     _card(s,PANEL,18)
-    pygame.draw.rect(s,(17,17,17),PANEL.inflate(-10,-10),border_radius=15)
+    pygame.draw.rect(s,(23,23,23),PANEL.inflate(-10,-10),border_radius=15)
     title(s,font,page.upper())
     if page=="clock":
         now=datetime.now()
