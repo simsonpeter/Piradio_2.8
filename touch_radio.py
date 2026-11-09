@@ -7131,7 +7131,7 @@ while True:
             continue
         # Native secondary panels map their hit targets to the existing
         # business-logic controls; the sidebar and mini-player remain separate.
-        if active_page in ("favorites","clock","settings") or (active_page=="youtube" and not youtube_keyboard_open):
+        if active_page in ("favorites","clock","settings","bluetooth") or (active_page=="youtube" and not youtube_keyboard_open):
             native_page=True
         else:
             native_page=False
@@ -7629,12 +7629,14 @@ while True:
             # Reserve bottom 80px for the persistent audio mini-player.
             content=pygame.transform.smoothscale(bible_canvas.subsurface((0,0,800,400)),(615,310))
             landscape_display.blit(content,(165,74))
-        elif active_page in ("favorites","clock","settings","youtube") and not (active_page=="youtube" and youtube_keyboard_open):
+        elif active_page in ("favorites","clock","settings","bluetooth","youtube") and not (active_page=="youtube" and youtube_keyboard_open):
             draw_landscape_page(landscape_display,active_page,f_lg,f_sm,f_tiny,
                                 station=current_station,temp=current_temp,
                                 city=device_settings.weather_name,
                                 favorites=favorite_indices,stations=stations,
-                                presets=YOUTUBE_PRESETS,status=youtube_touch_status)
+                                presets=YOUTUBE_PRESETS,status=youtube_touch_status,
+                                devices=touch_bluetooth_devices,bt_status=touch_bluetooth_status,
+                                busy=touch_bluetooth_busy)
         else:
             # Keyboard and remaining legacy pages remain functional.
             content=pygame.transform.smoothscale(screen,(210,315))
