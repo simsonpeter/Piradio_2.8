@@ -42,12 +42,18 @@ class YouTubeVideoBackend:
             os.unlink(self.socket_path)
         except FileNotFoundError:
             pass
+        environment = os.environ.copy()
+        environment.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        environment.setdefault("WAYLAND_DISPLAY", "wayland-0")
         self.process = subprocess.Popen(
             ["mpv", "--no-config", "--force-window=yes", "--fs",
+             "--vo=gpu", "--gpu-context=wayland", "--hwdec=no", "--profile=fast",
+             "--ytdl-format=bestvideo[height<=720][vcodec^=avc1]+bestaudio/best[height<=720]",
+             "--script=" + str(Path(__file__).with_name("mpv_piradio_touch.lua")),
              "--osc=yes", "--input-default-bindings=yes",
              "--input-ipc-server=" + self.socket_path,
              "--title=PiRadio YouTube Video", media_url],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
         self.minimized = False
 
     def start_youtube(self, video_id):
@@ -69,13 +75,14 @@ class YouTubeVideoBackend:
     def minimize_audio(self):
         """Disable video rendering, keeping audio alive. UI must return to PiRadio."""
         ok = self._command("set_property", "vid", "no")
-        self._command("set_property", "fullscreen", "no")
+        self._command("set_property", "window-minimized", "yes")
         self.minimized = ok
         return ok
 
     def restore_video(self):
         """Re-enable video and fullscreen on the same playback process."""
         ok = self._command("set_property", "vid", "auto")
+        self._command("set_property", "window-minimized", "no")
         self._command("set_property", "fullscreen", "yes")
         self.minimized = False
         return ok
