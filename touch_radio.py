@@ -7084,7 +7084,9 @@ while True:
             shell_action = shell_hit(event.pos)
             if shell_action:
                 kind, value = shell_action
-                if kind == "page":
+                if kind == "open_player":
+                    active_page = "bible" if bible_player.playing else ("youtube" if stations and stations[current_idx].get("youtube_id") else "radio")
+                elif kind == "page":
                     active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
                                    "CLOCK":"clock","SETTINGS":"settings"}[value]
@@ -7114,7 +7116,9 @@ while True:
             action = landscape_hit(event.pos)
             if action:
                 kind, value = action
-                if kind == "page":
+                if kind == "open_player":
+                    active_page = "bible" if bible_player.playing else ("youtube" if stations and stations[current_idx].get("youtube_id") else "radio")
+                elif kind == "page":
                     active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
                                    "CLOCK":"clock","SETTINGS":"settings"}.get(value,"menu")
@@ -7629,7 +7633,8 @@ while True:
             (bible_player.playing and not bible_player.paused) if bible_player.playing else radio_playing,
             bible_player.playing, bible_player.paused,
             f"Book {bible_player.book+1} - Chapter {bible_player.chapter}",
-            vol_level)
+            vol_level, stations[current_idx] if stations else None,
+            bool(stations and stations[current_idx].get("youtube_id")) and not bible_player.playing)
     else:
         # The shell is consistent on every page. The original page is
         # rendered within the right content area without stretching.
@@ -7638,7 +7643,9 @@ while True:
         draw_shell(landscape_display,f_lg,f_sm,f_tiny,active_page,
                    current_station,current_meta,
                    (bible_player.playing and not bible_player.paused) if bible_player.playing else radio_playing,
-                   bible_player.playing,bible_name)
+                   bible_player.playing,bible_name,
+                   stations[current_idx] if stations else None,
+                   bool(stations and stations[current_idx].get("youtube_id")) and not bible_player.playing)
         if active_page == "bible":
             bible_canvas=pygame.Surface((800,480))
             draw_landscape_bible(bible_canvas,bible_player,f_lg,f_sm,f_tiny)
