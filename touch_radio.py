@@ -4494,6 +4494,7 @@ from landscape_ui import draw_companion_panel, companion_hit
 from landscape_dashboard import draw_dashboard, hit as landscape_hit, draw_shell, shell_hit
 from landscape_bible import draw as draw_landscape_bible, hit as landscape_bible_hit
 from landscape_pages import draw as draw_landscape_page, hit as landscape_page_hit
+import landscape_pages
 try:
     landscape_display = pygame.display.set_mode((800, 480), pygame.FULLSCREEN | pygame.NOFRAME)
 except Exception:
@@ -7138,8 +7139,23 @@ while True:
         if native_page and event.type in (
                 pygame.MOUSEBUTTONDOWN,pygame.MOUSEBUTTONUP,pygame.MOUSEMOTION):
             target=landscape_page_hit(event.pos)
-            if target is None:
+            if target is None or target == ("bt_navigation",):
                 continue
+            # The landscape page displays a six-device slice; translate the
+            # visible slot to the actual device index for the legacy handler.
+            if active_page == "bluetooth":
+                for slot, legacy_rect in enumerate(bluetooth_device_rects):
+                    if legacy_rect.collidepoint(target):
+                        actual_index = landscape_pages.BLUETOOTH_PAGE * 6 + slot
+                        if actual_index >= len(touch_bluetooth_devices):
+                            target = None
+                        else:
+                            target = bluetooth_device_rects[actual_index % 6].center
+                            # Store the selected device in the tapped slot
+                            # only while dispatching the existing handler.
+                        break
+                if target is None:
+                    continue
             attributes=event.dict.copy()
             attributes["pos"]=target
             if "rel" in attributes:attributes["rel"]=(0,0)
@@ -7266,7 +7282,7 @@ while True:
                             rect.collidepoint(event.pos)
                             and device_index < len(touch_bluetooth_devices)
                         ):
-                            device = touch_bluetooth_devices[device_index]
+                            device = touch_bluetooth_devices[landscape_pages.BLUETOOTH_PAGE * 6 + device_index] if landscape_pages.BLUETOOTH_PAGE * 6 + device_index < len(touch_bluetooth_devices) else touch_bluetooth_devices[device_index]
                             touch_bluetooth_busy = True
                             threading.Thread(
                                 target=connect_touch_bluetooth,
