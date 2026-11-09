@@ -18,13 +18,14 @@ def _glow_card(s,rect,fill=(14,14,14),edge=(60,60,60),radius=18):
     """Minimal flat dark card: no glow, shadow or bright bevel."""
     pygame.draw.rect(s,fill,rect,border_radius=radius)
     pygame.draw.rect(s,edge,rect,1,border_radius=radius)
+    pygame.draw.line(s,(min(255,edge[0]+35),)*3,(rect.x+radius,rect.y+1),(rect.right-radius,rect.y+1),1)
 
 SIDEBAR=pygame.Rect(0,55,145,425)
-NAV=("HOME","RADIO","BIBLE","YOUTUBE","FAVORITES","CLOCK","SETTINGS")
-NAV_ICONS=("home","radio","bible","youtube","favorites","clock","settings")
+NAV=("HOME","RADIO","BIBLE","YOUTUBE","FAVORITES","CLOCK","WEATHER","SETTINGS")
+NAV_ICONS=("home","radio","bible","youtube","favorites","clock","weather","settings")
 CARDS=("RADIO","BIBLE","YOUTUBE","FAVORITES")
 CARD_ICONS=("radio","bible","youtube","favorites")
-NAV_RECTS={n:pygame.Rect(8,67+i*49,130,44) for i,n in enumerate(NAV)}
+NAV_RECTS={n:pygame.Rect(8,65+i*43,130,39) for i,n in enumerate(NAV)}
 CARD_RECTS={n:pygame.Rect(158+i*158,346,150,43) for i,n in enumerate(CARDS)}
 PREV=pygame.Rect(588,226,49,48)
 PAUSE=pygame.Rect(652,226,49,48)
@@ -88,6 +89,7 @@ def _card(s,rect,radius=17):
     
     pygame.draw.rect(s,(19,19,19),rect,border_radius=radius)
     pygame.draw.rect(s,(59,59,59),rect,1,border_radius=radius)
+    pygame.draw.line(s,(85,85,85),(rect.x+radius,rect.y+1),(rect.right-radius,rect.y+1),1)
 
 def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
                    bible_playing,bible_paused,bible_name,volume,station_data=None,youtube_playing=False,loaded_logo=None):
@@ -104,8 +106,8 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
         r=NAV_RECTS[name]
         selected=(name=="HOME" and active_page=="menu") or (name=="RADIO" and active_page=="radio")
         _glow_card(s,r,(36,36,36) if selected else (12,12,12),(125,125,125) if selected else (48,48,48),14)
-        _icon(s,icon,pygame.Rect(r.x+7,r.y+8,28,28),20,WHITE)
-        _text(s,small,name.title(),(r.x+39,r.y+10),WHITE,90)
+        _icon(s,icon,pygame.Rect(r.x+7,r.y+5,28,28),20,WHITE)
+        _text(s,small,name.title(),(r.x+39,r.y+8),WHITE,90)
     # Distinct Home launcher and Radio player, both in the same themed shell.
     import datetime, math
     now=datetime.datetime.now()
@@ -179,11 +181,11 @@ def draw_shell(s,font,small,tiny,active_page,station,metadata,playing,bible_play
     for name,icon in zip(NAV,NAV_ICONS):
         rect=NAV_RECTS[name]
         target={"HOME":"menu","RADIO":"radio","BIBLE":"bible","YOUTUBE":"youtube",
-                "FAVORITES":"favorites","CLOCK":"clock","SETTINGS":"settings"}[name]
+                "FAVORITES":"favorites","CLOCK":"clock","WEATHER":"forecast","SETTINGS":"settings"}[name]
         selected=active_page==target
         _glow_card(s,rect,(36,36,36) if selected else (12,12,12),(125,125,125) if selected else (48,48,48),12)
-        _icon(s,icon,pygame.Rect(rect.x+7,rect.y+8,28,28),20,WHITE)
-        _text(s,small,name.title(),(rect.x+39,rect.y+10),WHITE,90)
+        _icon(s,icon,pygame.Rect(rect.x+7,rect.y+5,28,28),20,WHITE)
+        _text(s,small,name.title(),(rect.x+39,rect.y+8),WHITE,90)
     _glow_card(s,MINI,(17,17,17),(65,65,65),16)
     
     if bible_playing or youtube_playing:
