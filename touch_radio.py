@@ -2276,6 +2276,12 @@ HTML_TEMPLATE = """
                 <div class="section-header">
                     <span class="section-title">Now Playing</span>
                 </div>
+                <div class="card" style="display:flex;flex-wrap:wrap;gap:8px">
+                    <button onclick="controlYouTubeVideo('pause')">⏯ Pause / Play</button>
+                    <button onclick="controlYouTubeVideo('minimize')">▾ Minimise</button>
+                    <button onclick="controlYouTubeVideo('restore')">⛶ Restore</button>
+                    <button onclick="controlYouTubeVideo('stop')">■ Stop Video</button>
+                </div>
                 <div class="card" id="youtube-now-playing" style="display: none;">
                     <div class="youtube-item" style="margin-bottom: 0;">
                         <div class="youtube-thumb" id="yt-current-thumb">
@@ -2826,7 +2832,7 @@ HTML_TEMPLATE = """
                     </div>
                     <div class="youtube-info">
                         <div class="youtube-title">${escapeHtml(video.title)}</div>
-                        <div class="youtube-meta">${escapeHtml(video.uploader)} • ${video.duration}</div>
+                        <div class="youtube-meta">${escapeHtml(video.uploader)} • ${video.duration}</div><button onclick="event.stopPropagation();playYouTubeVideo(${idx})" style="padding:10px;margin-top:6px;background:#2563eb;color:white;border:0;border-radius:9px">▶ VIDEO ON PI</button>
                     </div>
                 </div>
             `).join('');
@@ -2858,6 +2864,15 @@ HTML_TEMPLATE = """
             });
         }
         
+        function playYouTubeVideo(idx) {
+            const video=youtubeResults[idx]; if(!video)return;
+            fetch(apiBase+'/api/youtube/video',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'play',video_id:video.id,title:video.title})})
+            .then(r=>r.json()).then(d=>showToast(d.success?'Video started on Pi':(d.error||'Video failed'))).catch(()=>showToast('Video request failed'));
+        }
+        function controlYouTubeVideo(action) {
+            fetch(apiBase+'/api/youtube/video',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action})})
+            .then(r=>r.json()).then(d=>showToast(d.success?'Video: '+action:(d.error||'Control failed'))).catch(()=>showToast('Video control failed'));
+        }
         function addLink() {
             const url = document.getElementById('link-url').value.trim();
             const title = document.getElementById('link-title').value.trim();
@@ -4075,6 +4090,37 @@ def youtube_play():
         return jsonify({'success': True, 'message': f'Playing: {title}'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/youtube/video', methods=['POST'])
+def remote_youtube_video():
+    try:
+        data = request.get_json(silent=True) or {}
+        action = str(data.get('action') or '')
+        if action == 'play':
+            video_id = str(data.get('video_id') or '').strip()
+            if not re.fullmatch(r'[A-Za-z0-9_-]{11}', video_id):
+                return jsonify({'success':False,'error':'Invalid YouTube ID'}),400
+            # Existing VLC audio must stop before video starts.
+            player.stop()
+            if bible_player.playing or bible_player.player.is_playing():
+                bible_player.stop()
+            youtube_video.start_youtube(video_id)
+        elif action == 'pause':
+            if not youtube_video.is_playing(): raise ValueError('No video playing')
+            youtube_video.pause()
+        elif action == 'minimize':
+            if not youtube_video.is_playing(): raise ValueError('No video playing')
+            youtube_video.minimize_audio()
+        elif action == 'restore':
+            if not youtube_video.is_playing(): raise ValueError('No video playing')
+            youtube_video.restore_video()
+        elif action == 'stop':
+            youtube_video.stop()
+        else:
+            return jsonify({'success':False,'error':'Unknown action'}),400
+        return jsonify({'success':True,'action':action})
+    except Exception as error:
+        return jsonify({'success':False,'error':str(error)}),500
 
 @app.route('/static/<path:filename>')
 def serve_static(filename):
