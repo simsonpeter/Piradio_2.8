@@ -35,7 +35,7 @@ class YouTubeVideoBackend:
         if not isinstance(media_url, str) or not media_url.startswith(("https://", "http://")):
             raise ValueError("A resolved HTTP(S) video URL is required")
         self.stop()
-        if not subprocess.run(["which", "mpv"], capture_output=True).returncode == 0:
+        if subprocess.run(["which", "mpv"], capture_output=True).returncode != 0:
             raise RuntimeError("mpv is not installed; install it with sudo apt install mpv")
         self.socket_path = str(Path(tempfile.gettempdir()) / f"piradio-video-{os.getpid()}.sock")
         try:
@@ -49,6 +49,13 @@ class YouTubeVideoBackend:
              "--title=PiRadio YouTube Video", media_url],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.minimized = False
+
+    def start_youtube(self, video_id):
+        """Use mpv yt-dlp integration to resolve the video stream itself."""
+        import re
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", str(video_id)):
+            raise ValueError("Invalid YouTube video ID")
+        self.start("https://www.youtube.com/watch?v=" + video_id)
 
     def pause(self):
         return self._command("cycle", "pause")
