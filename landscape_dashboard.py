@@ -191,3 +191,50 @@ def shell_hit(pos):
     for name,rect in (("prev",MINI_PREV),("pause",MINI_PAUSE),("next",MINI_NEXT)):
         if rect.collidepoint(pos):return ("audio",name)
     return None
+
+# Full-width landscape YouTube search keyboard; key actions use legacy handlers.
+KEYBOARD_KEYS=[]
+def draw_youtube_keyboard(s,font,small,tiny,query,keys,search_rect,close_rect,go_rect):
+    global KEYBOARD_KEYS
+    KEYBOARD_KEYS=[]
+    panel=pygame.Rect(158,72,628,316)
+    _glow_card(s,panel,(16,16,16),(66,66,66),18)
+    _text(s,font,"Search YouTube",(179,82),WHITE,390)
+    field=pygame.Rect(179,122,492,43)
+    _glow_card(s,field,(35,35,35),(85,85,85),11)
+    _text(s,small,query or "Enter a video or song name",(191,133),WHITE if query else MUTED,455)
+    go=pygame.Rect(683,122,84,43)
+    _glow_card(s,go,(25,83,147),(100,170,245),11)
+    _text(s,small,"GO",(706,133),WHITE)
+    KEYBOARD_KEYS.append((go,go_rect.center))
+    rows=("1234567890","qwertyuiop","asdfghjkl","zxcvbnm")
+    lookup={value:rect.center for label,value,rect in keys}
+    for row_index,row in enumerate(rows):
+        count=len(row)+(1 if row_index==3 else 0)
+        gap=5
+        key_width=min(53,(588-(count-1)*gap)//count)
+        total=count*key_width+(count-1)*gap
+        x=179+(588-total)//2
+        y=176+row_index*39
+        for letter in row:
+            rect=pygame.Rect(x,y,key_width,34)
+            _glow_card(s,rect,(39,39,39),(76,76,76),7)
+            label=tiny.render(letter.upper(),True,WHITE)
+            s.blit(label,label.get_rect(center=rect.center))
+            KEYBOARD_KEYS.append((rect,lookup[letter]))
+            x+=key_width+gap
+        if row_index==3:
+            rect=pygame.Rect(x,y,key_width,34)
+            _glow_card(s,rect,(75,51,30),(125,92,60),7)
+            _text(s,tiny,"DEL",(rect.x+9,rect.y+8),WHITE)
+            KEYBOARD_KEYS.append((rect,lookup["backspace"]))
+    for title,action,x,w in (("SPACE","space",179,278),("SEARCH","search",467,190),("DONE","close",667,100)):
+        rect=pygame.Rect(x,335,w,40)
+        _glow_card(s,rect,(27,72,125) if action=="search" else (38,38,38),(90,90,90),9)
+        label=small.render(title,True,WHITE)
+        s.blit(label,label.get_rect(center=rect.center))
+        KEYBOARD_KEYS.append((rect,close_rect.center if action=="close" else lookup[action]))
+def youtube_keyboard_hit(pos):
+    for rect,target in KEYBOARD_KEYS:
+        if rect.collidepoint(pos):return target
+    return None
