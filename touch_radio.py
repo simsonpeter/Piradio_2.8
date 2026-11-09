@@ -3278,6 +3278,13 @@ HTML_TEMPLATE = """
     </script>
 <div id="pi-video-remote" style="display:none;position:fixed;bottom:calc(8px + env(safe-area-inset-bottom));left:8px;right:8px;z-index:99999;background:#101114;color:white;border:1px solid #777;border-radius:14px;padding:12px;box-shadow:0 5px 24px #000a">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px"><strong>📺 Pi Video Remote</strong><span id="pi-video-state" style="font-size:12px">Playing</span></div>
+ <div style="display:flex;align-items:center;justify-content:space-between;font-size:13px;margin:7px 0"><span id="pi-video-elapsed">0:00</span><span id="pi-video-total">--:--</span></div>
+ <input id="pi-video-seek" type="range" min="0" max="100" value="0" step="0.1" aria-label="Video timeline" style="width:100%;accent-color:white;min-height:32px;touch-action:pan-y" onpointerdown="piVideoSeeking=true" oninput="piVideoSeekPreview(this.value)" onchange="piVideoSeekCommit(this.value)" onpointerup="piVideoSeeking=false">
+ <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:7px 0">
+ <button style="padding:12px;background:#333;color:white;border-radius:9px" onclick="piVideoSkip(-10)">↶ 10s</button>
+ <button style="padding:12px;background:#eee;color:#111;border-radius:9px" onclick="controlYouTubeVideo('pause')">⏯ Play / Pause</button>
+ <button style="padding:12px;background:#333;color:white;border-radius:9px" onclick="piVideoSkip(10)">10s ↷</button>
+ </div>
  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
  <button style="padding:13px 2px;color:white;background:#333;border-radius:9px" onclick="controlYouTubeVideo('pause')">⏯ Pause</button>
  <button style="padding:13px 2px;color:white;background:#333;border-radius:9px" onclick="controlYouTubeVideo('minimize')">▾ Minimise</button>
@@ -3285,13 +3292,46 @@ HTML_TEMPLATE = """
  <button style="padding:13px 2px;color:white;background:#9b2525;border-radius:9px" onclick="controlYouTubeVideo('stop')">■ Stop</button>
  </div></div>
 <script>
+let piVideoSeeking=false;
+let piVideoDuration=0;
+function piVideoTime(seconds) {
+ if(!Number.isFinite(seconds)) return '--:--';
+ seconds=Math.max(0,Math.floor(seconds));
+ return Math.floor(seconds/3600)>0
+  ? Math.floor(seconds/3600)+':'+String(Math.floor(seconds/60)%60).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0')
+  : Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');
+}
+function piVideoSend(action,seconds) {
+ return fetch(apiBase+'/api/youtube/video',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,seconds})})
+  .then(r=>r.json()).then(d=>{if(!d.success)showToast(d.error||'Video command failed');refreshPiVideoRemote();})
+  .catch(()=>showToast('Video remote unavailable'));
+}
+function piVideoSkip(seconds){piVideoSend('seek_relative',seconds);}
+function piVideoSeekPreview(value){
+ document.getElementById('pi-video-elapsed').textContent=piVideoTime(Number(value));
+}
+function piVideoSeekCommit(value){
+ piVideoSeeking=false;
+ piVideoSend('seek',Number(value));
+}
 async function refreshPiVideoRemote(){
  try {
   const response=await fetch(apiBase+'/api/youtube/video/status',{cache:'no-store'});
   const data=await response.json();
   const bar=document.getElementById('pi-video-remote');
   bar.style.display=data.playing?'block':'none';
-  document.getElementById('pi-video-state').textContent=data.minimized?'Audio only':'Fullscreen video';
+  document.getElementById('pi-video-state').textContent=data.minimized?'Audio only':(data.paused?'Paused':'Fullscreen video');
+  const duration=Number(data.duration)||0;
+  piVideoDuration=duration;
+  document.getElementById('pi-video-total').textContent=piVideoTime(duration);
+  const slider=document.getElementById('pi-video-seek');
+  slider.max=String(Math.max(1,duration));
+  slider.disabled=duration<=0;
+  if(!piVideoSeeking){
+   const position=Number(data.position)||0;
+   slider.value=String(Math.max(0,Math.min(duration,position)));
+   document.getElementById('pi-video-elapsed').textContent=piVideoTime(position);
+  }
  } catch(e) {}
 }
 setInterval(refreshPiVideoRemote,2000);
@@ -4114,8 +4154,7 @@ def youtube_play():
 
 @app.route('/api/youtube/video/status')
 def remote_youtube_video_status():
-    return jsonify({'playing':youtube_video.is_playing(),
-                    'minimized':youtube_video.minimized})
+    return jsonify({**youtube_video.playback_status(), 'minimized':youtube_video.minimized})
 
 @app.route('/api/youtube/video', methods=['POST'])
 def remote_youtube_video():
@@ -4131,6 +4170,14 @@ def remote_youtube_video():
             if bible_player.playing or bible_player.player.is_playing():
                 bible_player.stop()
             youtube_video.start_youtube(video_id)
+        elif action in ('seek', 'seek_relative'):
+            if not youtube_video.is_playing(): raise ValueError('No video playing')
+            value = float(data.get('seconds', 0))
+            if not math.isfinite(value): raise ValueError('Invalid seek position')
+            if action == 'seek':
+                youtube_video.seek_absolute(value)
+            else:
+                youtube_video.seek(value)
         elif action == 'pause':
             if not youtube_video.is_playing(): raise ValueError('No video playing')
             youtube_video.pause()
