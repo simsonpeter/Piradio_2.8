@@ -149,6 +149,21 @@ class VideoMiniTests(unittest.TestCase):
         self.assertNotEqual(tuple(surface.get_at((275, 190))[:3]),
                             (221, 0, 128))
 
+    def test_video_hero_seeks_and_restores_without_radio_volume_click(self):
+        from landscape_dashboard import (
+            video_hero_hit, VIDEO_HERO_SEEK, VIDEO_HERO_ART,
+        )
+        status = self.make_status()
+        action = video_hero_hit(VIDEO_HERO_SEEK.center, status, "radio")
+        self.assertEqual(action[0], "seek")
+        self.assertAlmostEqual(action[1], 75, delta=1)
+        self.assertEqual(
+            video_hero_hit(VIDEO_HERO_ART.center, status, "radio"),
+            ("restore", None),
+        )
+        self.assertIsNone(video_hero_hit(VIDEO_HERO_SEEK.center, status, "menu"))
+        self.assertIsNone(video_hero_hit(VIDEO_HERO_SEEK.center, None, "radio"))
+
     def test_home_page_and_secondary_shell_accept_video_source(self):
         from landscape_dashboard import draw_dashboard, draw_shell
         surface = pygame.Surface((800, 480))
