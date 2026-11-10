@@ -10,6 +10,7 @@ from tamil_bible import BiblePlayer
 from fa_icons import draw_icon
 from weather_service import fetch_weather
 from media_session import resolve_media_snapshot
+from media_transport import plan_media_command
 from landscape_screensaver import draw as draw_landscape_screensaver
 from piradio_guest_cast import GuestCastSession, register_cast_routes
 from landscape_cast import (CAST_BUTTON, RENEW_BUTTON, CLOSE_BUTTON,
@@ -5055,15 +5056,81 @@ video_status_pending = None
 video_status_loading = False
 video_status_last_poll = 0
 
-def toggle_active_playback():
-    """Play/pause whichever of mpv, Bible, or VLC owns audio."""
+def control_active_media(action, seconds=None, *, mpv_only=False):
+    """Run one transport command against the active playback owner.
+
+    The same routing is used by the remote and touchscreen. MPV process
+    presence takes precedence even while minimized or paused. All existing
+    VLC, Bible and MPV engines keep their current responsibilities.
+    """
     if youtube_video.is_playing():
-        return youtube_video.pause()
-    if bible_player.playing:
-        bible_player.toggle_pause()
+        source = youtube_video.source_type
+    elif mpv_only:
+        return False
+    elif bible_player.playing:
+        source = "bible"
+    else:
+        source = "youtube_audio" if current_youtube_id() else "radio"
+
+    seekable = False
+    if source in ("youtube_video", "guest_video", "guest_audio"):
+        # Backend validates unsupported/live seeks; the IPC cache may not
+        # yet contain duration immediately after starting a new stream.
+        seekable = True
+    elif source == "youtube_audio":
+        try:
+            seekable = bool(player.is_seekable() and player.get_length() > 0)
+        except Exception:
+            pass
+    plan = plan_media_command(source, action, seconds, seekable=seekable)
+    if plan is None:
+        return False
+
+    if plan.engine == "mpv":
+        if plan.operation == "pause":
+            return youtube_video.pause()
+        if plan.operation == "seek":
+            return youtube_video.seek_absolute(plan.value)
+        if plan.operation == "seek_relative":
+            return youtube_video.seek(plan.value)
+        if plan.operation == "playlist_next":
+            return youtube_video.skip_playlist(1)
+        if plan.operation == "playlist_prev":
+            return youtube_video.skip_playlist(-1)
+        if plan.operation == "minimize":
+            return youtube_video.minimize_audio()
+        if plan.operation == "restore":
+            return youtube_video.restore_video()
+        if plan.operation == "stop":
+            youtube_video.stop()
+            return True
+
+    if plan.engine == "bible":
+        if plan.operation == "toggle":
+            bible_player.toggle_pause()
+        elif plan.operation == "chapter_shift":
+            bible_player.shift(int(plan.value), player.stop)
+        elif plan.operation == "stop":
+            bible_player.stop()
         return True
-    player.pause()
-    return True
+
+    if plan.engine == "vlc":
+        if plan.operation == "toggle":
+            player.pause()
+        elif plan.operation == "next":
+            skip_playback(int(plan.value))
+        elif plan.operation == "seek":
+            player.set_time(int(plan.value * 1000))
+        elif plan.operation == "stop":
+            player.stop()
+        return True
+    return False
+
+
+def toggle_active_playback():
+    """Legacy play/pause entry point, now shared with all remote controls."""
+    return control_active_media("toggle")
+
 
 def poll_video_status():
     global video_status_pending
