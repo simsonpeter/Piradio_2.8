@@ -181,8 +181,48 @@ def draw_video_hero(s, font, small, tiny, status):
     _text(s, tiny, _video_clock(duration) if duration else "--:--",
           (689, 315), MUTED, 69)
 
+def media_display_info(media_snapshot, station, metadata, bible_playing,
+                       bible_name, youtube_playing):
+    """Single source label for the home widget and persistent mini-player.
+
+    The caller passes the lightweight snapshot from the render loop.  It
+    already uses cached MPV status, so drawing never blocks on IPC or HTTP.
+    """
+    if media_snapshot is not None:
+        source = media_snapshot.get("source") or "radio"
+        title = media_snapshot.get("title") or station or "PiRadio"
+        paused = bool(media_snapshot.get("paused"))
+        playing = bool(media_snapshot.get("playing"))
+        if source in ("youtube_video", "guest_video", "guest_audio",
+                      "guest_photos", "screen_mirror"):
+            label, icon, _hint = _media_source({"source": source})
+            subtitle = "Paused" if paused else (
+                "Audio playing in background" if media_snapshot.get("minimized")
+                else label.title()
+            )
+            return dict(title=title, subtitle=subtitle, icon=icon,
+                        playing=playing, use_station_logo=False)
+        if source == "bible":
+            return dict(title=title, subtitle="Paused" if paused else "Tamil Bible",
+                        icon="bible", playing=playing, use_station_logo=False)
+        if source == "youtube_audio":
+            return dict(title=title, subtitle="Paused" if paused else "YouTube audio",
+                        icon="youtube", playing=playing, use_station_logo=False)
+        return dict(title=title,
+                    subtitle="Paused" if paused else (metadata or "Live radio"),
+                    icon="radio", playing=playing, use_station_logo=True)
+
+    # Preserve the existing renderer's public API for older screens/tests.
+    return dict(
+        title=bible_name if bible_playing else station,
+        subtitle=("Tamil Bible" if bible_playing else (metadata or "Now playing")),
+        icon="bible" if bible_playing else ("youtube" if youtube_playing else "radio"),
+        playing=False, use_station_logo=not bible_playing and not youtube_playing,
+    )
+
+
 def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
-                   bible_playing,bible_paused,bible_name,volume,station_data=None,youtube_playing=False,loaded_logo=None,video_status=None):
+                   bible_playing,bible_paused,bible_name,volume,station_data=None,youtube_playing=False,loaded_logo=None,video_status=None,media_snapshot=None):
     """Render native 800x480 screen; no fixed 320px UI stretching."""
     scenic_background(s)
     pygame.draw.rect(s,(0,0,0),(0,0,800,55))
@@ -202,6 +242,10 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
     import datetime, math
     now=datetime.datetime.now()
     active_video = video_status if video_status and video_status.get("playing") else None
+    media = media_display_info(media_snapshot, station, metadata,
+                               bible_playing, bible_name, youtube_playing)
+    if media_snapshot is None:
+        media["playing"] = bool(playing)
     if active_page=="radio" and active_video:
         draw_video_hero(s, font, small, tiny, active_video)
     elif active_page=="radio":
@@ -231,14 +275,8 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
         s.blit(date_label,date_label.get_rect(center=(clock.centerx,245)))
         _text(s,tiny,"HOME  •  QUICK ACCESS",(184,298),MUTED,330)
         _text(s,small,"NOW PLAYING",(593,111),MUTED,177)
-        _text(s,small,
-              (active_video.get("title") or "YouTube video") if active_video else
-              (bible_name if bible_playing else station),
-              (593,156),WHITE,177)
-        _text(s,tiny,
-              ("YouTube · Audio only" if active_video.get("minimized") else "YouTube video")
-              if active_video else ("Bible audio" if bible_playing else (metadata or "Live radio")),
-              (593,205),MUTED,175)
+        _text(s,small,media["title"],(593,156),WHITE,177)
+        _text(s,tiny,media["subtitle"],(593,205),MUTED,175)
         for i,name in enumerate(CARDS):
             rect=CARD_RECTS[name]
             _card(s,rect,12)
@@ -246,19 +284,13 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
             _text(s,small,name.title(),(rect.x+42,rect.y+10),WHITE,100)
     _glow_card(s,MINI,(17,17,17),(65,65,65),16)
     
-    if active_video or bible_playing or youtube_playing:
-        _icon(s,"youtube" if active_video else ("bible" if bible_playing else "youtube"),
-              pygame.Rect(166,410,43,43),29,WHITE)
-    else:
+    if media["use_station_logo"]:
         _station_art(s,pygame.Rect(166,410,43,43),station_data)
-    _text(s,small,(active_video.get("title") or "YouTube video") if active_video
-          else (bible_name if bible_playing else station),(218,410),WHITE,385)
-    _text(s,tiny,
-          ("Paused" if active_video.get("paused") else
-           ("YouTube · Audio only" if active_video.get("minimized") else "YouTube video"))
-          if active_video else ("Tamil Bible" if bible_playing else (metadata or "Now playing")),
-          (218,436),MUTED,385)
-    for rect,icon in ((MINI_PREV,"prev"),(MINI_PAUSE,"pause" if playing else "play"),(MINI_NEXT,"next")):
+    else:
+        _icon(s,media["icon"],pygame.Rect(166,410,43,43),29,WHITE)
+    _text(s,small,media["title"],(218,410),WHITE,385)
+    _text(s,tiny,media["subtitle"],(218,436),MUTED,385)
+    for rect,icon in ((MINI_PREV,"prev"),(MINI_PAUSE,"pause" if media["playing"] else "play"),(MINI_NEXT,"next")):
         _icon(s,icon,rect,25,WHITE)
     return True
 
@@ -275,7 +307,7 @@ def hit(pos):
     if VOLUME.inflate(0,26).collidepoint(pos):return ("volume",max(0,min(100,round((pos[0]-VOLUME.x)*100/VOLUME.width))))
     return None
 
-def draw_shell(s,font,small,tiny,active_page,station,metadata,playing,bible_playing,bible_name,station_data=None,youtube_playing=False,video_status=None):
+def draw_shell(s,font,small,tiny,active_page,station,metadata,playing,bible_playing,bible_name,station_data=None,youtube_playing=False,video_status=None,media_snapshot=None):
     """Persistent top bar, left navigation, and bottom mini-player."""
     scenic_background(s)
     pygame.draw.rect(s,(0,0,0),(0,0,800,55))
@@ -293,20 +325,17 @@ def draw_shell(s,font,small,tiny,active_page,station,metadata,playing,bible_play
         _text(s,small,name.title(),(rect.x+39,rect.y+8),WHITE,90)
     _glow_card(s,MINI,(17,17,17),(65,65,65),16)
 
-    active_video = video_status if video_status and video_status.get("playing") else None
-    if active_video or bible_playing or youtube_playing:
-        _icon(s,"youtube" if active_video else ("bible" if bible_playing else "youtube"),
-              pygame.Rect(166,410,43,43),28,WHITE)
-    else:
+    media = media_display_info(media_snapshot, station, metadata,
+                               bible_playing, bible_name, youtube_playing)
+    if media_snapshot is None:
+        media["playing"] = bool(playing)
+    if media["use_station_logo"]:
         _station_art(s,pygame.Rect(166,410,43,43),station_data)
-    _text(s,small,(active_video.get("title") or "YouTube video") if active_video
-          else (bible_name if bible_playing else station),(218,410),WHITE,380)
-    _text(s,tiny,
-          ("Paused" if active_video.get("paused") else
-           ("YouTube · Audio only" if active_video.get("minimized") else "YouTube video"))
-          if active_video else ("Tamil Bible" if bible_playing else (metadata or "Now playing")),
-          (218,436),MUTED,380)
-    for rect,icon in ((MINI_PREV,"prev"),(MINI_PAUSE,"pause" if playing else "play"),(MINI_NEXT,"next")):
+    else:
+        _icon(s,media["icon"],pygame.Rect(166,410,43,43),28,WHITE)
+    _text(s,small,media["title"],(218,410),WHITE,380)
+    _text(s,tiny,media["subtitle"],(218,436),MUTED,380)
+    for rect,icon in ((MINI_PREV,"prev"),(MINI_PAUSE,"pause" if media["playing"] else "play"),(MINI_NEXT,"next")):
         _icon(s,icon,rect,25,WHITE)
 
 # Unified minimized-mpv transport panel, shared by every PiRadio page.
