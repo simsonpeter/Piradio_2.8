@@ -83,7 +83,7 @@ def resolve_media_snapshot(
             paused=paused,
             position=position,
             duration=duration,
-            seekable=duration > 0,
+            seekable=duration > 0 and bool(video_status.get("seekable", True)),
             minimized=bool(video_status.get("minimized", False)),
             volume=level,
             station=station_index,
