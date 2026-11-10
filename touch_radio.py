@@ -7959,26 +7959,17 @@ while True:
             video_hit = video_mini_hit(event.pos, current_video_visual_status() or {})
             if video_hit is not None:
                 action, value = video_hit
-                if action == "seek_relative":
-                    youtube_video.seek(value)
-                elif action == "seek":
-                    youtube_video.seek_absolute(value)
-                elif action == "pause":
-                    youtube_video.pause()
-                elif action == "restore":
-                    youtube_video.restore_video()
-                elif action == "stop":
-                    youtube_video.stop()
+                if action != "consume":
+                    control_active_media("toggle" if action == "pause" else action, value,
+                                         mpv_only=True)
                 touch_consumed = False
                 continue
         if event.type == pygame.MOUSEBUTTONDOWN and youtube_video.is_playing():
             hero_action = video_hero_hit(event.pos, video_status_cache, active_page)
             if hero_action is not None:
                 action, value = hero_action
-                if action == "seek":
-                    youtube_video.seek_absolute(value)
-                elif action == "restore":
-                    youtube_video.restore_video()
+                if action != "consume":
+                    control_active_media(action, value, mpv_only=True)
                 touch_consumed = False
                 continue
         # The owner explicitly opens pairing on the physical 7-inch screen.
@@ -8004,10 +7995,9 @@ while True:
                                            "FAVORITES":"favorites","CLOCK":"clock",
                                            "WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu")
                         elif kind == "open_player" and youtube_video.is_playing():
-                            youtube_video.restore_video()
+                            control_active_media("restore", mpv_only=True)
                         elif kind == "audio":
-                            if value == "pause": toggle_active_playback()
-                            else: skip_playback(-1 if value == "prev" else 1)
+                            control_active_media("toggle" if value == "pause" else value)
                 touch_consumed = False
             continue
         if active_page not in ("menu", "radio") and event.type == pygame.MOUSEBUTTONDOWN:
@@ -8015,7 +8005,7 @@ while True:
             if shell_action:
                 kind, value = shell_action
                 if kind == "open_player" and youtube_video.is_playing():
-                    youtube_video.restore_video()
+                    control_active_media("restore", mpv_only=True)
                     continue
                 if kind == "open_player":
                     active_page = "bible" if bible_player.playing else ("youtube_player" if youtube_player_available() else "radio")
@@ -8023,14 +8013,8 @@ while True:
                     active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
                                    "CLOCK":"clock","WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu")
-                elif value == "pause":
-                    toggle_active_playback()
-                elif youtube_video.is_playing():
-                    youtube_video.seek(-10 if value == "prev" else 10)
-                elif bible_player.playing:
-                    bible_player.shift(-1 if value=="prev" else 1,player.stop)
-                else:
-                    skip_playback(-1 if value=="prev" else 1)
+                elif kind == "audio":
+                    control_active_media("toggle" if value == "pause" else value)
                 continue
         if active_page == "youtube_player":
             if event.type == pygame.MOUSEBUTTONDOWN:
@@ -8046,31 +8030,21 @@ while True:
                         else:
                             start_fullscreen_youtube_video()
                     elif kind == "pause":
-                        if youtube_video.is_playing():
-                            youtube_video.pause()
-                        elif current_youtube_id():
-                            player.pause()
+                        control_active_media("toggle")
                     elif kind in ("prev", "next"):
                         step = -1 if kind == "prev" else 1
                         if youtube_video.is_playing():
-                            youtube_video.seek(step * 10)
+                            control_active_media("next" if step > 0 else "prev", mpv_only=True)
                         elif not continue_youtube_queue(step, user=True):
                             youtube_touch_status = "No other YouTube result in the queue"
                     elif kind == "stop":
-                        if youtube_video.is_playing():
-                            youtube_video.stop()
-                        else:
-                            player.stop()
+                        control_active_media("stop")
                         active_page = "youtube"
                     elif kind == "seek":
-                        if youtube_video.is_playing():
-                            youtube_video.seek_absolute(value)
-                        else:
-                            try:
-                                if player.is_seekable() and player.get_length() > 0:
-                                    player.set_time(int(value * 1000))
-                            except Exception as error:
-                                youtube_touch_status = str(error)[:70]
+                        try:
+                            control_active_media("seek", value)
+                        except (ValueError, TypeError) as error:
+                            youtube_touch_status = str(error)[:70]
                 touch_consumed = False
             # No click-through into legacy portrait controls.
             continue
@@ -8102,8 +8076,8 @@ while True:
                     # A phone-started video can remain audio-only behind any
                     # PiRadio page. Transport must target MPV, not idle VLC.
                     if youtube_video.is_playing():
-                        if value == "pause": youtube_video.pause()
-                        else: youtube_video.seek(-10 if value == "prev" else 10)
+                        control_active_media("toggle" if value == "pause" else value,
+                                             mpv_only=True)
                     elif active_page == "radio":
                         if value == "pause":
                             if bible_player.playing:
