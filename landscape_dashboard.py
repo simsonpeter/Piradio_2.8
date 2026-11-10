@@ -287,7 +287,7 @@ def draw_shell(s,font,small,tiny,active_page,station,metadata,playing,bible_play
         rect=NAV_RECTS[name]
         target={"HOME":"menu","RADIO":"radio","BIBLE":"bible","YOUTUBE":"youtube",
                 "FAVORITES":"favorites","CLOCK":"clock","WEATHER":"forecast","SETTINGS":"settings"}[name]
-        selected=active_page==target
+        selected=(active_page==target or (name=="YOUTUBE" and active_page=="youtube_player"))
         _glow_card(s,rect,(36,36,36) if selected else (12,12,12),(125,125,125) if selected else (48,48,48),12)
         _icon(s,icon,pygame.Rect(rect.x+7,rect.y+5,28,28),20,WHITE)
         _text(s,small,name.title(),(rect.x+39,rect.y+8),WHITE,90)
