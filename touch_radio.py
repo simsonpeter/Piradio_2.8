@@ -15,6 +15,11 @@ from landscape_cast import (CAST_BUTTON, RENEW_BUTTON, CLOSE_BUTTON,
                             draw_cast_button, draw_cast_page)
 from smart_photo_frame import (PhotoFrameLibrary, PhotoFrameRenderer,
                                FRAME_BUTTON, register_frame_routes)
+from landscape_immersive import (
+    MENU_BUTTON, SWIPE_START_Y, SWIPE_MIN_DISTANCE, to_source,
+    dock_hit, layout as immersive_layout, draw_topbar as immersive_topbar,
+    draw_dock as immersive_draw_dock,
+)
 from landscape_youtube_player import (draw as draw_youtube_player,
                                       hit as youtube_player_hit)
 from ios_ipod_ui import (draw_home, draw_player_frame, draw_mini_player,
@@ -7410,6 +7415,8 @@ def fetch_weather_background(coords, url):
 
 # Idle time begins when the 7-inch app is ready, not while it is booting.
 last_interaction_time = time.time()
+immersive_dock_open = False
+immersive_swipe_start = None
 
 while True:
     now = time.time()
@@ -7765,6 +7772,43 @@ while True:
             continue
         elif event.type == pygame.MOUSEMOTION and any(getattr(event, "buttons", ())):
             last_interaction_time = now
+
+        # Immersive dock handles menu presses and bottom-edge swipe gestures.
+        # All ordinary content touches are mapped to legacy native geometry,
+        # preserving music, Bible, YouTube and weather touch behaviour.
+        if active_page != "photo_frame" and event.type in (
+                pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
+            actual_pos = event.pos
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if MENU_BUTTON.collidepoint(actual_pos):
+                    immersive_dock_open = not immersive_dock_open
+                    last_interaction_time = now
+                    continue
+                if immersive_dock_open:
+                    destination = dock_hit(actual_pos)
+                    if destination and destination != "dismiss":
+                        active_page = destination
+                        youtube_keyboard_open = False
+                        last_interaction_time = now
+                    if destination:
+                        immersive_dock_open = False
+                    continue
+                if actual_pos[1] >= SWIPE_START_Y:
+                    immersive_swipe_start = actual_pos
+                    continue
+            elif event.type == pygame.MOUSEBUTTONUP and immersive_swipe_start is not None:
+                if immersive_swipe_start[1] - actual_pos[1] >= SWIPE_MIN_DISTANCE:
+                    immersive_dock_open = True
+                    last_interaction_time = now
+                immersive_swipe_start = None
+                continue
+            elif event.type == pygame.MOUSEMOTION and immersive_swipe_start is not None:
+                continue
+            if immersive_dock_open:
+                continue
+            if 65 <= actual_pos[1] < 465:
+                event = pygame.event.Event(
+                    event.type, {**event.dict, "pos": to_source(actual_pos)})
 
         # Full-screen Photo Frame receives all touches before the sidebar,
         # MPV mini-player, Guest Cast, or underlying radio controls.
@@ -8539,16 +8583,6 @@ while True:
             landscape_display.blit(content,(365,73))
     if video_status_cache.get("playing") and video_status_cache.get("minimized"):
         draw_video_mini(landscape_display, f_lg, f_sm, f_tiny, video_status_cache)
-    # Top bar shortcuts to guest casting and the Smart Photo Frame.
-    draw_cast_button(landscape_display, f_sm, active_page == "cast")
-    frame_shortcut_fill = (33, 87, 93) if active_page == "photo_frame" else (28, 28, 28)
-    pygame.draw.rect(landscape_display, frame_shortcut_fill,
-                     FRAME_BUTTON, border_radius=11)
-    pygame.draw.rect(landscape_display, (78, 78, 78), FRAME_BUTTON,
-                     1, border_radius=11)
-    photo_label = f_sm.render("PHOTO", True, (246,246,246))
-    landscape_display.blit(photo_label,
-                           photo_label.get_rect(center=FRAME_BUTTON.center))
     # Draw OVER the native landscape page, not on the older 320x480 surface.
     if saver_active and not youtube_video.is_playing():
         if photo_frame_library.options["auto_idle"] and photo_frame_renderer.photos:
@@ -8581,5 +8615,21 @@ while True:
             playing=screensaver_playing_label(),
             url=f"http://{current_ip}:{web_port}/frame",
         )
+    # Show the original 7-inch panels without the old persistent sidebar.
+    # Photo Frame and ambient clock keep their existing full-screen views.
+    if not saver_active and active_page != "photo_frame":
+        immersive_layout(landscape_display)
+        immersive_topbar(landscape_display, f_lg, f_sm, f_tiny,
+                         active_page, immersive_dock_open)
+        draw_cast_button(landscape_display, f_sm, active_page == "cast")
+        pygame.draw.rect(landscape_display, (28, 28, 28),
+                         FRAME_BUTTON, border_radius=11)
+        pygame.draw.rect(landscape_display, (78, 78, 78), FRAME_BUTTON,
+                         1, border_radius=11)
+        photo_label = f_sm.render("PHOTO", True, (246, 246, 246))
+        landscape_display.blit(photo_label,
+                               photo_label.get_rect(center=FRAME_BUTTON.center))
+        if immersive_dock_open:
+            immersive_draw_dock(landscape_display, f_lg, f_sm, f_tiny, active_page)
     pygame.display.flip()
     time.sleep(0.05)
