@@ -22,7 +22,7 @@ mkdir -p "${BIN_DIR}" "${APP_DIR}"
 
 # Put a stable command on the user's PATH, even if the checkout changes.
 # %q preserves spaces and special characters in repository paths.
-printf '#!/usr/bin/env bash\nexec %q %q "\$@"\n' \
+printf '#!/usr/bin/env bash\nexec %q %q "$@"\n' \
     '/usr/bin/bash' "${REPO_DIR}/boot/piradio-open" \
     > "${BIN_DIR}/piradio7"
 chmod 0755 "${BIN_DIR}/piradio7"
