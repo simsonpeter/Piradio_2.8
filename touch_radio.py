@@ -7356,6 +7356,7 @@ while True:
         not saver_active
         and not wifi_setup_required
         and not show_qr
+        and active_page != "cast"  # keep the pairing PIN and QR visible for guests
         and now - last_interaction_time >= SCREENSAVER_TIMEOUT_SECONDS
     ):
         saver_active = True
