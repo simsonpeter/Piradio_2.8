@@ -7787,6 +7787,15 @@ while True:
                 if immersive_dock_open:
                     destination = dock_hit(actual_pos)
                     if destination and destination != "dismiss":
+                        if destination == "photo_frame":
+                            # A dock selection must initialize the slideshow
+                            # and PIN just like tapping the PHOTO toolbar button.
+                            photo_frame_return_page = active_page
+                            photo_frame_renderer.activate(now)
+                            saver_active = False
+                        elif destination == "cast":
+                            # Guest Cast also needs explicit on-screen pairing.
+                            cast_session.open()
                         active_page = destination
                         youtube_keyboard_open = False
                         last_interaction_time = now
