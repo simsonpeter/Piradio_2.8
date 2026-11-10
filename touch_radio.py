@@ -10,6 +10,9 @@ from tamil_bible import BiblePlayer
 from fa_icons import draw_icon
 from weather_service import fetch_weather
 from landscape_screensaver import draw as draw_landscape_screensaver
+from piradio_guest_cast import GuestCastSession, register_cast_routes
+from landscape_cast import (CAST_BUTTON, RENEW_BUTTON, CLOSE_BUTTON,
+                            draw_cast_button, draw_cast_page)
 from ios_ipod_ui import (draw_home, draw_player_frame, draw_mini_player,
     draw_youtube_skin, raised_card, MINI_BAR, MINI_ACTION, THEMES as IOS_THEMES, load_mode, toggle_mode, TOGGLE)
 
@@ -1009,6 +1012,26 @@ last_interaction_time = time.time()
 
 # --- WEB REMOTE APP ---
 app = Flask(__name__)
+cast_session = GuestCastSession()
+web_port = 8080
+
+def _stop_audio_for_guest():
+    # The new guest receiver reuses MPV, never creates a second audio player.
+    existing_radio = globals().get("player")
+    if existing_radio is not None:
+        existing_radio.stop()
+    bible = globals().get("bible_player")
+    if bible is not None:
+        bible.stop()
+
+register_cast_routes(
+    app, cast_session,
+    get_backend=lambda: globals().get("youtube_video"),
+    stop_existing_audio=_stop_audio_for_guest,
+    get_pi_ip=lambda: get_local_ip(),
+    get_volume=lambda: globals().get("vol_level", 50),
+    set_volume=lambda level: apply_live_volume(level),
+)
 
 @app.after_request
 def add_cors_headers(response):
@@ -4431,13 +4454,19 @@ def serve_static(filename):
     return "Not found", 404
 
 def run_flask():
+    global web_port
     try:
-        app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False, threaded=True)
-    except:
+        web_port = 8080
+        app.run(host='0.0.0.0', port=web_port,
+                debug=False, use_reloader=False, threaded=True)
+    except Exception as error:
+        print(f"PiRadio port 8080 unavailable: {error}")
         try:
-            app.run(host='0.0.0.0', port=8081, debug=False, use_reloader=False, threaded=True)
-        except:
-            pass
+            web_port = 8081
+            app.run(host='0.0.0.0', port=web_port,
+                    debug=False, use_reloader=False, threaded=True)
+        except Exception as fallback:
+            print(f"PiRadio web server failed: {fallback}")
 
 threading.Thread(target=run_flask, daemon=True).start()
 
@@ -7662,6 +7691,35 @@ while True:
                     youtube_video.restore_video()
                 touch_consumed = False
                 continue
+        # The owner explicitly opens pairing on the physical 7-inch screen.
+        if event.type == pygame.MOUSEBUTTONDOWN and CAST_BUTTON.collidepoint(event.pos):
+            cast_session.open()
+            active_page = "cast"
+            touch_consumed = False
+            continue
+        if active_page == "cast":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if RENEW_BUTTON.collidepoint(event.pos):
+                    cast_session.open()
+                elif CLOSE_BUTTON.collidepoint(event.pos):
+                    cast_session.close()
+                    active_page = "menu"
+                else:
+                    shell_action = shell_hit(event.pos)
+                    if shell_action:
+                        kind, value = shell_action
+                        if kind == "page":
+                            active_page = {"HOME":"menu","RADIO":"radio",
+                                           "BIBLE":"bible","YOUTUBE":"youtube",
+                                           "FAVORITES":"favorites","CLOCK":"clock",
+                                           "WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu")
+                        elif kind == "open_player" and youtube_video.is_playing():
+                            youtube_video.restore_video()
+                        elif kind == "audio":
+                            if value == "pause": toggle_active_playback()
+                            else: skip_playback(-1 if value == "prev" else 1)
+                touch_consumed = False
+            continue
         if active_page not in ("menu", "radio") and event.type == pygame.MOUSEBUTTONDOWN:
             shell_action = shell_hit(event.pos)
             if shell_action:
@@ -8270,6 +8328,10 @@ while True:
                    video_status=active_video_status)
         if active_page == "bible":
             draw_landscape_bible(landscape_display,bible_player,f_lg,f_sm,f_tiny)
+        elif active_page == "cast":
+            guest_url = f"http://{current_ip}:{web_port}/cast"
+            draw_cast_page(landscape_display, f_lg, f_sm, f_tiny,
+                           cast_session.screen_state(), guest_url)
         elif active_page in ("favorites","clock","forecast","settings","bluetooth","youtube") and not (active_page=="youtube" and youtube_keyboard_open):
             draw_landscape_page(landscape_display,active_page,f_lg,f_sm,f_tiny,
                                 station=current_station,temp=current_temp if weather_available else None,
@@ -8297,6 +8359,8 @@ while True:
             landscape_display.blit(content,(365,73))
     if video_status_cache.get("playing") and video_status_cache.get("minimized"):
         draw_video_mini(landscape_display, f_lg, f_sm, f_tiny, video_status_cache)
+    # Dedicated Cast launcher is visible from all PiRadio pages.
+    draw_cast_button(landscape_display, f_sm, active_page == "cast")
     # Draw OVER the native landscape page, not on the older 320x480 surface.
     if saver_active and not youtube_video.is_playing():
         draw_landscape_screensaver(
