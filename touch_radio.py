@@ -3401,6 +3401,10 @@ HTML_TEMPLATE = """
                 if (subtitle) subtitle.textContent = ({
                     youtube_video: 'YouTube video on Raspberry Pi',
                     youtube_audio: 'YouTube audio on Raspberry Pi',
+                    guest_video: 'PiRadio Cast · Guest video',
+                    guest_audio: 'PiRadio Cast · Guest music',
+                    guest_photos: 'PiRadio Cast · Guest photos',
+                    screen_mirror: 'PiRadio Cast · Phone screen',
                     bible: 'Tamil Bible',
                     radio: 'Live radio'
                 })[data.source] || 'PiRadio';
@@ -3797,7 +3801,7 @@ def api_listen():
 def get_status():
     if youtube_video.is_playing():
         video = youtube_video.playback_status()
-        source = "youtube_video"
+        source = video.get("source") or "youtube_video"
         is_playing = not video.get("paused", False)
         is_paused = bool(video.get("paused", False))
     elif bible_player.playing:
