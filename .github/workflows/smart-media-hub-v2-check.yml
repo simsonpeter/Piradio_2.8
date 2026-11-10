@@ -7,6 +7,9 @@ on:
     paths:
       - 'media_session.py'
       - 'media_transport.py'
+      - 'video_cinema.py'
+      - 'youtube_video_backend.py'
+      - 'tests/test_video_cinema.py'
       - 'youtube_video_backend.py'
       - 'tests/test_media_transport.py'
       - 'touch_radio.py'
@@ -16,6 +19,9 @@ on:
     paths:
       - 'media_session.py'
       - 'media_transport.py'
+      - 'video_cinema.py'
+      - 'youtube_video_backend.py'
+      - 'tests/test_video_cinema.py'
       - 'youtube_video_backend.py'
       - 'tests/test_media_transport.py'
       - 'touch_radio.py'
@@ -32,11 +38,25 @@ jobs:
         with:
           python-version: '3.12'
       - name: Check Python syntax without Raspberry Pi hardware
-        run: python -m py_compile media_session.py media_transport.py youtube_video_backend.py touch_radio.py
+        run: python -m py_compile media_session.py media_transport.py video_cinema.py youtube_video_backend.py touch_radio.py
       - name: Test active media source priority
         run: python -m unittest discover -s tests -p 'test_media_session.py' -v
       - name: Validate unified transport command planning
         run: python -m unittest discover -s tests -p 'test_media_transport.py' -v
+      - name: Test Cinema timeline, buffering and remote state
+        run: python -m unittest discover -s tests -p 'test_video_cinema.py' -v
+      - name: Validate phone Cinema JavaScript syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('touch_radio.py').read_text()
+          opening = '<script>' + chr(10) + 'let piVideoSeeking=false;'
+          assert opening in source
+          source_after = source.split(opening, 1)[1]
+          cinema_script = 'let piVideoSeeking=false;' + source_after.split('</script>', 1)[0]
+          Path('/tmp/piradio-cinema-remote.js').write_text(cinema_script)
+          PY
+          node --check /tmp/piradio-cinema-remote.js
       - name: Verify backwards-compatible remote routes
         run: |
           python - <<'PY'
