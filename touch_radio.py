@@ -3709,9 +3709,10 @@ def smart_remote_v2_favorites():
 @app.route('/api/remote-v2/transport', methods=['POST'])
 def smart_remote_v2_transport():
     data = request.get_json(silent=True) or {}
-    if not isinstance(data, dict) or data.get("action") != "stop":
+    if not isinstance(data, dict) or data.get("action") not in (
+            "toggle", "next", "prev", "stop"):
         return jsonify({"success": False, "error": "Unsupported action"}), 400
-    return enqueue_remote_v2_command("transport", {"action": "stop"})
+    return enqueue_remote_v2_command("transport", {"action": data["action"]})
 
 
 @app.route('/')
@@ -7741,8 +7742,17 @@ while True:
                 elif remote_action_name == "play":
                     current_idx = station_index
                     play()
-            elif remote_kind == "transport" and remote_action_name == "stop":
-                control_active_media("stop")
+            elif remote_kind == "transport":
+                if remote_action_name == "toggle":
+                    # A stopped station must start, not pause an idle VLC player.
+                    if (not youtube_video.is_playing()
+                            and not bible_player.playing
+                            and player.get_state() not in (vlc.State.Playing, vlc.State.Paused)):
+                        play()
+                    else:
+                        control_active_media("toggle")
+                else:
+                    control_active_media(remote_action_name)
         except Exception as remote_error:
             print("Smart Remote 2.0 command failed:", remote_error)
     # Phone gallery controls only enqueue requests. Apply the queued
