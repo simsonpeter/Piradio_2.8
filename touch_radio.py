@@ -13,6 +13,8 @@ from landscape_screensaver import draw as draw_landscape_screensaver
 from piradio_guest_cast import GuestCastSession, register_cast_routes
 from landscape_cast import (CAST_BUTTON, RENEW_BUTTON, CLOSE_BUTTON,
                             draw_cast_button, draw_cast_page)
+from landscape_youtube_player import (draw as draw_youtube_player,
+                                      hit as youtube_player_hit)
 from ios_ipod_ui import (draw_home, draw_player_frame, draw_mini_player,
     draw_youtube_skin, raised_card, MINI_BAR, MINI_ACTION, THEMES as IOS_THEMES, load_mode, toggle_mode, TOGGLE)
 
@@ -4382,6 +4384,8 @@ def youtube_play():
             return jsonify({'success': False, 'error': err}), 502
         remember_youtube_queue(video_id, title)
         play_youtube_station(video_id, title, audio_url)
+        global youtube_player_open_requested
+        youtube_player_open_requested = True
         return jsonify({'success': True, 'message': f'Playing: {title}'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -4921,6 +4925,61 @@ import landscape_pages
 from youtube_video_backend import YouTubeVideoBackend
 youtube_video = YouTubeVideoBackend()
 youtube_video_id = None
+youtube_player_open_requested = False
+
+def youtube_player_available():
+    """Show full player for current YouTube VLC stream or YouTube MPV session."""
+    if youtube_video.is_playing():
+        return getattr(youtube_video, "source_type", "") == "youtube_video"
+    if not current_youtube_id():
+        return False
+    try:
+        return player.get_state() in (
+            vlc.State.Opening, vlc.State.Buffering, vlc.State.Playing,
+            vlc.State.Paused
+        )
+    except Exception:
+        return False
+
+
+def youtube_player_state():
+    """One read-only VLC / cached MPV snapshot for the 800x480 player."""
+    if youtube_video.is_playing() and getattr(youtube_video, "source_type", "") == "youtube_video":
+        state = video_status_cache if video_status_cache.get("playing") else {}
+        position = float(state.get("position") or 0)
+        duration = float(state.get("duration") or 0)
+        return {
+            "mode": "video",
+            "title": state.get("title") or youtube_video.title or "YouTube video",
+            "channel": "YouTube",
+            "playing": not bool(state.get("paused")), "paused": bool(state.get("paused")),
+            "position": position, "duration": duration, "seekable": duration > 0,
+            "queue_total": len(youtube_queue),
+            "queue_position": youtube_queue_index + 1,
+            "video_available": True,
+        }
+    video_id = current_youtube_id()
+    station_name = stations[current_idx].get("name", "YouTube audio") if stations else "YouTube audio"
+    entry = next((item for item in youtube_queue if item.get("id") == video_id), None)
+    name = (entry or {}).get("title") or station_name.removeprefix("YT: ")
+    channel = (entry or {}).get("uploader") or "YouTube Music"
+    try:
+        state = player.get_state()
+        position = max(0, player.get_time()) / 1000.0
+        duration = max(0, player.get_length()) / 1000.0
+        seekable = duration > 0 and bool(player.is_seekable())
+    except Exception:
+        state, position, duration, seekable = None, 0.0, 0.0, False
+    return {
+        "mode": "audio", "title": name, "channel": channel,
+        "playing": state in (vlc.State.Playing, vlc.State.Buffering, vlc.State.Opening),
+        "paused": state == vlc.State.Paused,
+        "position": position, "duration": duration, "seekable": seekable,
+        "queue_total": len(youtube_queue), "queue_position": youtube_queue_index + 1,
+        "video_available": bool(video_id),
+    }
+
+
 video_status_cache = {"playing": False, "minimized": False}
 video_status_pending = None
 video_status_loading = False
@@ -7198,7 +7257,7 @@ def apply_youtube_touch_result():
         play_youtube_station(video_id, title, audio_url)
         youtube_touch_status = youtube_queue_status()
         if not auto:
-            active_page = "radio"
+            active_page = "youtube_player"
     elif kind == 'error':
         youtube_touch_status = str(pending[1])[:80]
         auto = pending[2] if len(pending) > 2 else False
@@ -7733,7 +7792,7 @@ while True:
                     youtube_video.restore_video()
                     continue
                 if kind == "open_player":
-                    active_page = "bible" if bible_player.playing else ("youtube" if stations and stations[current_idx].get("youtube_id") else "radio")
+                    active_page = "bible" if bible_player.playing else ("youtube_player" if youtube_player_available() else "radio")
                 elif kind == "page":
                     active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
@@ -7747,6 +7806,48 @@ while True:
                 else:
                     skip_playback(-1 if value=="prev" else 1)
                 continue
+        if active_page == "youtube_player":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                action = youtube_player_hit(event.pos, youtube_player_state())
+                if action:
+                    kind, value = action
+                    if kind == "search":
+                        active_page = "youtube"
+                        youtube_keyboard_open = False
+                    elif kind == "video":
+                        if youtube_video.is_playing():
+                            youtube_video.restore_video()
+                        else:
+                            start_fullscreen_youtube_video()
+                    elif kind == "pause":
+                        if youtube_video.is_playing():
+                            youtube_video.pause()
+                        elif current_youtube_id():
+                            player.pause()
+                    elif kind in ("prev", "next"):
+                        step = -1 if kind == "prev" else 1
+                        if youtube_video.is_playing():
+                            youtube_video.seek(step * 10)
+                        elif not continue_youtube_queue(step, user=True):
+                            youtube_touch_status = "No other YouTube result in the queue"
+                    elif kind == "stop":
+                        if youtube_video.is_playing():
+                            youtube_video.stop()
+                        else:
+                            player.stop()
+                        active_page = "youtube"
+                    elif kind == "seek":
+                        if youtube_video.is_playing():
+                            youtube_video.seek_absolute(value)
+                        else:
+                            try:
+                                if player.is_seekable() and player.get_length() > 0:
+                                    player.set_time(int(value * 1000))
+                            except Exception as error:
+                                youtube_touch_status = str(error)[:70]
+                touch_consumed = False
+            # No click-through into legacy portrait controls.
+            continue
         if active_page == "bible" and event.type == pygame.MOUSEBUTTONDOWN:
             press_time = time.monotonic()
             if press_time - last_touch_down_time >= 0.14:
@@ -7766,7 +7867,7 @@ while True:
             if action:
                 kind, value = action
                 if kind == "open_player":
-                    active_page = "bible" if bible_player.playing else ("youtube" if stations and stations[current_idx].get("youtube_id") else "radio")
+                    active_page = "bible" if bible_player.playing else ("youtube_player" if youtube_player_available() else "radio")
                 elif kind == "page":
                     active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
@@ -7806,6 +7907,10 @@ while True:
         if native_page and event.type in (
                 pygame.MOUSEBUTTONDOWN,pygame.MOUSEBUTTONUP,pygame.MOUSEMOTION):
             target=landscape_page_hit(event.pos)
+            if target == ("youtube_player",):
+                if event.type == pygame.MOUSEBUTTONDOWN and youtube_player_available():
+                    active_page = "youtube_player"
+                continue
             if target == ("youtube_video",):
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     if youtube_video.is_playing():
@@ -8333,6 +8438,11 @@ while True:
                    video_status=active_video_status)
         if active_page == "bible":
             draw_landscape_bible(landscape_display,bible_player,f_lg,f_sm,f_tiny)
+        elif active_page == "youtube_player":
+            player_snapshot = youtube_player_state()
+            thumbnail = logo if player_snapshot["mode"] == "audio" and current_youtube_id() else None
+            draw_youtube_player(landscape_display, f_lg, f_sm, f_tiny,
+                                player_snapshot, thumbnail)
         elif active_page == "cast":
             guest_url = f"http://{current_ip}:{web_port}/cast"
             draw_cast_page(landscape_display, f_lg, f_sm, f_tiny,
@@ -8351,6 +8461,7 @@ while True:
                                 presets=YOUTUBE_PRESETS,status=youtube_touch_status,
                                 youtube_results=youtube_results_cache,youtube_offset=youtube_touch_offset,
                                 video_available=bool(current_youtube_id()),
+                                player_available=youtube_player_available(),
                                 devices=touch_bluetooth_devices,bt_status=touch_bluetooth_status,
                                 busy=touch_bluetooth_busy)
         elif active_page == "youtube" and youtube_keyboard_open:
