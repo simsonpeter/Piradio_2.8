@@ -5023,6 +5023,34 @@ def youtube_player_state():
 
 
 video_status_cache = {"playing": False, "minimized": False}
+
+
+def current_video_visual_status():
+    """Nonblocking MPV state for Pygame, using the existing 1-second IPC cache.
+
+    The backend process is checked first so stale cached playback cannot
+    appear after Stop. A new MPV session gets immediate correct title/source
+    while its next IPC snapshot is still pending.
+    """
+    if not youtube_video.is_playing():
+        return None
+    status = dict(video_status_cache)
+    if (not status.get("playing")
+            or status.get("source") != youtube_video.source_type
+            or status.get("title") != youtube_video.title):
+        return {
+            "playing": True,
+            "paused": False,
+            "position": 0,
+            "duration": 0,
+            "minimized": bool(youtube_video.minimized),
+            "source": youtube_video.source_type,
+            "title": youtube_video.title or "PiRadio Media",
+        }
+    status["playing"] = True
+    return status
+
+
 video_status_pending = None
 video_status_loading = False
 video_status_last_poll = 0
@@ -7877,7 +7905,7 @@ while True:
         # Minimized MPV keeps its own controls over every PiRadio page.
         # Consume the touch before the underlying VLC mini-player receives it.
         if event.type == pygame.MOUSEBUTTONDOWN and youtube_video.is_playing():
-            video_hit = video_mini_hit(event.pos, video_status_cache)
+            video_hit = video_mini_hit(event.pos, current_video_visual_status() or {})
             if video_hit is not None:
                 action, value = video_hit
                 if action == "seek_relative":
@@ -8554,14 +8582,28 @@ while True:
     landscape_display.blit(screen, (0, 0))
     current_station = stations[current_idx].get("name", "TC RADIOS") if stations else "TC RADIOS"
     current_meta = meta_text if meta_text and meta_text != current_station else ""
-    # A minimized YouTube video is the actual now-playing source, not the
-    # previously selected VLC station. Reuse the already-polled IPC snapshot.
-    active_video_status = (
-        video_status_cache if youtube_video.is_playing()
-        and video_status_cache.get("playing") else None
-    )
+    # The touchscreen and phone remote use the same source precedence.
+    # Read already-cached MPV details: no socket or network calls per frame.
+    active_video_status = current_video_visual_status()
+    try:
+        vlc_status = player.get_state()
+        vlc_mode = ("playing" if vlc_status == vlc.State.Playing else
+                    "paused" if vlc_status == vlc.State.Paused else "stopped")
+    except Exception:
+        vlc_mode = "stopped"
+    screen_media = resolve_media_snapshot(
+        video_status=active_video_status,
+        bible_active=bible_player.playing,
+        bible_paused=bible_player.paused,
+        bible_title=f"Tamil Bible - Book {bible_player.book+1} - Chapter {bible_player.chapter}",
+        vlc_state=vlc_mode,
+        vlc_source="youtube_audio" if current_youtube_id() else "radio",
+        vlc_title=current_meta or current_station,
+        volume=vol_level,
+        station=current_idx,
+    ).as_dict()
+    radio_playing = vlc_mode == "playing"
     if active_page in ("menu", "radio"):
-        radio_playing = player.get_state() == vlc.State.Playing
         draw_dashboard(
             landscape_display, f_lg, f_sm, f_tiny, active_page,
             current_station, current_meta,
@@ -8570,19 +8612,20 @@ while True:
             f"Book {bible_player.book+1} - Chapter {bible_player.chapter}",
             vol_level, stations[current_idx] if stations else None,
             bool(stations and stations[current_idx].get("youtube_id")) and not bible_player.playing,
-            loaded_logo=logo, video_status=active_video_status)
+            loaded_logo=logo, video_status=active_video_status,
+            media_snapshot=screen_media)
     else:
         # The shell is consistent on every page. The original page is
         # rendered within the right content area without stretching.
         bible_name = f"Book {bible_player.book+1} - Chapter {bible_player.chapter}"
-        radio_playing = player.get_state() == vlc.State.Playing
         draw_shell(landscape_display,f_lg,f_sm,f_tiny,active_page,
                    current_station,current_meta,
                    (bible_player.playing and not bible_player.paused) if bible_player.playing else radio_playing,
                    bible_player.playing,bible_name,
                    stations[current_idx] if stations else None,
                    bool(stations and stations[current_idx].get("youtube_id")) and not bible_player.playing,
-                   video_status=active_video_status)
+                   video_status=active_video_status,
+                   media_snapshot=screen_media)
         if active_page == "bible":
             draw_landscape_bible(landscape_display,bible_player,f_lg,f_sm,f_tiny)
         elif active_page == "youtube_player":
@@ -8620,8 +8663,8 @@ while True:
             # Keyboard and remaining legacy pages remain functional.
             content=pygame.transform.smoothscale(screen,(210,315))
             landscape_display.blit(content,(365,73))
-    if video_status_cache.get("playing") and video_status_cache.get("minimized"):
-        draw_video_mini(landscape_display, f_lg, f_sm, f_tiny, video_status_cache)
+    if active_video_status and active_video_status.get("minimized"):
+        draw_video_mini(landscape_display, f_lg, f_sm, f_tiny, active_video_status)
     # Draw OVER the native landscape page, not on the older 320x480 surface.
     if saver_active and not youtube_video.is_playing():
         if photo_frame_library.options["auto_idle"] and photo_frame_renderer.photos:
