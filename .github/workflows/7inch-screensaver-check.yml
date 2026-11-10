@@ -86,7 +86,7 @@ jobs:
           assert "video_mini_hit(event.pos, video_status_cache)" in source
           assert "draw_video_mini(landscape_display" in source
           assert "video_backend.seek(10 if step > 0 else -10)" in source
-          assert "source = \"youtube_audio\" if current_youtube_id() else \"radio\"" in source
+          assert "vlc_source=\"youtube_audio\" if current_youtube_id() else \"radio\"" in source
           print("All active-source routing checks passed")
           PY
       - name: Test guest pairing security, casting and RTSP validation
