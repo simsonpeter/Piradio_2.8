@@ -17,6 +17,8 @@ from landscape_youtube_player import (draw as draw_youtube_player,
                                       hit as youtube_player_hit)
 from landscape_immersive import (
     MENU_BUTTON as IMMERSIVE_MENU, NAV_HANDLE as IMMERSIVE_HANDLE,
+    STATIONS_PER_PAGE,
+    radio_station_indices, draw_station_picker, station_picker_hit,
     draw_header as draw_immersive_header, draw_handle as draw_immersive_handle,
     draw_radio as draw_immersive_radio, radio_hit as immersive_radio_hit,
     draw_home as draw_immersive_home, home_hit as immersive_home_hit,
@@ -5520,6 +5522,11 @@ except Exception as error:
 
 base_stations = [station.copy() for station in stations if station.get("url")]
 current_idx = choose_station_index(stations) if stations and stations[0].get("url") else 0
+last_radio_station_url = next(
+    (station.get("url", "") for station in stations
+     if station.get("url") and not station.get("youtube_id")
+     and not station.get("direct_link_id")), ""
+)
 
 FAVORITES_FILE = os.path.expanduser("~/.radio_favorites")
 favorite_indices = []
@@ -5708,6 +5715,7 @@ def update_logo(url):
 
 def play():
     global meta_text, scroll_x, saver_scroll_x, saved_station_url, saved_station_index
+    global last_radio_station_url
     scroll_x = 320
     saver_scroll_x = 320
     if youtube_video.is_playing():
@@ -5735,8 +5743,77 @@ def play():
         saved_station_index = current_idx
         save_playback_state(force=True)
         rebuild_qr_surface()
-    except:
-        pass
+        if not station.get("youtube_id") and not station.get("direct_link_id"):
+            last_radio_station_url = station.get("url") or last_radio_station_url
+        return True
+    except Exception as error:
+        print("PiRadio: could not start selected station:", error)
+        return False
+
+
+def regular_radio_choices():
+    return radio_station_indices(stations, base_stations)
+
+
+def preferred_radio_index():
+    """Always select a TC RADIOS station, not a dynamic YouTube result."""
+    choices = regular_radio_choices()
+    if not choices:
+        return None
+    for idx in choices:
+        if stations[idx].get("url") == last_radio_station_url:
+            return idx
+    if current_idx in choices:
+        return current_idx
+    return choices[0]
+
+
+def select_live_radio(index=None):
+    """Atomic source handover from YouTube MPV/VLC/Bible to TC RADIOS VLC."""
+    global current_idx, last_radio_station_url, youtube_touch_pending
+    global youtube_touch_busy, youtube_player_open_requested
+    global youtube_audio_generation, _youtube_was_playing, _youtube_ended_handled
+    choices = regular_radio_choices()
+    if not choices:
+        print("PiRadio: no TC RADIOS stations available")
+        return False
+    if index is None:
+        index = preferred_radio_index()
+    if index not in choices:
+        return False
+    # An in-flight yt-dlp resolution must not restart YouTube afterward.
+    youtube_audio_generation += 1
+    youtube_touch_pending = None
+    youtube_touch_busy = False
+    youtube_player_open_requested = False
+    _youtube_was_playing = False
+    _youtube_ended_handled = True
+    last_radio_station_url = stations[index].get("url") or ""
+    current_idx = index
+    # play() stops MPV, Bible, and any previous YouTube VLC stream before
+    # starting the selected TC RADIOS URL.
+    return bool(play())
+
+
+def skip_live_radio(direction):
+    """Radio transport never seeks MPV or advances the YouTube queue."""
+    choices = regular_radio_choices()
+    if not choices:
+        return False
+    preferred = preferred_radio_index()
+    index = choices.index(preferred) if preferred in choices else 0
+    return select_live_radio(choices[(index + (1 if direction > 0 else -1)) % len(choices)])
+
+
+def open_live_radio_page():
+    global active_page, radio_station_picker_open
+    active_page = "radio"
+    radio_station_picker_open = False
+    # Selecting RADIO means switching sources, not merely changing the page.
+    if current_idx not in regular_radio_choices() or youtube_video.is_playing() or bible_player.playing:
+        return select_live_radio()
+    return True
+
 
 def apply_github_station_list(loaded):
     global current_idx, base_stations, stations_waiting_for_github
@@ -5822,7 +5899,11 @@ def remember_youtube_queue(video_id, title=""):
 
 def play_youtube_station(video_id, title, audio_url):
     global current_idx, _youtube_play_started_at, _youtube_ended_handled
-    global _youtube_was_playing
+    global _youtube_was_playing, last_radio_station_url
+    if stations and 0 <= current_idx < len(stations):
+        previous = stations[current_idx]
+        if previous.get("url") and not previous.get("youtube_id"):
+            last_radio_station_url = previous.get("url")
     station = {
         'name': f"YT: {str(title)[:40]}",
         'url': audio_url,
@@ -7103,6 +7184,9 @@ youtube_touch_status = "Choose a station or search"
 youtube_touch_busy = False
 youtube_touch_offset = 0
 youtube_touch_pending = None
+youtube_audio_generation = 0
+radio_station_picker_open = False
+radio_station_picker_page = 0
 
 def build_youtube_keys():
     keys = []
@@ -7140,12 +7224,14 @@ def fetch_youtube_search(query):
     except Exception as error:
         youtube_touch_pending = ('results', [], str(error))
 
-def fetch_youtube_audio(video, auto=False):
+def fetch_youtube_audio(video, auto=False, generation=None):
     global youtube_touch_pending
     video_id = str(video.get('id', '')).strip()
     title = video.get('title') or 'YouTube Audio'
     try:
         audio_url, err = youtube_audio_url(video_id)
+        if generation is not None and generation != youtube_audio_generation:
+            return  # Radio was selected while yt-dlp was resolving.
         if audio_url:
             youtube_touch_pending = ('play', video_id, title, audio_url, auto)
         else:
@@ -7153,7 +7239,8 @@ def fetch_youtube_audio(video, auto=False):
                 'error', err or 'Could not extract audio URL', auto, video_id
             )
     except Exception as error:
-        youtube_touch_pending = ('error', str(error), auto, video_id)
+        if generation is None or generation == youtube_audio_generation:
+            youtube_touch_pending = ('error', str(error), auto, video_id)
 
 def begin_youtube_search(query):
     global youtube_touch_busy, youtube_touch_status, youtube_touch_query
@@ -7174,7 +7261,7 @@ def begin_youtube_search(query):
     ).start()
 
 def begin_youtube_play(video, auto=False):
-    global youtube_touch_busy, youtube_touch_status
+    global youtube_touch_busy, youtube_touch_status, youtube_audio_generation
     if youtube_touch_busy or not video.get('id'):
         return False
     if not auto:
@@ -7182,8 +7269,11 @@ def begin_youtube_play(video, auto=False):
         remember_youtube_queue(video.get('id'), video.get('title') or '')
     youtube_touch_busy = True
     youtube_touch_status = "Opening next…" if auto else "Opening audio…"
+    youtube_audio_generation += 1
     threading.Thread(
-        target=fetch_youtube_audio, args=(video, auto), daemon=True
+        target=fetch_youtube_audio,
+        args=(video, auto, youtube_audio_generation),
+        daemon=True,
     ).start()
     return True
 
