@@ -202,18 +202,19 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
     import datetime, math
     now=datetime.datetime.now()
     active_video = video_status if video_status and video_status.get("playing") else None
-    if active_page=="radio" and active_video:
-        draw_video_hero(s, font, small, tiny, active_video)
-    elif active_page=="radio":
+    # RADIO is a dedicated TCRADIOS player. MPV/YouTube metadata stays on
+    # Home and in the actual now-playing mini bar; never replace this hero.
+    if active_page=="radio":
         art=pygame.Rect(163,79,225,265)
         main=pygame.Rect(399,79,384,265)
         _glow_card(s,art,(16,16,16),(58,58,58),20)
         _glow_card(s,main,(16,16,16),(58,58,58),20)
         _station_art(s,pygame.Rect(190,109,170,170),station_data,loaded_logo)
-        _text(s,small,"TC RADIOS",(212,300),WHITE,145)
-        _text(s,tiny,"LIVE RADIO",(422,100),MUTED,175)
+        _text(s,small,"TCRADIOS",(211,300),WHITE,145)
+        _text(s,tiny,"TCRADIOS  /  LIVE RADIO",(422,100),MUTED,335)
         _text(s,font,station,(422,135),WHITE,340)
-        _text(s,small,metadata or "Live streaming",(422,180),MUTED,335)
+        _text(s,small,("Live streaming" if playing else "Tap Play to listen") if not metadata else metadata,
+              (422,180),MUTED,335)
         for rect,icon in ((PREV,"prev"),(PAUSE,"pause" if playing else "play"),(NEXT,"next")):
             _icon(s,icon,rect,30,WHITE)
         pygame.draw.rect(s,(48,48,48),pygame.Rect(420,292,332,12),border_radius=6)
