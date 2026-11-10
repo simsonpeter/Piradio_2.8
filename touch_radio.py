@@ -3672,15 +3672,9 @@ def remote_action(action):
     global current_idx, vol_level
     try:
         if action == 'next':
-            if not youtube_video.is_playing() and bible_player.playing:
-                bible_player.shift(1, player.stop)
-            else:
-                skip_playback(1)
+            control_active_media("next")
         elif action == 'prev':
-            if not youtube_video.is_playing() and bible_player.playing:
-                bible_player.shift(-1, player.stop)
-            else:
-                skip_playback(-1)
+            control_active_media("prev")
         elif action == 'volup':
             apply_live_volume(min(vol_level + 10, 100))
         elif action == 'voldown':
@@ -4452,25 +4446,15 @@ def remote_youtube_video():
                 bible_player.stop()
             youtube_video.start_youtube(video_id, title=data.get('title') or "YouTube video")
             youtube_video.volume(vol_level)
-        elif action in ('seek', 'seek_relative'):
-            if not youtube_video.is_playing(): raise ValueError('No video playing')
-            value = float(data.get('seconds', 0))
-            if not math.isfinite(value): raise ValueError('Invalid seek position')
-            if action == 'seek':
-                youtube_video.seek_absolute(value)
-            else:
-                youtube_video.seek(value)
-        elif action == 'pause':
-            if not youtube_video.is_playing(): raise ValueError('No video playing')
-            youtube_video.pause()
-        elif action == 'minimize':
-            if not youtube_video.is_playing(): raise ValueError('No video playing')
-            youtube_video.minimize_audio()
-        elif action == 'restore':
-            if not youtube_video.is_playing(): raise ValueError('No video playing')
-            youtube_video.restore_video()
-        elif action == 'stop':
-            youtube_video.stop()
+        elif action in ('seek', 'seek_relative', 'pause', 'minimize', 'restore', 'stop'):
+            if not youtube_video.is_playing():
+                if action == 'stop':
+                    return jsonify({'success':True,'action':action})
+                raise ValueError('No video playing')
+            seek_time = data.get('seconds', 0) if action in ('seek', 'seek_relative') else None
+            transport_action = "toggle" if action == "pause" else action
+            if not control_active_media(transport_action, seek_time, mpv_only=True):
+                raise ValueError('Unable to control this media source')
         else:
             return jsonify({'success':False,'error':'Unknown action'}),400
         return jsonify({'success':True,'action':action})
