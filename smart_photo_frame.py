@@ -44,7 +44,7 @@ PHOTO_PAUSE = pygame.Rect(384, 405, 70, 58)
 PHOTO_NEXT = pygame.Rect(465, 409, 63, 50)
 PHOTO_ADD = pygame.Rect(18, 409, 180, 48)
 PHOTO_SETTINGS = pygame.Rect(540, 409, 110, 48)
-PHOTO_CLOSE = pygame.Rect(684, 11, 100, 43)
+PHOTO_CLOSE = pygame.Rect(682, 12, 105, 46)
 PHOTO_QR = pygame.Rect(155, 103, 228, 228)
 
 
@@ -495,7 +495,7 @@ class PhotoFrameRenderer:
                 (PHOTO_PREVIOUS, "◀",False),
                 (PHOTO_PAUSE, "▶" if self.paused else "Ⅱ",True),
                 (PHOTO_NEXT, "▶",False),
-                (PHOTO_SETTINGS, "OPTIONS",False),
+                (PHOTO_SETTINGS, "FIT / FILL",False),
                 (PHOTO_CLOSE, "EXIT",False),
             ):
                 fill = (238,238,238) if primary else (29,29,29)
@@ -531,6 +531,11 @@ class PhotoFrameRenderer:
                 pygame.draw.rect(surface,(110,110,110),rect,1,border_radius=10)
                 item=tiny.render(label,True,(250,250,250))
                 surface.blit(item,item.get_rect(center=rect.center))
+            exit_rect = pygame.Rect(682, 12, 105, 46)
+            pygame.draw.rect(surface, (56, 31, 31), exit_rect, border_radius=11)
+            pygame.draw.rect(surface, (128, 128, 128), exit_rect, 1, border_radius=11)
+            exit_label = tiny.render("EXIT", True, (255, 255, 255))
+            surface.blit(exit_label, exit_label.get_rect(center=exit_rect.center))
             self._text(surface,tiny,url,163,396,(204,204,204))
 
     def hit(self, point, now):
