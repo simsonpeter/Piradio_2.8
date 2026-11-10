@@ -8229,6 +8229,12 @@ while True:
     landscape_display.blit(screen, (0, 0))
     current_station = stations[current_idx].get("name", "TC RADIOS") if stations else "TC RADIOS"
     current_meta = meta_text if meta_text and meta_text != current_station else ""
+    # A minimized YouTube video is the actual now-playing source, not the
+    # previously selected VLC station. Reuse the already-polled IPC snapshot.
+    active_video_status = (
+        video_status_cache if youtube_video.is_playing()
+        and video_status_cache.get("playing") else None
+    )
     if active_page in ("menu", "radio"):
         radio_playing = player.get_state() == vlc.State.Playing
         draw_dashboard(
@@ -8239,7 +8245,7 @@ while True:
             f"Book {bible_player.book+1} - Chapter {bible_player.chapter}",
             vol_level, stations[current_idx] if stations else None,
             bool(stations and stations[current_idx].get("youtube_id")) and not bible_player.playing,
-            loaded_logo=logo)
+            loaded_logo=logo, video_status=active_video_status)
     else:
         # The shell is consistent on every page. The original page is
         # rendered within the right content area without stretching.
@@ -8250,7 +8256,8 @@ while True:
                    (bible_player.playing and not bible_player.paused) if bible_player.playing else radio_playing,
                    bible_player.playing,bible_name,
                    stations[current_idx] if stations else None,
-                   bool(stations and stations[current_idx].get("youtube_id")) and not bible_player.playing)
+                   bool(stations and stations[current_idx].get("youtube_id")) and not bible_player.playing,
+                   video_status=active_video_status)
         if active_page == "bible":
             draw_landscape_bible(landscape_display,bible_player,f_lg,f_sm,f_tiny)
         elif active_page in ("favorites","clock","forecast","settings","bluetooth","youtube") and not (active_page=="youtube" and youtube_keyboard_open):
