@@ -121,6 +121,55 @@ class VideoMiniTests(unittest.TestCase):
         self.assertEqual(target[0], "seek")
         self.assertAlmostEqual(target[1], 75, delta=1)
 
+    def test_main_radio_player_switches_from_stale_radio_to_video(self):
+        from landscape_dashboard import draw_dashboard
+        from unittest.mock import patch
+        surface = pygame.Surface((800, 480))
+        font, small, tiny = (
+            pygame.font.Font(None, 28),
+            pygame.font.Font(None, 21),
+            pygame.font.Font(None, 16),
+        )
+        status = self.make_status()
+        # Prior station artwork must never be rendered into the hero when
+        # an MPV video owns the active playback session.
+        loaded_logo = pygame.Surface((100, 100))
+        loaded_logo.fill((221, 0, 128))
+        with patch("landscape_dashboard._station_art") as station_art:
+            self.assertTrue(draw_dashboard(
+                surface, font, small, tiny,
+                "radio", "OLD RADIO STATION", "Old live streaming",
+                False, False, False, "Bible", 50,
+                station_data={"name": "OLD RADIO STATION"},
+                loaded_logo=loaded_logo,
+                video_status=status,
+            ))
+            station_art.assert_not_called()
+        # No magenta/stale logo pixel at artwork centre.
+        self.assertNotEqual(tuple(surface.get_at((275, 190))[:3]),
+                            (221, 0, 128))
+
+    def test_home_page_and_secondary_shell_accept_video_source(self):
+        from landscape_dashboard import draw_dashboard, draw_shell
+        surface = pygame.Surface((800, 480))
+        font, small, tiny = (
+            pygame.font.Font(None, 28),
+            pygame.font.Font(None, 21),
+            pygame.font.Font(None, 16),
+        )
+        status = self.make_status()
+        self.assertTrue(draw_dashboard(
+            surface, font, small, tiny,
+            "menu", "OLD RADIO", "Old metadata",
+            False, False, False, "Bible", 50,
+            video_status=status,
+        ))
+        draw_shell(
+            surface, font, small, tiny,
+            "youtube", "OLD RADIO", "Old metadata",
+            False, False, "Bible", video_status=status,
+        )
+
     def test_no_overlay_when_video_not_minimized(self):
         status = self.make_status()
         status["minimized"] = False
