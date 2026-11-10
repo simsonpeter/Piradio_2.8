@@ -122,6 +122,17 @@ def video_hero_hit(pos, status, active_page):
     return None
 
 
+def _media_source(status):
+    source = (status or {}).get("source") or "youtube_video"
+    return {
+        "youtube_video": ("YOUTUBE", "youtube", "VIDEO PLAYER"),
+        "guest_video": ("GUEST VIDEO", "film", "PI RADIO CAST"),
+        "guest_audio": ("GUEST AUDIO", "music", "PI RADIO CAST"),
+        "guest_photos": ("PHOTOS", "image", "SLIDESHOW"),
+        "screen_mirror": ("SCREEN MIRROR", "monitor", "ANDROID SCREEN"),
+    }.get(source, ("MEDIA", "radio", "PI RADIO CAST"))
+
+
 def draw_video_hero(s, font, small, tiny, status):
     """Replace the stale VLC radio hero with the real mpv video session."""
     art = pygame.Rect(163, 79, 225, 265)
@@ -129,23 +140,24 @@ def draw_video_hero(s, font, small, tiny, status):
     _glow_card(s, art, (13, 13, 13), (65, 65, 65), 20)
     _glow_card(s, main, (13, 13, 13), (65, 65, 65), 20)
 
-    # Clear, understated YouTube identity instead of previous station artwork.
+    # Show the current guest media type, not the previous station's artwork.
+    source_label, source_icon, source_hint = _media_source(status)
     artwork = pygame.Rect(193, 115, 165, 155)
     pygame.draw.rect(s, (25, 25, 25), artwork, border_radius=18)
     pygame.draw.rect(s, (56, 56, 56), artwork, 1, border_radius=18)
     pygame.draw.circle(s, (239, 239, 239), artwork.center, 49)
-    _icon(s, "youtube", artwork, 53, (20, 20, 20))
-    _text(s, small, "YOUTUBE", (229, 285), WHITE, 140)
-    _text(s, tiny, "VIDEO PLAYER", (217, 313), MUTED, 149)
+    _icon(s, source_icon, artwork, 53, (20, 20, 20))
+    _text(s, small, source_label, (214, 285), WHITE, 166)
+    _text(s, tiny, source_hint, (211, 313), MUTED, 166)
 
     minimized = bool(status.get("minimized"))
     paused = bool(status.get("paused"))
-    _text(s, tiny, "YOUTUBE  /  " + ("AUDIO ONLY" if minimized else "VIDEO"),
+    _text(s, tiny, source_label + "  /  " + ("AUDIO ONLY" if minimized else "PLAYING"),
           (420, 101), (220, 220, 220), 340)
     _text(s, font, status.get("title") or "YouTube video",
           (420, 143), WHITE, 340)
     _text(s, small, "Paused" if paused else
-          ("Playing in background" if minimized else "Playing video"),
+          ("Playing in background" if minimized else source_hint.title()),
           (421, 183), MUTED, 310)
 
     # Main transport controls target mpv's existing IPC socket.
@@ -327,7 +339,9 @@ def draw_video_mini(surface, font, small, tiny, status):
     pygame.draw.rect(surface, (15, 15, 15), VIDEO_MINI, border_radius=15)
     pygame.draw.rect(surface, (128, 128, 128), VIDEO_MINI, 2, border_radius=15)
     pygame.draw.circle(surface, (245, 245, 245), (182, 426), 12)
-    _text(surface, tiny, "YT", (174, 418), (0, 0, 0), 20)
+    _text(surface, tiny,
+          "YT" if status.get("source", "youtube_video") == "youtube_video" else "GC",
+          (171, 418), (0, 0, 0), 23)
     _text(surface, small, status.get("title") or "YouTube video",
           (211, 406), WHITE, 274)
     position = status.get("position", 0) or 0
