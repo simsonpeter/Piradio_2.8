@@ -14,6 +14,7 @@ Safety:
 - All subprocess calls are made by the existing MPV backend without shells.
 """
 import ipaddress
+import math
 import os
 from pathlib import Path
 import re
@@ -299,18 +300,34 @@ def register_cast_routes(app, session, get_backend, stop_existing_audio,
         denied = auth()
         if denied:
             return denied
+        files = []
         try:
-            files, kind = session.allocate(request.files.getlist("files"))
+            uploads = request.files.getlist("files")
+            files, kind = session.allocate(uploads)
             backend = get_backend()
             if backend is None:
                 raise RuntimeError("PiRadio video player is not ready")
             stop_existing_audio()
             if not backend.start_local(files, kind):
                 raise RuntimeError("Could not start MPV")
+            if kind == "photos":
+                backend.title = (
+                    f"Guest slideshow · {len(files)} photos" if len(files) > 1
+                    else str(uploads[0].filename or "Guest photo")[:120]
+                )
+            else:
+                backend.title = str(uploads[0].filename or "Guest media")[:120]
+            backend.volume(get_volume())
             session.replace_files(files)
             return jsonify({"success": True, "kind": kind,
                             "count": len(files), "title": backend.title})
         except (ValueError, RuntimeError, OSError) as error:
+            for filename in files:
+                if filename not in session.current_files:
+                    try:
+                        Path(filename).unlink(missing_ok=True)
+                    except OSError:
+                        pass
             return fail(str(error))
 
     @app.route("/api/cast/youtube", methods=["POST"])
@@ -382,12 +399,12 @@ def register_cast_routes(app, session, get_backend, stop_existing_audio,
                 return jsonify({"success": True, "playing": False})
             elif action == "seek_relative":
                 delta = float(data.get("seconds", 0))
-                if abs(delta) > 120:
+                if not math.isfinite(delta) or abs(delta) > 120:
                     return fail("Seek is limited to two minutes per tap")
                 result = backend.seek(delta)
             elif action == "seek":
                 seconds = float(data.get("seconds", 0))
-                if not 0 <= seconds <= 24 * 3600:
+                if not math.isfinite(seconds) or not 0 <= seconds <= 24 * 3600:
                     return fail("Invalid seek position")
                 result = backend.seek_absolute(seconds)
             elif action == "next":
