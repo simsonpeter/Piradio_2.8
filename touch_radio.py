@@ -520,6 +520,11 @@ def apply_live_volume(level):
         player.audio_set_volume(vol_level)
     except Exception:
         pass
+    # VLC radio and mpv video share the Pi's volume controls; a minimized
+    # video must remain adjustable from the Pi screen and phone remote.
+    video_backend = globals().get("youtube_video")
+    if video_backend is not None and video_backend.is_playing():
+        video_backend.volume(vol_level)
     try:
         audio_manager.set_volume(vol_level)
     except Exception as error:
@@ -531,6 +536,10 @@ def apply_live_volume(level):
 
 def skip_playback(step):
     global current_idx
+    video_backend = globals().get("youtube_video")
+    if video_backend is not None and video_backend.is_playing():
+        video_backend.seek(10 if step > 0 else -10)
+        return
     try:
         if current_youtube_id() and continue_youtube_queue(step, user=True):
             return
@@ -3363,6 +3372,15 @@ HTML_TEMPLATE = """
             
             fetch(apiBase + '/api/status').then(r => r.json()).then(data => {
                 isPlaying = data.playing;
+                // The main transport always controls the active source.
+                // YouTube audio uses VLC, while minimized video uses mpv.
+                const subtitle = document.getElementById('now-playing-subtitle');
+                if (subtitle) subtitle.textContent = ({
+                    youtube_video: 'YouTube video on Raspberry Pi',
+                    youtube_audio: 'YouTube audio on Raspberry Pi',
+                    bible: 'Tamil Bible',
+                    radio: 'Live radio'
+                })[data.source] || 'PiRadio';
                 currentVolume = data.volume;
                 currentStationIdx = data.station;
                 updateVolumeUI();
@@ -3611,15 +3629,21 @@ def remote_action(action):
     global current_idx, vol_level
     try:
         if action == 'next':
-            skip_playback(1)
+            if not youtube_video.is_playing() and bible_player.playing:
+                bible_player.shift(1, player.stop)
+            else:
+                skip_playback(1)
         elif action == 'prev':
-            skip_playback(-1)
+            if not youtube_video.is_playing() and bible_player.playing:
+                bible_player.shift(-1, player.stop)
+            else:
+                skip_playback(-1)
         elif action == 'volup':
             apply_live_volume(min(vol_level + 10, 100))
         elif action == 'voldown':
             apply_live_volume(max(vol_level - 10, 0))
         elif action == 'toggle':
-            player.pause()
+            toggle_active_playback()
         elif action == 'mute':
             apply_live_volume(0 if vol_level > 0 else last_unmuted_volume)
         return "OK"
@@ -3665,6 +3689,10 @@ def get_volume():
 
 @app.route('/api/nowplaying')
 def get_now_playing():
+    if youtube_video.is_playing():
+        return jsonify({"text": youtube_video.title or "YouTube video"})
+    if bible_player.playing:
+        return jsonify({"text": f"Tamil Bible - Book {bible_player.book + 1} - Chapter {bible_player.chapter}"})
     return jsonify({"text": meta_text if meta_text else stations[current_idx]['name']})
 
 LISTEN_ALONG_PAGE = """<!DOCTYPE html>
@@ -3744,12 +3772,28 @@ def api_listen():
 
 @app.route('/api/status')
 def get_status():
-    try:
-        is_playing = player.get_state() == vlc.State.Playing
-    except:
-        is_playing = False
+    if youtube_video.is_playing():
+        video = youtube_video.playback_status()
+        source = "youtube_video"
+        is_playing = not video.get("paused", False)
+        is_paused = bool(video.get("paused", False))
+    elif bible_player.playing:
+        source = "bible"
+        is_paused = bool(bible_player.paused)
+        is_playing = not is_paused
+    else:
+        source = "youtube_audio" if current_youtube_id() else "radio"
+        try:
+            state = player.get_state()
+            is_playing = state == vlc.State.Playing
+            is_paused = state == vlc.State.Paused
+        except Exception:
+            is_playing = False
+            is_paused = False
     return jsonify({
         "playing": is_playing,
+        "paused": is_paused,
+        "source": source,
         "volume": vol_level,
         "station": current_idx
     })
@@ -4317,7 +4361,7 @@ def youtube_play():
 
 @app.route('/api/youtube/video/status')
 def remote_youtube_video_status():
-    return jsonify({**youtube_video.playback_status(), 'minimized':youtube_video.minimized})
+    return jsonify(youtube_video.playback_status())
 
 @app.route('/api/youtube/video', methods=['POST'])
 def remote_youtube_video():
@@ -4332,7 +4376,8 @@ def remote_youtube_video():
             player.stop()
             if bible_player.playing or bible_player.player.is_playing():
                 bible_player.stop()
-            youtube_video.start_youtube(video_id)
+            youtube_video.start_youtube(video_id, title=data.get('title') or "YouTube video")
+            youtube_video.volume(vol_level)
         elif action in ('seek', 'seek_relative'):
             if not youtube_video.is_playing(): raise ValueError('No video playing')
             value = float(data.get('seconds', 0))
@@ -4833,13 +4878,40 @@ except Exception as e:
 # 7-inch landscape: keep the original 320x480 renderer as a safe offscreen
 # surface, while the right-hand panel provides large navigation targets.
 from landscape_ui import draw_companion_panel, companion_hit
-from landscape_dashboard import draw_dashboard, hit as landscape_hit, draw_shell, shell_hit, draw_youtube_keyboard, youtube_keyboard_hit
+from landscape_dashboard import (draw_dashboard, hit as landscape_hit,
+                                 draw_shell, shell_hit, draw_youtube_keyboard,
+                                 youtube_keyboard_hit, draw_video_mini,
+                                 video_mini_hit)
 from landscape_bible import draw as draw_landscape_bible, hit as landscape_bible_hit
 from landscape_pages import draw as draw_landscape_page, hit as landscape_page_hit
 import landscape_pages
 from youtube_video_backend import YouTubeVideoBackend
 youtube_video = YouTubeVideoBackend()
 youtube_video_id = None
+video_status_cache = {"playing": False, "minimized": False}
+video_status_pending = None
+video_status_loading = False
+video_status_last_poll = 0
+
+def toggle_active_playback():
+    """Play/pause whichever of mpv, Bible, or VLC owns audio."""
+    if youtube_video.is_playing():
+        return youtube_video.pause()
+    if bible_player.playing:
+        bible_player.toggle_pause()
+        return True
+    player.pause()
+    return True
+
+def poll_video_status():
+    global video_status_pending
+    try:
+        video_status_pending = youtube_video.playback_status()
+    except Exception as error:
+        print("PiRadio video status failed:", error)
+        video_status_pending = {"playing": youtube_video.is_playing(),
+                                "minimized": youtube_video.minimized}
+
 
 def start_fullscreen_youtube_video():
     global youtube_video_id, youtube_touch_status
@@ -4850,7 +4922,9 @@ def start_fullscreen_youtube_video():
     try:
         # Stop existing audio first so mpv is the only active audio source.
         player.stop()
-        youtube_video.start_youtube(video_id)
+        current_title = stations[current_idx].get("name", "YouTube video") if stations else "YouTube video"
+        youtube_video.start_youtube(video_id, title=current_title)
+        youtube_video.volume(vol_level)
         if bible_player.playing or bible_player.player.is_playing():
             bible_player.stop()
         youtube_video_id = video_id
@@ -7267,6 +7341,19 @@ while True:
         youtube_video_id = None
     if not youtube_video.is_playing():
         maybe_advance_youtube_queue()
+    # Avoid calling mpv IPC in the screen render loop; read at most once
+    # per second on a lightweight worker, keeping audio and touch smooth.
+    if video_status_pending is not None:
+        video_status_cache = video_status_pending
+        video_status_pending = None
+        video_status_loading = False
+    if not video_status_loading and now - video_status_last_poll >= 1.0:
+        video_status_last_poll = now
+        if youtube_video.is_playing():
+            video_status_loading = True
+            threading.Thread(target=poll_video_status, daemon=True).start()
+        else:
+            video_status_cache = {"playing": False, "minimized": False}
     apply_wifi_result()
     
     # Apply background weather updates on the UI thread. A slow or failing
@@ -7547,6 +7634,24 @@ while True:
         elif event.type == pygame.MOUSEMOTION and any(getattr(event, "buttons", ())):
             last_interaction_time = now
 
+        # Minimized MPV keeps its own controls over every PiRadio page.
+        # Consume the touch before the underlying VLC mini-player receives it.
+        if event.type == pygame.MOUSEBUTTONDOWN and youtube_video.is_playing():
+            video_hit = video_mini_hit(event.pos, video_status_cache)
+            if video_hit is not None:
+                action, value = video_hit
+                if action == "seek_relative":
+                    youtube_video.seek(value)
+                elif action == "seek":
+                    youtube_video.seek_absolute(value)
+                elif action == "pause":
+                    youtube_video.pause()
+                elif action == "restore":
+                    youtube_video.restore_video()
+                elif action == "stop":
+                    youtube_video.stop()
+                touch_consumed = False
+                continue
         if active_page not in ("menu", "radio") and event.type == pygame.MOUSEBUTTONDOWN:
             shell_action = shell_hit(event.pos)
             if shell_action:
@@ -7561,8 +7666,9 @@ while True:
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
                                    "CLOCK":"clock","WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu")
                 elif value == "pause":
-                    if bible_player.playing:bible_player.toggle_pause()
-                    else:player.pause()
+                    toggle_active_playback()
+                elif youtube_video.is_playing():
+                    youtube_video.seek(-10 if value == "prev" else 10)
                 elif bible_player.playing:
                     bible_player.shift(-1 if value=="prev" else 1,player.stop)
                 else:
@@ -7593,9 +7699,12 @@ while True:
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
                                    "CLOCK":"clock","WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu")
                 elif kind == "audio":
-                    # Radio page controls always operate the radio, even when
-                    # the Bible was the most recently active audio source.
-                    if active_page == "radio":
+                    # A phone-started video can remain audio-only behind any
+                    # PiRadio page. Transport must target MPV, not idle VLC.
+                    if youtube_video.is_playing():
+                        if value == "pause": youtube_video.pause()
+                        else: youtube_video.seek(-10 if value == "prev" else 10)
+                    elif active_page == "radio":
                         if value == "pause":
                             if bible_player.playing:
                                 play()  # switches audio ownership to radio
@@ -7606,8 +7715,7 @@ while True:
                         else:
                             skip_playback(-1 if value == "prev" else 1)
                     elif value == "pause":
-                        if bible_player.playing:bible_player.toggle_pause()
-                        else:player.pause()
+                        toggle_active_playback()
                     elif bible_player.playing:
                         bible_player.shift(-1 if value=="prev" else 1,player.stop)
                     else:skip_playback(-1 if value=="prev" else 1)
@@ -8067,7 +8175,7 @@ while True:
                 skip_playback(1)
                 continue
             if btn_toggle.collidepoint(event.pos):
-                player.pause()
+                toggle_active_playback()
                 continue
             if vol_minus_rect.collidepoint(event.pos):
                 apply_live_volume(vol_level - 5)
@@ -8170,6 +8278,8 @@ while True:
             # Keyboard and remaining legacy pages remain functional.
             content=pygame.transform.smoothscale(screen,(210,315))
             landscape_display.blit(content,(365,73))
+    if video_status_cache.get("playing") and video_status_cache.get("minimized"):
+        draw_video_mini(landscape_display, f_lg, f_sm, f_tiny, video_status_cache)
     # Draw OVER the native landscape page, not on the older 320x480 surface.
     if saver_active and not youtube_video.is_playing():
         draw_landscape_screensaver(
