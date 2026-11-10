@@ -123,9 +123,60 @@ def dock_hit(pos):
     return None
 
 
+def _dock_icon(surface, name, center):
+    """Built-in crisp vector icons; do not depend on system icon fonts."""
+    x, y = center
+    white = INK
+    if name == "home":
+        pygame.draw.lines(surface, white, False,
+                          [(x-13,y-2),(x,y-13),(x+13,y-2)],3)
+        pygame.draw.lines(surface, white, False,
+                          [(x-10,y-4),(x-10,y+12),(x+10,y+12),(x+10,y-4)],2)
+        pygame.draw.rect(surface, white, (x-3,y+3,6,9), 2)
+    elif name == "radio":
+        pygame.draw.rect(surface, white, (x-14,y-7,28,20),2,border_radius=4)
+        pygame.draw.line(surface, white, (x-8,y-8),(x+7,y-17),2)
+        pygame.draw.circle(surface,white,(x+6,y+3),5,2)
+        pygame.draw.line(surface,white,(x-10,y-1),(x-3,y-1),2)
+        pygame.draw.line(surface,white,(x-10,y+5),(x-3,y+5),2)
+    elif name == "bible":
+        pygame.draw.lines(surface,white,False,
+                          [(x,y+13),(x-13,y+8),(x-13,y-12),(x,y-8),(x,y+13)],2)
+        pygame.draw.lines(surface,white,False,
+                          [(x,y-8),(x+13,y-12),(x+13,y+8),(x,y+13)],2)
+        pygame.draw.line(surface,white,(x-8,y-3),(x-3,y-2),1)
+        pygame.draw.line(surface,white,(x+3,y-2),(x+8,y-3),1)
+    elif name == "youtube":
+        pygame.draw.rect(surface,white,(x-16,y-11,32,22),2,border_radius=7)
+        pygame.draw.polygon(surface,white,
+                            [(x-4,y-7),(x+8,y),(x-4,y+7)])
+    elif name == "favorites":
+        pygame.draw.polygon(surface,white,
+                            [(x,y+13),(x-13,y-1),(x-12,y-8),
+                             (x-8,y-12),(x-3,y-12),(x,y-8),
+                             (x+3,y-12),(x+8,y-12),(x+12,y-8),
+                             (x+13,y-1)],2)
+    elif name == "clock":
+        pygame.draw.circle(surface,white,(x,y),13,2)
+        pygame.draw.lines(surface,white,False,
+                          [(x,y-9),(x,y),(x+7,y+4)],2)
+    elif name == "weather":
+        pygame.draw.circle(surface,white,(x-10,y-8),7,2)
+        pygame.draw.arc(surface,white,(x-13,y-5,27,22),0,3.14,2)
+        pygame.draw.circle(surface,white,(x+3,y-1),9,2)
+        pygame.draw.line(surface,white,(x-13,y+10),(x+15,y+10),2)
+    elif name == "settings":
+        pygame.draw.circle(surface,white,(x,y),11,3)
+        pygame.draw.circle(surface,white,(x,y),4,2)
+        for dx,dy in ((0,-16),(0,16),(-16,0),(16,0),
+                      (-12,-12),(12,12),(-12,12),(12,-12)):
+            origin=(x+round(dx*.72),y+round(dy*.72))
+            dest=(x+dx,y+dy)
+            pygame.draw.line(surface,white,origin,dest,3)
+
+
 def draw_dock(screen, font, small, tiny, active_page):
     """Floating 4×2 navigation grid, visible only when invited."""
-    from fa_icons import draw_icon
 
     veil = pygame.Surface((800, 480), pygame.SRCALPHA)
     veil.fill((0, 0, 0, 194))
@@ -155,11 +206,7 @@ def draw_dock(screen, font, small, tiny, active_page):
         pygame.draw.rect(screen,
                          ACCENT if selected else (80, 80, 80),
                          rect, 1, border_radius=17)
-        try:
-            draw_icon(screen, icon, (rect.centerx, rect.y + 28),
-                      23, INK)
-        except (pygame.error, OSError):
-            pass
+        _dock_icon(screen, icon, (rect.centerx, rect.y + 28))
         label = tiny.render(name, True, INK)
         screen.blit(label,
                     label.get_rect(center=(rect.centerx, rect.y + 59)))
