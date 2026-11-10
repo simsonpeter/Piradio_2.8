@@ -521,8 +521,10 @@ def apply_live_volume(level):
         last_unmuted_volume = vol_level
     try:
         player.audio_set_volume(vol_level)
+        youtube_audio_player.audio_set_volume(vol_level)
     except Exception:
         pass
+    # The independent radio and YouTube players follow the same hardware volume.
     # VLC radio and mpv video share the Pi's volume controls; a minimized
     # video must remain adjustable from the Pi screen and phone remote.
     video_backend = globals().get("youtube_video")
@@ -537,23 +539,49 @@ def apply_live_volume(level):
     except NameError:
         pass
 
-def skip_playback(step):
+def skip_radio_station(step):
+    """Radio previous/next ALWAYS cycles radio stations, not YouTube results."""
     global current_idx
-    video_backend = globals().get("youtube_video")
-    if video_backend is not None and video_backend.is_playing():
-        video_backend.seek(10 if step > 0 else -10)
+    if not stations:
+        return False
+    available = [
+        index for index, item in enumerate(stations)
+        if item.get("url") and not item.get("youtube_id")
+    ]
+    if not available:
+        return False
+    if current_idx not in available:
+        current_idx = available[0]
+    else:
+        position = available.index(current_idx)
+        current_idx = available[(position + (1 if step > 0 else -1)) % len(available)]
+    play()
+    return True
+
+
+def return_to_tcradios():
+    """One-tap RADIO navigation: restore the last selected real radio stream."""
+    if not stations or not stations[current_idx].get("url"):
+        return False
+    if (not youtube_audio_active and not bible_player.playing
+            and not youtube_video.is_playing()
+            and player.get_state() == vlc.State.Playing):
+        return True
+    play()
+    return True
+
+
+def skip_playback(step):
+    """Transport follows its active source, but radio never enters YouTube."""
+    backend = globals().get("youtube_video")
+    if backend is not None and backend.is_playing():
+        backend.seek(10 if step > 0 else -10)
         return
-    try:
-        if current_youtube_id() and continue_youtube_queue(step, user=True):
-            return
-    except NameError:
-        pass
-    try:
-        if stations:
-            current_idx = (current_idx + step) % len(stations)
-            play()
-    except (NameError, ZeroDivisionError):
-        pass
+    if youtube_audio_active:
+        continue_youtube_queue(step, user=True)
+        return
+    skip_radio_station(step)
+
 
 # --- ALARM & SLEEP TIMER SYSTEM ---
 class SmartAlarm:
@@ -1016,10 +1044,11 @@ cast_session = GuestCastSession()
 web_port = 8080
 
 def _stop_audio_for_guest():
-    # The new guest receiver reuses MPV, never creates a second audio player.
+    # The guest receiver reuses MPV and stops BOTH VLC players.
     existing_radio = globals().get("player")
     if existing_radio is not None:
         existing_radio.stop()
+    stop_youtube_audio()
     bible = globals().get("bible_player")
     if bible is not None:
         bible.stop()
@@ -3657,12 +3686,12 @@ def remote_action(action):
     try:
         if action == 'next':
             if not youtube_video.is_playing() and bible_player.playing:
-                bible_player.shift(1, player.stop)
+                bible_player.shift(1, stop_other_audio_for_bible)
             else:
                 skip_playback(1)
         elif action == 'prev':
             if not youtube_video.is_playing() and bible_player.playing:
-                bible_player.shift(-1, player.stop)
+                bible_player.shift(-1, stop_other_audio_for_bible)
             else:
                 skip_playback(-1)
         elif action == 'volup':
@@ -3677,11 +3706,20 @@ def remote_action(action):
     except Exception as e:
         return f"Error: {str(e)}", 500
 
+@app.route('/api/radio/activate', methods=['POST'])
+def activate_tcradios_remote():
+    if return_to_tcradios():
+        return jsonify({"success": True, "station": current_idx,
+                        "name": stations[current_idx].get("name", "TCRADIOS")})
+    return jsonify({"success": False, "error": "No radio stations loaded"}), 503
+
 @app.route('/api/play/<int:idx>')
 def play_index(idx):
     global current_idx
     try:
-        current_idx = idx % len(stations)
+        if idx < 0 or idx >= len(stations) or stations[idx].get("youtube_id"):
+            return "Not a TCRADIOS station", 400
+        current_idx = idx
         play()
         return "OK"
     except Exception as e:
@@ -3720,6 +3758,8 @@ def get_now_playing():
         return jsonify({"text": youtube_video.title or "YouTube video"})
     if bible_player.playing:
         return jsonify({"text": f"Tamil Bible - Book {bible_player.book + 1} - Chapter {bible_player.chapter}"})
+    if youtube_audio_active:
+        return jsonify({"text": youtube_current_title or "YouTube audio"})
     return jsonify({"text": meta_text if meta_text else stations[current_idx]['name']})
 
 LISTEN_ALONG_PAGE = """<!DOCTYPE html>
@@ -3809,9 +3849,9 @@ def get_status():
         is_paused = bool(bible_player.paused)
         is_playing = not is_paused
     else:
-        source = "youtube_audio" if current_youtube_id() else "radio"
+        source = "youtube_audio" if youtube_audio_active else "radio"
         try:
-            state = player.get_state()
+            state = youtube_audio_player.get_state() if youtube_audio_active else player.get_state()
             is_playing = state == vlc.State.Playing
             is_paused = state == vlc.State.Paused
         except Exception:
@@ -4399,8 +4439,9 @@ def remote_youtube_video():
             video_id = str(data.get('video_id') or '').strip()
             if not re.fullmatch(r'[A-Za-z0-9_-]{11}', video_id):
                 return jsonify({'success':False,'error':'Invalid YouTube ID'}),400
-            # Existing VLC audio must stop before video starts.
+            # MPV owns the audio only after both dedicated VLC instances stop.
             player.stop()
+            stop_youtube_audio()
             if bible_player.playing or bible_player.player.is_playing():
                 bible_player.stop()
             youtube_video.start_youtube(video_id, title=data.get('title') or "YouTube video")
@@ -4927,11 +4968,14 @@ video_status_loading = False
 video_status_last_poll = 0
 
 def toggle_active_playback():
-    """Play/pause whichever of mpv, Bible, or VLC owns audio."""
+    """Play/pause MPV, Tamil Bible, YouTube audio, or TCRADIOS independently."""
     if youtube_video.is_playing():
         return youtube_video.pause()
     if bible_player.playing:
         bible_player.toggle_pause()
+        return True
+    if youtube_audio_active:
+        youtube_audio_player.pause()
         return True
     player.pause()
     return True
@@ -4953,9 +4997,10 @@ def start_fullscreen_youtube_video():
         youtube_touch_status = "Play a YouTube audio result first"
         return
     try:
-        # Stop existing audio first so mpv is the only active audio source.
+        # Stop both VLC players so mpv becomes the only active audio source.
         player.stop()
-        current_title = stations[current_idx].get("name", "YouTube video") if stations else "YouTube video"
+        stop_youtube_audio()
+        current_title = youtube_current_title or "YouTube video"
         youtube_video.start_youtube(video_id, title=current_title)
         youtube_video.volume(vol_level)
         if bible_player.playing or bible_player.player.is_playing():
@@ -5265,8 +5310,32 @@ brightness_overlay = pygame.Surface((320, 480), pygame.SRCALPHA)
 refresh_ui_palette()
 
 instance = vlc.Instance('--no-video')
-player = instance.media_player_new()
+# Keep each source independent: only radio stations live in "stations".
+# YouTube audio has its OWN VLC media player and queue (not station entries).
+player = instance.media_player_new()           # Dedicated TCRADIOS receiver
+youtube_audio_player = instance.media_player_new()
 bible_player = BiblePlayer()
+
+youtube_audio_active = False
+youtube_current_id = ""
+youtube_current_title = ""
+youtube_current_url = ""
+
+def stop_youtube_audio():
+    """Stop only YouTube's VLC player without disturbing radio selection."""
+    global youtube_audio_active
+    if youtube_audio_active:
+        youtube_audio_player.stop()
+    youtube_audio_active = False
+
+def stop_other_audio_for_bible():
+    """Callback given to BiblePlayer; guarantees a single audible source."""
+    player.stop()
+    stop_youtube_audio()
+    backend = globals().get("youtube_video")
+    if backend is not None and backend.is_playing():
+        backend.stop()
+
 
 URL = "https://raw.githubusercontent.com/simsonpeter/Tcradios/refs/heads/main/stations.json"
 LANGUAGE_BASE_URL = (
@@ -5636,6 +5705,7 @@ def update_logo(url):
 
 def play():
     global meta_text, scroll_x, saver_scroll_x, saved_station_url, saved_station_index
+    stop_youtube_audio()
     scroll_x = 320
     saver_scroll_x = 320
     if youtube_video.is_playing():
@@ -5669,25 +5739,20 @@ def play():
 def apply_github_station_list(loaded):
     global current_idx, base_stations, stations_waiting_for_github
     previous_url = ""
-    previous_youtube = ""
     previous_direct = None
     if stations and 0 <= current_idx < len(stations):
         previous = stations[current_idx]
         previous_url = previous.get("url") or ""
-        previous_youtube = previous.get("youtube_id") or ""
         previous_direct = previous.get("direct_link_id")
     extras = [
         station for station in stations
-        if station.get("youtube_id") or station.get("language")
-        or station.get("direct_link_id")
+        if not station.get("youtube_id")
+        and (station.get("language") or station.get("direct_link_id"))
     ]
     stations[:] = list(loaded) + extras
     base_stations = [station.copy() for station in loaded]
     matched = None
     for index, station in enumerate(stations):
-        if previous_youtube and station.get("youtube_id") == previous_youtube:
-            matched = index
-            break
         if previous_direct not in (None, "") and station.get("direct_link_id") == previous_direct:
             matched = index
             break
@@ -5701,7 +5766,10 @@ def apply_github_station_list(loaded):
     current_idx = choose_station_index(stations)
     stations_waiting_for_github = False
     load_favorite_indices()
-    play()
+    # A background station-list refresh must not steal audio from YouTube,
+    # the Bible, or an active guest cast.
+    if not (youtube_audio_active or youtube_video.is_playing() or bible_player.playing):
+        play()
 
 def retry_github_stations():
     for _attempt in range(24):
@@ -5719,9 +5787,8 @@ def retry_github_stations():
     print("TCRADIOS station list could not be loaded")
 
 def current_youtube_id():
-    if stations and 0 <= current_idx < len(stations):
-        return str(stations[current_idx].get("youtube_id") or "").strip()
-    return ""
+    """YouTube is independent of the current TCRADIOS station index."""
+    return youtube_current_id
 
 def remember_youtube_queue(video_id, title=""):
     global youtube_queue, youtube_queue_index, youtube_touch_offset
@@ -5749,34 +5816,34 @@ def remember_youtube_queue(video_id, title=""):
     youtube_touch_offset = (max(0, youtube_queue_index) // 4) * 4
 
 def play_youtube_station(video_id, title, audio_url):
-    global current_idx, _youtube_play_started_at, _youtube_ended_handled
+    """Dedicated YouTube VLC player: never append to the radio stations list."""
+    global youtube_audio_active, youtube_current_id, youtube_current_title
+    global youtube_current_url, _youtube_play_started_at, _youtube_ended_handled
     global _youtube_was_playing
-    station = {
-        'name': f"YT: {str(title)[:40]}",
-        'url': audio_url,
-        'genre': 'YouTube',
-        'logo': f'https://img.youtube.com/vi/{video_id}/mqdefault.jpg',
-        'youtube_id': video_id,
-    }
-    existing = next(
-        (
-            index for index, item in enumerate(stations)
-            if item.get('youtube_id') == video_id
-        ),
-        None
-    )
-    if existing is None:
-        stations.append(station)
-        current_idx = len(stations) - 1
-    else:
-        stations[existing] = station
-        current_idx = existing
-    remember_youtube_queue(video_id, title)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", str(video_id)):
+        raise ValueError("Invalid YouTube video")
+    if not str(audio_url).startswith(("https://", "http://")):
+        raise ValueError("Invalid YouTube audio stream")
+    # One audio source at a time, but keep the selected radio station intact.
+    player.stop()
+    if youtube_video.is_playing():
+        youtube_video.stop()
+    if bible_player.playing or bible_player.player.is_playing():
+        bible_player.stop()
+    youtube_audio_player.stop()
+    youtube_audio_player.set_media(instance.media_new(audio_url))
+    youtube_audio_player.audio_set_volume(vol_level)
+    youtube_audio_player.play()
+    youtube_audio_active = True
+    youtube_current_id = video_id
+    youtube_current_title = str(title or "YouTube Audio")[:160]
+    youtube_current_url = audio_url
+    remember_youtube_queue(video_id, youtube_current_title)
     youtube_skip_ids.discard(video_id)
     _youtube_play_started_at = time.time()
     _youtube_ended_handled = False
     _youtube_was_playing = False
-    play()
+
 
 def save_favorites():
     try:
@@ -6129,18 +6196,10 @@ def play_language_stream(stream):
 
 def resume_last_playback():
     global current_idx
-    youtube_id = str(saved_playback.get("youtube_id") or "").strip()
-    if youtube_id:
-        title = str(saved_playback.get("name") or "YouTube")
-        if title.startswith("YT: "):
-            title = title[4:]
-        audio_url, err = youtube_audio_url(youtube_id, timeout=18)
-        if audio_url:
-            play_youtube_station(youtube_id, title, audio_url)
-            return
-        print(f"Could not restore YouTube item: {err}")
+    # Preserve only a true radio station as the remembered radio selection.
+    # Older versions stored YouTube URLs as if they were radio streams.
     saved_url = str(saved_station_url or "").strip()
-    if youtube_id:
+    if saved_playback.get("youtube_id"):
         saved_url = ""
     if saved_url and all(station.get("url") != saved_url for station in stations):
         restored = {
@@ -6920,6 +6979,8 @@ SCREENSAVER_FONTS = {
 
 def screensaver_playing_label():
     """Use the current audio state without stopping or restarting playback."""
+    if youtube_audio_active:
+        return youtube_current_title or "YouTube audio"
     if bible_player.playing:
         return f"Tamil Bible  ·  Book {bible_player.book + 1}  ·  Chapter {bible_player.chapter}"
     if player.get_state() == vlc.State.Playing:
@@ -7142,10 +7203,10 @@ def youtube_queue_status():
 
 def maybe_advance_youtube_queue():
     global _youtube_was_playing, _youtube_ended_handled
-    if not current_youtube_id() or len(youtube_queue) <= 1:
+    if not youtube_audio_active or not current_youtube_id() or len(youtube_queue) <= 1:
         return
     try:
-        state = player.get_state()
+        state = youtube_audio_player.get_state()
     except Exception:
         return
     if state in (
@@ -7198,7 +7259,7 @@ def apply_youtube_touch_result():
         play_youtube_station(video_id, title, audio_url)
         youtube_touch_status = youtube_queue_status()
         if not auto:
-            active_page = "radio"
+            active_page = "youtube"
     elif kind == 'error':
         youtube_touch_status = str(pending[1])[:80]
         auto = pending[2] if len(pending) > 2 else False
@@ -7645,7 +7706,7 @@ while True:
                 draw_icon(screen, "library", home_corner.center, 21,
                           IOS_THEMES[ios_ui_mode]["ink"])
     
-    bible_player.tick(player.stop)
+    bible_player.tick(stop_other_audio_for_bible)
     for event in pygame.event.get():
         # Shared input gate: all landscape pages must wake without clicking
         # through to the page beneath the screensaver.
@@ -7743,7 +7804,7 @@ while True:
                 elif youtube_video.is_playing():
                     youtube_video.seek(-10 if value == "prev" else 10)
                 elif bible_player.playing:
-                    bible_player.shift(-1 if value=="prev" else 1,player.stop)
+                    bible_player.shift(-1 if value=="prev" else 1,stop_other_audio_for_bible)
                 else:
                     skip_playback(-1 if value=="prev" else 1)
                 continue
@@ -7751,7 +7812,7 @@ while True:
             press_time = time.monotonic()
             if press_time - last_touch_down_time >= 0.14:
                 last_touch_down_time = press_time
-                if landscape_bible_hit(bible_player, event.pos, player.stop) == "home":
+                if landscape_bible_hit(bible_player, event.pos, stop_other_audio_for_bible) == "home":
                     active_page = "menu"
             continue
         if active_page == "bible" and event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
@@ -7790,7 +7851,7 @@ while True:
                     elif value == "pause":
                         toggle_active_playback()
                     elif bible_player.playing:
-                        bible_player.shift(-1 if value=="prev" else 1,player.stop)
+                        bible_player.shift(-1 if value=="prev" else 1,stop_other_audio_for_bible)
                     else:skip_playback(-1 if value=="prev" else 1)
                 elif kind == "volume":
                     apply_live_volume(value)
@@ -7895,7 +7956,7 @@ while True:
                 active_page = "menu"
                 continue
             if active_page == "bible":
-                if bible_player.touch(event.pos, player.stop):
+                if bible_player.touch(event.pos, stop_other_audio_for_bible):
                     active_page = "menu"
                 continue
             if active_page == "menu":
