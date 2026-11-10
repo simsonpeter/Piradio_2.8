@@ -3693,8 +3693,18 @@ def remote_action(action):
 def play_index(idx):
     global current_idx
     try:
-        current_idx = idx % len(stations)
-        play()
+        if not stations:
+            return "No stations loaded", 503
+        target = idx % len(stations)
+        # The phone remote must use exactly the same radio handover as the
+        # physical Pi screen; never leave MPV audio playing over a radio URL.
+        if target in regular_radio_choices():
+            if not select_live_radio(target):
+                return "Could not switch to TC RADIOS", 503
+        else:
+            current_idx = target
+            if not play():
+                return "Could not start station", 503
         return "OK"
     except Exception as e:
         return f"Error: {str(e)}", 500
