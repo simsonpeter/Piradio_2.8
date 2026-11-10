@@ -9,6 +9,7 @@ import subprocess
 from tamil_bible import BiblePlayer
 from fa_icons import draw_icon
 from weather_service import fetch_weather
+from media_session import resolve_media_snapshot
 from landscape_screensaver import draw as draw_landscape_screensaver
 from piradio_guest_cast import GuestCastSession, register_cast_routes
 from landscape_cast import (CAST_BUTTON, RENEW_BUTTON, CLOSE_BUTTON,
@@ -3728,13 +3729,65 @@ def set_theme(theme_name):
 def get_volume():
     return jsonify({"volume": vol_level})
 
+def active_media_snapshot():
+    """One read-only source of truth for the phone remote and PiRadio UI.
+
+    Existing VLC, Bible and MPV processes remain untouched. MPV keeps priority
+    even when minimized or paused, avoiding stale radio text in the remote.
+    """
+    video_state = None
+    try:
+        if youtube_video.is_playing():
+            video_state = youtube_video.playback_status()
+    except Exception as error:
+        print("Active media video snapshot failed:", error)
+        if youtube_video.is_playing():
+            video_state = {
+                "playing": True,
+                "source": youtube_video.source_type,
+                "title": youtube_video.title,
+                "minimized": youtube_video.minimized,
+            }
+
+    try:
+        vlc_status = player.get_state()
+        vlc_mode = ("playing" if vlc_status == vlc.State.Playing else
+                    "paused" if vlc_status == vlc.State.Paused else "stopped")
+        vlc_position = max(0, player.get_time()) / 1000.0
+        vlc_duration = max(0, player.get_length()) / 1000.0
+        vlc_seekable = bool(player.is_seekable())
+    except Exception:
+        vlc_mode, vlc_position, vlc_duration, vlc_seekable = "stopped", 0, 0, 0
+
+    selected_station = stations[current_idx] if stations else {}
+    selected_title = meta_text or selected_station.get("name") or "PiRadio"
+    bible_title = (f"Tamil Bible - Book {bible_player.book + 1} - "
+                   f"Chapter {bible_player.chapter}")
+    return resolve_media_snapshot(
+        video_status=video_state,
+        bible_active=bible_player.playing,
+        bible_paused=bible_player.paused,
+        bible_title=bible_title,
+        vlc_state=vlc_mode,
+        vlc_source="youtube_audio" if current_youtube_id() else "radio",
+        vlc_title=selected_title,
+        vlc_position=vlc_position,
+        vlc_duration=vlc_duration,
+        vlc_seekable=vlc_seekable,
+        volume=vol_level,
+        station=current_idx,
+    )
+
+
+@app.route('/api/media/session')
+def get_media_session():
+    """Canonical playback snapshot for future PiRadio UI and phone controls."""
+    return jsonify(active_media_snapshot().as_dict())
+
+
 @app.route('/api/nowplaying')
 def get_now_playing():
-    if youtube_video.is_playing():
-        return jsonify({"text": youtube_video.title or "YouTube video"})
-    if bible_player.playing:
-        return jsonify({"text": f"Tamil Bible - Book {bible_player.book + 1} - Chapter {bible_player.chapter}"})
-    return jsonify({"text": meta_text if meta_text else stations[current_idx]['name']})
+    return jsonify({"text": active_media_snapshot().title})
 
 LISTEN_ALONG_PAGE = """<!DOCTYPE html>
 <html lang="en">
@@ -3813,31 +3866,8 @@ def api_listen():
 
 @app.route('/api/status')
 def get_status():
-    if youtube_video.is_playing():
-        video = youtube_video.playback_status()
-        source = video.get("source") or "youtube_video"
-        is_playing = not video.get("paused", False)
-        is_paused = bool(video.get("paused", False))
-    elif bible_player.playing:
-        source = "bible"
-        is_paused = bool(bible_player.paused)
-        is_playing = not is_paused
-    else:
-        source = "youtube_audio" if current_youtube_id() else "radio"
-        try:
-            state = player.get_state()
-            is_playing = state == vlc.State.Playing
-            is_paused = state == vlc.State.Paused
-        except Exception:
-            is_playing = False
-            is_paused = False
-    return jsonify({
-        "playing": is_playing,
-        "paused": is_paused,
-        "source": source,
-        "volume": vol_level,
-        "station": current_idx
-    })
+    # Preserve original keys while providing accurate active-source metadata.
+    return jsonify(active_media_snapshot().as_dict())
 
 @app.route('/api/weather/current')
 def remote_weather_current():
