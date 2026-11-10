@@ -7406,6 +7406,13 @@ last_interaction_time = time.time()
 
 while True:
     now = time.time()
+    # A YouTube song selected from the Android remote opens the same native
+    # player screen as a result selected on the Pi touchscreen.
+    if youtube_player_open_requested:
+        youtube_player_open_requested = False
+        active_page = "youtube_player"
+        saver_active = False
+        last_interaction_time = now
     # Never dim the experience with a screensaver while mpv YouTube video exists.
     # Resetting the timer during playback gives a fresh 2 minutes afterwards.
     if youtube_video.is_playing():
