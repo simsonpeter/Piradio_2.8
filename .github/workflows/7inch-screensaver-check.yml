@@ -83,7 +83,7 @@ jobs:
           from pathlib import Path
           source = Path("touch_radio.py").read_text()
           assert "def toggle_active_playback():" in source
-          assert "video_mini_hit(event.pos, video_status_cache)" in source
+          assert "video_mini_hit(event.pos, current_video_visual_status() or {})" in source
           assert "draw_video_mini(landscape_display" in source
           assert "video_backend.seek(10 if step > 0 else -10)" in source
           assert "vlc_source=\"youtube_audio\" if current_youtube_id() else \"radio\"" in source
