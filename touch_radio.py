@@ -4930,6 +4930,7 @@ from youtube_video_backend import YouTubeVideoBackend
 youtube_video = YouTubeVideoBackend()
 youtube_video_id = None
 youtube_player_open_requested = False
+youtube_view_mode = "search"  # 'search' and 'player' share the YouTube tab
 
 def youtube_player_available():
     """Show full player for current YouTube VLC stream or YouTube MPV session."""
@@ -5870,6 +5871,52 @@ def enter_tc_radio():
     elif player.get_state() not in (vlc.State.Playing, vlc.State.Buffering, vlc.State.Opening):
         current_idx = index
         play()
+    return True
+
+
+def open_main_page(name):
+    """Single navigation entry point: YouTube remains one tab; Radio owns radio."""
+    global active_page, youtube_view_mode, youtube_keyboard_open
+    mapping = {
+        "HOME": "menu", "RADIO": "radio", "BIBLE": "bible",
+        "YOUTUBE": "youtube", "FAVORITES": "favorites",
+        "CLOCK": "clock", "WEATHER": "forecast", "SETTINGS": "settings",
+    }
+    active_page = mapping.get(name, "menu")
+    if active_page == "radio":
+        enter_tc_radio()
+    elif active_page == "youtube":
+        # Keep playback and search inside the same YouTube tab.
+        youtube_view_mode = "player" if youtube_player_available() else "search"
+        youtube_keyboard_open = False
+
+
+def open_active_media_page():
+    """Open mini player source without forcing it into TC Radio."""
+    global active_page, youtube_view_mode
+    if bible_player.playing:
+        active_page = "bible"
+    elif youtube_player_available():
+        active_page = "youtube"
+        youtube_view_mode = "player"
+    else:
+        active_page = "radio"
+        enter_tc_radio()
+
+
+def open_radio_stations():
+    global active_page, radio_picker_offset
+    radio_picker_offset = 0
+    active_page = "radio_picker"
+
+
+def select_radio_station(index):
+    global current_idx, active_page
+    if index not in radio_indices(stations):
+        return False
+    current_idx = index
+    play()
+    active_page = "radio"
     return True
 
 
@@ -7265,7 +7312,7 @@ def maybe_advance_youtube_queue():
 
 def apply_youtube_touch_result():
     global youtube_touch_pending, youtube_touch_busy, youtube_touch_status
-    global youtube_touch_offset, youtube_results_cache, active_page
+    global youtube_touch_offset, youtube_results_cache, active_page, youtube_view_mode
     pending = youtube_touch_pending
     if not pending:
         return
@@ -7293,7 +7340,8 @@ def apply_youtube_touch_result():
         play_youtube_station(video_id, title, audio_url)
         youtube_touch_status = youtube_queue_status()
         if not auto:
-            active_page = "youtube_player"
+            active_page = "youtube"
+            youtube_view_mode = "player"
     elif kind == 'error':
         youtube_touch_status = str(pending[1])[:80]
         auto = pending[2] if len(pending) > 2 else False
@@ -7446,7 +7494,8 @@ while True:
     # player screen as a result selected on the Pi touchscreen.
     if youtube_player_open_requested:
         youtube_player_open_requested = False
-        active_page = "youtube_player"
+        active_page = "youtube"
+        youtube_view_mode = "player"
         saver_active = False
         last_interaction_time = now
     # Never dim the experience with a screensaver while mpv YouTube video exists.
@@ -7816,10 +7865,7 @@ while True:
                     if shell_action:
                         kind, value = shell_action
                         if kind == "page":
-                            active_page = {"HOME":"menu","RADIO":"radio",
-                                           "BIBLE":"bible","YOUTUBE":"youtube",
-                                           "FAVORITES":"favorites","CLOCK":"clock",
-                                           "WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu")
+                            open_main_page(value)
                         elif kind == "open_player" and youtube_video.is_playing():
                             youtube_video.restore_video()
                         elif kind == "audio":
@@ -7835,11 +7881,9 @@ while True:
                     youtube_video.restore_video()
                     continue
                 if kind == "open_player":
-                    active_page = "bible" if bible_player.playing else ("youtube_player" if youtube_player_available() else "radio")
+                    open_active_media_page()
                 elif kind == "page":
-                    active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
-                                   "YOUTUBE":"youtube","FAVORITES":"favorites",
-                                   "CLOCK":"clock","WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu")
+                    open_main_page(value)
                 elif value == "pause":
                     toggle_active_playback()
                 elif youtube_video.is_playing():
@@ -7849,13 +7893,13 @@ while True:
                 else:
                     skip_playback(-1 if value=="prev" else 1)
                 continue
-        if active_page == "youtube_player":
+        if active_page == "youtube" and youtube_view_mode == "player":
             if event.type == pygame.MOUSEBUTTONDOWN:
                 action = youtube_player_hit(event.pos, youtube_player_state())
                 if action:
                     kind, value = action
                     if kind == "search":
-                        active_page = "youtube"
+                        youtube_view_mode = "search"
                         youtube_keyboard_open = False
                     elif kind == "video":
                         if youtube_video.is_playing():
@@ -7878,7 +7922,7 @@ while True:
                             youtube_video.stop()
                         else:
                             player.stop()
-                        active_page = "youtube"
+                        youtube_view_mode = "search"
                     elif kind == "seek":
                         if youtube_video.is_playing():
                             youtube_video.seek_absolute(value)
@@ -7910,11 +7954,9 @@ while True:
             if action:
                 kind, value = action
                 if kind == "open_player":
-                    active_page = "bible" if bible_player.playing else ("youtube_player" if youtube_player_available() else "radio")
+                    open_active_media_page()
                 elif kind == "page":
-                    active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
-                                   "YOUTUBE":"youtube","FAVORITES":"favorites",
-                                   "CLOCK":"clock","WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu")
+                    open_main_page(value)
                 elif kind == "audio":
                     # A phone-started video can remain audio-only behind any
                     # PiRadio page. Transport must target MPV, not idle VLC.
@@ -7943,7 +7985,7 @@ while True:
             continue
         # Native secondary panels map their hit targets to the existing
         # business-logic controls; the sidebar and mini-player remain separate.
-        if active_page in ("favorites","clock","forecast","settings","bluetooth") or (active_page=="youtube" and not youtube_keyboard_open):
+        if active_page in ("favorites","clock","forecast","settings","bluetooth") or (active_page=="youtube" and youtube_view_mode=="search" and not youtube_keyboard_open):
             native_page=True
         else:
             native_page=False
@@ -7952,7 +7994,8 @@ while True:
             target=landscape_page_hit(event.pos)
             if target == ("youtube_player",):
                 if event.type == pygame.MOUSEBUTTONDOWN and youtube_player_available():
-                    active_page = "youtube_player"
+                    active_page = "youtube"
+                    youtube_view_mode = "player"
                 continue
             if target == ("youtube_video",):
                 if event.type == pygame.MOUSEBUTTONDOWN:
@@ -8481,7 +8524,7 @@ while True:
                    video_status=active_video_status)
         if active_page == "bible":
             draw_landscape_bible(landscape_display,bible_player,f_lg,f_sm,f_tiny)
-        elif active_page == "youtube_player":
+        elif active_page == "youtube" and youtube_view_mode == "player":
             player_snapshot = youtube_player_state()
             thumbnail = logo if player_snapshot["mode"] == "audio" and current_youtube_id() else None
             draw_youtube_player(landscape_display, f_lg, f_sm, f_tiny,
@@ -8490,7 +8533,7 @@ while True:
             guest_url = f"http://{current_ip}:{web_port}/cast"
             draw_cast_page(landscape_display, f_lg, f_sm, f_tiny,
                            cast_session.screen_state(), guest_url)
-        elif active_page in ("favorites","clock","forecast","settings","bluetooth","youtube") and not (active_page=="youtube" and youtube_keyboard_open):
+        elif active_page in ("favorites","clock","forecast","settings","bluetooth","youtube") and not (active_page=="youtube" and (youtube_keyboard_open or youtube_view_mode=="player")):
             draw_landscape_page(landscape_display,active_page,f_lg,f_sm,f_tiny,
                                 station=current_station,temp=current_temp if weather_available else None,
                                 weather_type=weather_type if weather_available else None,
