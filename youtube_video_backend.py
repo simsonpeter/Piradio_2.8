@@ -5,6 +5,7 @@ Requires a direct, playable media URL resolved by the existing YouTube code.
 The display integration is intentionally opt-in until touch/Wayland testing.
 """
 import json
+import math
 import os
 import socket
 import subprocess
@@ -20,6 +21,7 @@ class YouTubeVideoBackend:
         self.minimized = False
         self.video_id = None
         self.title = ""
+        self.source_type = "youtube_video"
 
     def _command(self, *args):
         if not self.process or self.process.poll() is not None or not self.socket_path:
@@ -33,9 +35,11 @@ class YouTubeVideoBackend:
         except (OSError, ValueError):
             return False
 
-    def start(self, media_url):
-        if not isinstance(media_url, str) or not media_url.startswith(("https://", "http://")):
-            raise ValueError("A resolved HTTP(S) video URL is required")
+    def _start_sources(self, sources, source_type="youtube_video", title="",
+                       audio_only=False, photo_duration=None, rtsp=False):
+        """Use the existing MPV engine for guest files, photos and RTSP streams."""
+        if not sources:
+            raise ValueError("No media selected")
         self.stop()
         if subprocess.run(["which", "mpv"], capture_output=True).returncode != 0:
             raise RuntimeError("mpv is not installed; install it with sudo apt install mpv")
@@ -47,18 +51,87 @@ class YouTubeVideoBackend:
         environment = os.environ.copy()
         environment.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
         environment.setdefault("WAYLAND_DISPLAY", "wayland-0")
-        self.process = subprocess.Popen(
-            ["mpv", "--no-config", "--force-window=yes", "--fs",
-             "--vo=gpu", "--gpu-context=wayland", "--hwdec=no", "--profile=fast",
-             "--cache=yes", "--cache-secs=20", "--demuxer-max-bytes=32MiB",
-             "--video-sync=audio", "--framedrop=vo",
-             "--ytdl-format=bestvideo[height<=480][vcodec^=avc1]+bestaudio/best[height<=480][vcodec^=avc1]/best[height<=480]",
-             "--script=" + str(Path(__file__).with_name("mpv_piradio_touch.lua")),
-             "--osc=yes", "--input-default-bindings=yes",
-             "--input-ipc-server=" + self.socket_path,
-             "--title=PiRadio YouTube Video", media_url],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
-        self.minimized = False
+        cmd = ["mpv", "--no-config",
+               "--hwdec=no", "--profile=fast",
+               "--cache=yes", "--cache-secs=20",
+               "--demuxer-max-bytes=32MiB", "--video-sync=audio",
+               "--framedrop=vo",
+               "--ytdl-format=bestvideo[height<=480][vcodec^=avc1]+bestaudio/best[height<=480][vcodec^=avc1]/best[height<=480]",
+               "--input-ipc-server=" + self.socket_path,
+               "--title=" + (str(title or "PiRadio Media")[:120])]
+        if audio_only:
+            # No separate window for guest audio, PiRadio remains fully usable.
+            cmd.extend(["--no-video", "--force-window=no",
+                        "--no-osc", "--no-input-default-bindings"])
+        else:
+            cmd.extend(["--force-window=yes", "--fs",
+                        "--vo=gpu", "--gpu-context=wayland",
+                        "--script=" + str(Path(__file__).with_name("mpv_piradio_touch.lua")),
+                        "--osc=yes", "--input-default-bindings=yes"])
+        if photo_duration is not None:
+            cmd.append("--image-display-duration=" + str(photo_duration))
+            if len(sources) > 1:
+                cmd.append("--loop-playlist=inf")
+        if rtsp:
+            # Live phone screen streams should not accumulate seconds of cache.
+            cmd.extend(["--cache=no", "--profile=low-latency"])
+        cmd.append("--")
+        cmd.extend(sources)
+        try:
+            self.process = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env=environment,
+            )
+        except Exception:
+            self.socket_path = None
+            raise
+        self.minimized = bool(audio_only)
+        self.video_id = None
+        self.source_type = source_type
+        self.title = str(title or "PiRadio Media")[:160]
+        return True
+
+    def start(self, media_url):
+        if not isinstance(media_url, str) or not media_url.startswith(("https://", "http://")):
+            raise ValueError("A resolved HTTP(S) video URL is required")
+        return self._start_sources([media_url], source_type="youtube_video",
+                                   title="YouTube video")
+
+    def start_local(self, files, kind):
+        """Play uploaded media from private guest cache files only."""
+        if kind not in ("photos", "audio", "video"):
+            raise ValueError("Unsupported local media type")
+        if isinstance(files, (str, bytes)) or not isinstance(files, (list, tuple)) or not files:
+            raise ValueError("Choose media files")
+        base = (Path.home() / ".cache" / "piradio-guest-cast").resolve()
+        paths = []
+        for name in files:
+            resolved = Path(name).resolve(strict=True)
+            if resolved.parent != base or not resolved.is_file():
+                raise ValueError("Guest file is outside the private cast cache")
+            paths.append(str(resolved))
+        if kind != "photos" and len(paths) != 1:
+            raise ValueError("Send one audio or video file at a time")
+        if kind == "photos":
+            seconds = "8" if len(paths) > 1 else "inf"
+            title = "Guest photo slideshow" if len(paths) > 1 else "Guest photo"
+        else:
+            seconds = None
+            title = Path(paths[0]).name
+            # No filename information in randomised disk name; callers can
+            # set a friendly title after startup if desired.
+        return self._start_sources(
+            paths, source_type="guest_" + kind, title=title,
+            audio_only=(kind == "audio"), photo_duration=seconds,
+        )
+
+    def start_network_stream(self, media_url, title="Android screen mirror"):
+        """An already validated same-LAN RTSP URL from ScreenStream Android."""
+        if not isinstance(media_url, str) or not media_url.startswith("rtsp://"):
+            raise ValueError("RTSP stream required")
+        return self._start_sources(
+            [media_url], source_type="screen_mirror", title=title, rtsp=True
+        )
 
     def start_youtube(self, video_id, title=""):
         """Use mpv yt-dlp integration to resolve the video stream itself."""
@@ -90,7 +163,7 @@ class YouTubeVideoBackend:
         empty = {
             "playing": False, "position": 0, "duration": 0,
             "paused": False, "minimized": False, "title": "",
-            "video_id": None,
+            "video_id": None, "source": self.source_type,
         }
         if not self.is_playing() or not self.socket_path:
             self.minimized = False
@@ -98,7 +171,8 @@ class YouTubeVideoBackend:
         result = {
             "playing": True, "position": 0, "duration": 0,
             "paused": False, "minimized": self.minimized,
-            "title": self.title or "YouTube video", "video_id": self.video_id,
+            "title": self.title or "PiRadio Media", "video_id": self.video_id,
+            "source": self.source_type,
         }
         keys = {
             1: ("time-pos", "position"),
@@ -154,6 +228,12 @@ class YouTubeVideoBackend:
             if isinstance(minimized, bool):
                 self.minimized = self.minimized or minimized
         result["minimized"] = self.minimized
+        for numeric in ("position", "duration"):
+            try:
+                value = float(result[numeric])
+                result[numeric] = value if math.isfinite(value) and value >= 0 else 0
+            except (ValueError, TypeError, OverflowError):
+                result[numeric] = 0
         return result
 
     def volume(self, value):
@@ -193,6 +273,7 @@ class YouTubeVideoBackend:
         self.minimized = False
         self.video_id = None
         self.title = ""
+        self.source_type = "youtube_video"
         if self.socket_path:
             try:
                 os.unlink(self.socket_path)
