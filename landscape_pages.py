@@ -43,7 +43,7 @@ def draw(s,page,font,small,tiny,**v):
         s.blit(date,date.get_rect(center=(445,290)))
         weather=pygame.Rect(615,149,128,150)
         pygame.draw.rect(s,(32,32,32),weather,border_radius=16)
-        temperature=str(v.get("temp","--"))+"°C"
+        temperature=str(v.get("temp"))+"°C" if v.get("temp") is not None else "--°C"
         t=font.render(temperature,True,(248,252,255))
         s.blit(t,t.get_rect(center=(weather.centerx,202)))
         city=tiny.render(str(v.get("city","")),True,MUTED)
@@ -53,7 +53,7 @@ def draw(s,page,font,small,tiny,**v):
         _text(s,small,"WEATHER & 5-DAY FORECAST",(181,115),TEXT,560)
         city=str(v.get("city") or "Selected location")
         _text(s,tiny,city.upper(),(184,152),MUTED,480)
-        temperature=str(v.get("temp") or "--")
+        temperature=str(v.get("temp")) if v.get("temp") is not None else "--"
         if temperature.endswith("°C"):temperature=temperature[:-2]
         big=pygame.font.Font(None,105)
         shown=big.render(temperature+"°",True,WHITE)
@@ -73,7 +73,11 @@ def draw(s,page,font,small,tiny,**v):
                 dayname=f"DAY {i+1}";high="--";low="--"
             _text(s,tiny,dayname,(x+10,294),MUTED,86)
             _text(s,tiny,f"{high}° / {low}°",(x+9,328),TEXT,91)
-        if not forecast:_text(s,tiny,"Forecast will appear after weather data loads",(183,349),MUTED,555)
+        if not forecast:
+            _text(s,tiny,"Forecast will appear after weather data loads",(183,349),MUTED,555)
+        status_text = str(v.get("weather_status") or "")[:150]
+        if status_text:
+            _text(s,tiny,status_text,(184,386),MUTED,558)
     elif page=="favorites":
         button(s,small,"ADD / REMOVE CURRENT",pygame.Rect(515,74,251,51),(160,83))
         fav=v.get("favorites",[]);stations=v.get("stations",[])
