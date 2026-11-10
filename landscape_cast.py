@@ -66,6 +66,7 @@ def draw_cast_page(surface, font, small, tiny, pin_state, url):
 
     _text(surface, small, "Scan this QR code", 429, 153, WHITE)
     _text(surface, tiny, "Phone and Pi must share the same Wi-Fi", 429, 180, MUTED, 340)
+    _text(surface, tiny, url, 429, 197, MUTED, 332)
     _text(surface, tiny, "Then enter this 6-digit pairing code:", 429, 213, MUTED, 330)
     pin = pin_state.get("pin")
     if pin:
@@ -76,7 +77,6 @@ def draw_cast_page(surface, font, small, tiny, pin_state, url):
     else:
         _text(surface, small, "Pairing PIN expired", 435, 258, ACCENT, 308)
         _text(surface, tiny, "Tap Renew PIN for another 10 minutes", 435, 308, MUTED, 330)
-    _text(surface, tiny, url, 180, 369, MUTED, 565)
 
     for rect, label, color in (
         (RENEW_BUTTON, "Renew PIN", (31, 83, 88)),
