@@ -36,12 +36,18 @@ jobs:
       - name: Validate PiRadio desktop app launcher without reboot
         run: |
           bash -n boot/tcradios-start boot/piradio-open install_piradio_app_launcher.sh
-          TEST_HOME="$(mktemp -d)"
+          TEST_HOME=$(mktemp -d)
           mkdir -p "$TEST_HOME/Desktop"
           HOME="$TEST_HOME" bash install_piradio_app_launcher.sh
           test -x "$TEST_HOME/.local/bin/piradio7"
           test -f "$TEST_HOME/.local/share/applications/piradio7.desktop"
-          grep -q '^Name=PiRadio 7
+          grep -q 'Name=PiRadio 7' "$TEST_HOME/.local/share/applications/piradio7.desktop"
+          HOME="$TEST_HOME" "$TEST_HOME/.local/bin/piradio7" status
+          HOME="$TEST_HOME" "$TEST_HOME/.local/bin/piradio7" --help
+          HOME="$TEST_HOME" bash install_piradio_app_launcher.sh
+          test -x "$TEST_HOME/.local/bin/piradio7"
+          echo 'PiRadio desktop app launcher checks passed'
+      - name: Create isolated renderer environment
         run: python3 -m venv .venv
       - name: Install Pygame renderer
         run: .venv/bin/python -m pip install pygame==2.6.1 requests flask qrcode[pil]
