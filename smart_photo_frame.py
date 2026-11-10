@@ -474,27 +474,27 @@ class PhotoFrameRenderer:
             self._text(surface,tiny,datetime.now().strftime("%a, %d %b %Y"),
                        36,83,(198,198,198))
         if self.library.options["weather"] and temperature is not None:
-            chip = pygame.Surface((186,66),pygame.SRCALPHA)
+            chip = pygame.Surface((172,66),pygame.SRCALPHA)
             pygame.draw.rect(chip,(0,0,0,150),chip.get_rect(),border_radius=14)
-            surface.blit(chip,(601,20))
-            self._text(surface,small,f"{temperature}°C",617,25)
-            self._text(surface,tiny,str(city)[:19],617,53,(218,218,218))
+            surface.blit(chip,(495,20))
+            self._text(surface,small,f"{temperature}°C",507,25)
+            self._text(surface,tiny,str(city)[:17],507,53,(218,218,218))
 
         if ambient:
             return
         # Tap once to display clean, temporary controls over the photograph.
-        if now < self.controls_until or not self.photos:
+        if not self.show_pairing and (now < self.controls_until or not self.photos):
             bottom = pygame.Surface((800,90),pygame.SRCALPHA)
             bottom.fill((0,0,0,190))
             surface.blit(bottom,(0,390))
             self._text(surface,tiny,
-                       f"PHOTO FRAME   {self.index+1 if self.photos else 0}/{len(self.photos)}",
-                       205,432,(187,187,187))
+                       f"{self.index+1 if self.photos else 0} / {len(self.photos)}",
+                       217,432,(187,187,187))
             for rect,label,primary in (
                 (PHOTO_ADD, "ADD PHOTOS",False),
-                (PHOTO_PREVIOUS, "◀",False),
-                (PHOTO_PAUSE, "▶" if self.paused else "Ⅱ",True),
-                (PHOTO_NEXT, "▶",False),
+                (PHOTO_PREVIOUS, "PREV",False),
+                (PHOTO_PAUSE, "PLAY" if self.paused else "PAUSE",True),
+                (PHOTO_NEXT, "NEXT",False),
                 (PHOTO_SETTINGS, "FIT / FILL",False),
                 (PHOTO_CLOSE, "EXIT",False),
             ):
@@ -507,7 +507,7 @@ class PhotoFrameRenderer:
                 self._text(surface,tiny,str(playing)[:52],15,370,(245,245,245))
         if self.show_pairing or not self.photos:
             shade = pygame.Surface((800,480),pygame.SRCALPHA)
-            shade.fill((0,0,0,215))
+            shade.fill((0,0,0,245))
             surface.blit(shade,(0,0))
             self._text(surface,font,"ADD PHOTOS TO PIRADIO",170,24)
             pygame.draw.rect(surface,(250,250,250),PHOTO_QR,border_radius=12)
