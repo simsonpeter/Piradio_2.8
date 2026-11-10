@@ -197,6 +197,86 @@ def draw_shell(s,font,small,tiny,active_page,station,metadata,playing,bible_play
     for rect,icon in ((MINI_PREV,"prev"),(MINI_PAUSE,"pause" if playing else "play"),(MINI_NEXT,"next")):
         _icon(s,icon,rect,25,WHITE)
 
+# Unified minimized-mpv transport panel, shared by every PiRadio page.
+# This overlays the normal radio mini-player only when an mpv video is
+# minimized. No separate player is created: all actions operate existing mpv.
+VIDEO_MINI = pygame.Rect(157, 399, 629, 65)
+VIDEO_SEEK = pygame.Rect(215, 451, 273, 11)
+VIDEO_BUTTONS = (
+    ("seek_relative", -10, pygame.Rect(497, 407, 51, 43), "-10"),
+    ("pause", None, pygame.Rect(551, 407, 51, 43), "⏯"),
+    ("seek_relative", 10, pygame.Rect(605, 407, 51, 43), "+10"),
+    ("restore", None, pygame.Rect(659, 407, 59, 43), "FULL"),
+    ("stop", None, pygame.Rect(721, 407, 59, 43), "STOP"),
+)
+
+
+def _video_time(seconds):
+    try:
+        seconds = max(0, int(float(seconds or 0)))
+    except (ValueError, TypeError):
+        seconds = 0
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def draw_video_mini(surface, font, small, tiny, status):
+    """Overlay actual minimized-video controls on the 800x480 Pi screen."""
+    if not status.get("playing") or not status.get("minimized"):
+        return False
+
+    pygame.draw.rect(surface, (15, 15, 15), VIDEO_MINI, border_radius=15)
+    pygame.draw.rect(surface, (128, 128, 128), VIDEO_MINI, 2, border_radius=15)
+    pygame.draw.circle(surface, (245, 245, 245), (182, 426), 12)
+    _text(surface, tiny, "YT", (174, 418), (0, 0, 0), 20)
+    _text(surface, small, status.get("title") or "YouTube video",
+          (211, 406), WHITE, 274)
+    position = status.get("position", 0) or 0
+    duration = status.get("duration", 0) or 0
+    label = (
+        ("Paused" if status.get("paused") else "Audio playing") +
+        "  •  " + _video_time(position) + " / " +
+        (_video_time(duration) if duration else "--:--")
+    )
+    _text(surface, tiny, label, (214, 429), MUTED, 268)
+    pygame.draw.rect(surface, (65, 65, 65), VIDEO_SEEK, border_radius=5)
+    if duration:
+        ratio = max(0.0, min(1.0, float(position) / max(1.0, float(duration))))
+        if ratio > 0:
+            fill = pygame.Rect(VIDEO_SEEK.x, VIDEO_SEEK.y,
+                               max(3, int(VIDEO_SEEK.width * ratio)), VIDEO_SEEK.height)
+            pygame.draw.rect(surface, (228, 228, 228), fill, border_radius=5)
+    for action, value, rect, label in VIDEO_BUTTONS:
+        fill = (85, 37, 37) if action == "stop" else (35, 35, 35)
+        pygame.draw.rect(surface, fill, rect, border_radius=9)
+        pygame.draw.rect(surface, (92, 92, 92), rect, 1, border_radius=9)
+        visible = "II" if action == "pause" and not status.get("paused") else (
+            "PLAY" if action == "pause" else label
+        )
+        text_font = tiny if len(visible) > 2 else small
+        rendered = text_font.render(visible, True, WHITE)
+        surface.blit(rendered, rendered.get_rect(center=rect.center))
+    return True
+
+
+def video_mini_hit(pos, status):
+    """Action tuple or None; consume every touch on the video mini panel."""
+    if not status.get("playing") or not status.get("minimized"):
+        return None
+    if not VIDEO_MINI.collidepoint(pos):
+        return None
+    for action, value, rect, _label in VIDEO_BUTTONS:
+        if rect.collidepoint(pos):
+            return action, value
+    if VIDEO_SEEK.inflate(0, 12).collidepoint(pos):
+        duration = float(status.get("duration") or 0)
+        if duration > 0:
+            ratio = max(0, min(1, (pos[0] - VIDEO_SEEK.x) / VIDEO_SEEK.width))
+            return "seek", duration * ratio
+    if pos[0] < 497 and pos[1] < VIDEO_SEEK.y:
+        return "restore", None
+    return "consume", None
+
+
 def shell_hit(pos):
     if MINI_OPEN.collidepoint(pos):return ("open_player",None)
     for name,rect in NAV_RECTS.items():
