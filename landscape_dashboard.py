@@ -429,7 +429,9 @@ def video_mini_hit(pos, status):
             ratio = max(0, min(1, (pos[0] - VIDEO_SEEK.x) / VIDEO_SEEK.width))
             return "seek", duration * ratio
     if pos[0] < 497 and pos[1] < VIDEO_SEEK.y:
-        return "restore", None
+        # Tapping the media title opens PiRadio's own Now Playing screen.
+        # The explicit FULL button still restores the MPV video window.
+        return "open_player", None
     return "consume", None
 
 
