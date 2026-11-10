@@ -121,9 +121,8 @@ class VideoMiniTests(unittest.TestCase):
         self.assertEqual(target[0], "seek")
         self.assertAlmostEqual(target[1], 75, delta=1)
 
-    def test_main_radio_player_switches_from_stale_radio_to_video(self):
+    def test_tcradios_player_remains_dedicated_during_youtube_video(self):
         from landscape_dashboard import draw_dashboard
-        from unittest.mock import patch
         surface = pygame.Surface((800, 480))
         font, small, tiny = (
             pygame.font.Font(None, 28),
@@ -131,38 +130,26 @@ class VideoMiniTests(unittest.TestCase):
             pygame.font.Font(None, 16),
         )
         status = self.make_status()
-        # Prior station artwork must never be rendered into the hero when
-        # an MPV video owns the active playback session.
-        loaded_logo = pygame.Surface((100, 100))
-        loaded_logo.fill((221, 0, 128))
+        # Even if a YouTube video is active elsewhere, the RADIO screen
+        # must always render the last selected TCRADIOS station and artwork.
         with patch("landscape_dashboard._station_art") as station_art:
             self.assertTrue(draw_dashboard(
                 surface, font, small, tiny,
-                "radio", "OLD RADIO STATION", "Old live streaming",
-                False, False, False, "Bible", 50,
-                station_data={"name": "OLD RADIO STATION"},
-                loaded_logo=loaded_logo,
+                "radio", "TC Tamil Live", "Radio streaming",
+                True, False, False, "Bible", 50,
+                station_data={"name": "TC Tamil Live"},
                 video_status=status,
             ))
-            station_art.assert_not_called()
-        # No magenta/stale logo pixel at artwork centre.
-        self.assertNotEqual(tuple(surface.get_at((275, 190))[:3]),
-                            (221, 0, 128))
+            station_art.assert_called_once()
 
-    def test_video_hero_seeks_and_restores_without_radio_volume_click(self):
-        from landscape_dashboard import (
-            video_hero_hit, VIDEO_HERO_SEEK, VIDEO_HERO_ART,
-        )
+    def test_youtube_video_has_its_own_minimized_controls(self):
+        from landscape_dashboard import VIDEO_MINI, VIDEO_SEEK
         status = self.make_status()
-        action = video_hero_hit(VIDEO_HERO_SEEK.center, status, "radio")
+        action = video_mini_hit(VIDEO_SEEK.center, status)
         self.assertEqual(action[0], "seek")
         self.assertAlmostEqual(action[1], 75, delta=1)
-        self.assertEqual(
-            video_hero_hit(VIDEO_HERO_ART.center, status, "radio"),
-            ("restore", None),
-        )
-        self.assertIsNone(video_hero_hit(VIDEO_HERO_SEEK.center, status, "menu"))
-        self.assertIsNone(video_hero_hit(VIDEO_HERO_SEEK.center, None, "radio"))
+        status["minimized"] = False
+        self.assertIsNone(video_mini_hit(VIDEO_MINI.center, status))
 
     def test_home_page_and_secondary_shell_accept_video_source(self):
         from landscape_dashboard import draw_dashboard, draw_shell
