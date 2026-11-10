@@ -136,7 +136,7 @@ jobs:
               'draw_youtube_player(landscape_display',
               'youtube_player_hit(event.pos, youtube_player_state())',
               'youtube_player_open_requested = True',
-              'player.set_time(int(value * 1000))',
+              'player.set_time(int(plan.value * 1000))',
               'player_available=youtube_player_available()',
           )
           for marker in required:
