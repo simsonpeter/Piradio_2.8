@@ -25,6 +25,115 @@ def button(s,font,text,rect,target=None,active=False):
     label=font.render(label_text,True,TEXT)
     s.blit(label,label.get_rect(center=rect.center))
     if target is not None:TARGETS[(rect.x,rect.y,rect.w,rect.h)]=target
+
+YOUTUBE_SEEK = pygame.Rect(385, 290, 365, 12)
+YOUTUBE_ART = pygame.Rect(185, 128, 178, 177)
+
+
+def _time_label(ms):
+    try:
+        seconds = max(0, int(float(ms or 0) / 1000))
+    except (ValueError, OverflowError, TypeError):
+        seconds = 0
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return (f"{hours}:{minutes:02d}:{seconds:02d}"
+            if hours else f"{minutes}:{seconds:02d}")
+
+
+def youtube_player(s, font, small, tiny, **v):
+    """Real dedicated YouTube Now Playing panel, independent of TCRADIOS."""
+    status = v.get("youtube_status") or {}
+    title_text = str(status.get("title") or "Choose a YouTube song")[:180]
+    uploader = str(status.get("uploader") or "YouTube · Audio & video")[:90]
+    is_active = bool(status.get("active"))
+    paused = bool(status.get("paused"))
+    mpv_video = bool(status.get("video"))
+    length = max(0, float(status.get("length_ms") or 0))
+    position = max(0, float(status.get("position_ms") or 0))
+    can_video = bool(v.get("video_available"))
+
+    _text(s, tiny, "YOUTUBE  /  NOW PLAYING", (182, 106), (190, 190, 190), 320)
+    button(s, tiny, "SEARCH / RESULTS", pygame.Rect(604, 76, 158, 39),
+           ("yt", "search"))
+
+    # Dedicated artwork tile: intentionally never uses a TCRADIOS station logo.
+    pygame.draw.rect(s, (21, 21, 21), YOUTUBE_ART, border_radius=17)
+    pygame.draw.rect(s, (74, 74, 74), YOUTUBE_ART, 1, border_radius=17)
+    picture = v.get("youtube_artwork")
+    if picture is not None:
+        try:
+            rect = pygame.Rect(191, 134, 166, 165)
+            width, height = picture.get_size()
+            ratio = max(rect.width / max(1, width),
+                        rect.height / max(1, height))
+            image = pygame.transform.smoothscale(
+                picture,
+                (max(1, int(width * ratio)), max(1, int(height * ratio)))
+            )
+            clipped = image.subsurface(
+                ((image.get_width() - rect.width) // 2,
+                 (image.get_height() - rect.height) // 2,
+                 rect.width, rect.height)
+            )
+            s.blit(clipped, rect.topleft)
+        except (pygame.error, ValueError, AttributeError):
+            picture = None
+    if picture is None:
+        pygame.draw.circle(s, (47, 47, 47), YOUTUBE_ART.center, 59)
+        pygame.draw.circle(s, (219, 219, 219), YOUTUBE_ART.center, 58, 2)
+        pygame.draw.polygon(
+            s, (246, 246, 246),
+            [(249, 193), (249, 239), (285, 216)]
+        )
+    TARGETS[tuple(YOUTUBE_ART)] = ("yt", "video")
+
+    _text(s, font, title_text, (386, 139), TEXT, 370)
+    _text(s, tiny, uploader, (387, 187), MUTED, 355)
+    if mpv_video:
+        playing_state = "VIDEO PAUSED" if paused else "VIDEO PLAYING"
+    elif is_active:
+        playing_state = "PAUSED" if paused else "AUDIO PLAYING"
+    else:
+        playing_state = "READY TO PLAY"
+    pygame.draw.circle(s, (94, 215, 193) if is_active and not paused
+                       else (148, 148, 148), (398, 244), 5)
+    _text(s, tiny, playing_state, (414, 233), MUTED, 270)
+
+    pygame.draw.rect(s, (60, 60, 60), YOUTUBE_SEEK, border_radius=6)
+    if length:
+        progress = min(1.0, position / length)
+        width = int(YOUTUBE_SEEK.width * progress)
+        if width:
+            pygame.draw.rect(
+                s, (233, 233, 233),
+                pygame.Rect(YOUTUBE_SEEK.x, YOUTUBE_SEEK.y,
+                            max(3, width), YOUTUBE_SEEK.height),
+                border_radius=6
+            )
+    TARGETS[tuple(YOUTUBE_SEEK.inflate(0, 22))] = ("yt", "seek")
+    _text(s, tiny, _time_label(position), (386, 308), MUTED, 100)
+    end_text = _time_label(length) if length else "--:--"
+    _text(s, tiny, end_text, (707, 308), MUTED, 57)
+
+    button(s, tiny, "VIDEO" if can_video else "AUDIO",
+           pygame.Rect(185, 324, 178, 49),
+           ("yt", "video") if can_video else None,
+           active=can_video)
+    for x, width, label, action in (
+        (383, 68, "PREV", "previous"),
+        (459, 59, "-10s", "back10"),
+        (526, 90, "PLAY" if not is_active or paused else "PAUSE", "toggle"),
+        (623, 59, "+10s", "forward10"),
+        (690, 72, "NEXT", "next"),
+    ):
+        button(s, tiny, label, pygame.Rect(x, 324, width, 49),
+               ("yt", action), active=(action == "toggle"))
+    if not is_active:
+        _text(s, tiny, "Tap PLAY to start your last YouTube selection",
+              (385, 263), MUTED, 358)
+
+
 def draw(s,page,font,small,tiny,**v):
     TARGETS.clear()
     _card(s,PANEL,18)
@@ -126,28 +235,39 @@ def draw(s,page,font,small,tiny,**v):
         button(s,tiny,"NEXT",pygame.Rect(548,345,99,36),("bt_page",1))
         button(s,tiny,"BACK",pygame.Rect(662,345,98,36),(160,448))
     elif page=="youtube":
-        if v.get("video_available"):
-            button(s,tiny,"FULLSCREEN VIDEO",pygame.Rect(508,74,255,37),("youtube_video",))
-        results=v.get("youtube_results",[])
-        offset=v.get("youtube_offset",0)
-        button(s,small,"SEARCH YOUTUBE",pygame.Rect(180,117,450,49),(120,92))
-        button(s,small,"GO",pygame.Rect(643,117,120,49),(285,92))
-        if results:
-            visible=results[offset:offset+4]
-            for i,video in enumerate(visible):
-                r=pygame.Rect(180,175+i*43,580,39)
-                name=video.get("title") or video.get("name") or "YouTube audio"
-                button(s,tiny,f"{offset+i+1}. {name}",r,(160,266+i*44))
-            _text(s,tiny,f"RESULTS {offset+1}-{offset+len(visible)} OF {len(results)}",(314,351),MUTED,330)
+        player_view = bool(v.get("youtube_player_view"))
+        if player_view:
+            youtube_player(s, font, small, tiny, **v)
         else:
-            presets=v.get("presets",[])
-            for i,item in enumerate(presets[:6]):
-                name=item[0] if isinstance(item,(tuple,list)) else str(item)
-                button(s,tiny,name,pygame.Rect(180+(i%3)*194,182+(i//3)*57,181,48),
-                       (62+(i%3)*102,150+(i//3)*36))
-            _text(s,tiny,str(v.get("status","")),(310,350),MUTED,390)
-        button(s,tiny,"◀ PREV",pygame.Rect(180,343,116,38),(42,224))
-        button(s,tiny,"NEXT ▶",pygame.Rect(647,343,116,38),(278,224))
+            # Results remain accessible without replacing or stopping audio.
+            player_available = bool(v.get("youtube_status", {}).get("title")
+                                    or v.get("video_available"))
+            if player_available:
+                button(s, tiny, "NOW PLAYING", pygame.Rect(609, 76, 153, 37),
+                       ("yt", "player"), active=True)
+            results=v.get("youtube_results",[])
+            offset=v.get("youtube_offset",0)
+            button(s,small,"SEARCH YOUTUBE",pygame.Rect(180,117,450,49),(120,92))
+            button(s,small,"GO",pygame.Rect(643,117,120,49),(285,92))
+            if results:
+                visible=results[offset:offset+4]
+                for i,video in enumerate(visible):
+                    r=pygame.Rect(180,175+i*43,580,39)
+                    name=video.get("title") or video.get("name") or "YouTube audio"
+                    button(s,tiny,f"{offset+i+1}. {name}",r,(160,266+i*44))
+                _text(s,tiny,
+                      f"RESULTS {offset+1}-{offset+len(visible)} OF {len(results)}",
+                      (314,351),MUTED,330)
+            else:
+                presets=v.get("presets",[])
+                for i,item in enumerate(presets[:6]):
+                    name=item[0] if isinstance(item,(tuple,list)) else str(item)
+                    button(s,tiny,name,
+                           pygame.Rect(180+(i%3)*194,182+(i//3)*57,181,48),
+                           (62+(i%3)*102,150+(i//3)*36))
+                _text(s,tiny,str(v.get("status","")),(310,350),MUTED,390)
+            button(s,tiny,"◀ PREV",pygame.Rect(180,343,116,38),(42,224))
+            button(s,tiny,"NEXT ▶",pygame.Rect(647,343,116,38),(278,224))
     else:
         _text(s,small,"Select an option from the sidebar",(180,168),MUTED,530)
 def hit(pos):
