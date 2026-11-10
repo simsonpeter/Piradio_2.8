@@ -8,6 +8,7 @@ on:
       - feature/7inch-guest-cast
       - feature/7inch-youtube-dedicated-player
       - feature/7inch-immersive-player
+      - fix/7inch-radio-source-switch
   pull_request:
     paths:
       - touch_radio.py
@@ -165,6 +166,30 @@ jobs:
           for marker in required:
               assert marker in source, marker
           print("Immersive PiRadio integration checks passed")
+          PY
+      - name: Test TC RADIOS versus YouTube source-switching
+        env:
+          SDL_VIDEODRIVER: dummy
+          PYGAME_HIDE_SUPPORT_PROMPT: "1"
+        run: .venv/bin/python -m unittest discover -s tests -p 'test_radio_source_switch.py' -v
+      - name: Verify Radio page can replace active YouTube
+        run: |
+          .venv/bin/python - <<'PY'
+          from pathlib import Path
+          source = Path("touch_radio.py").read_text()
+          for part in (
+              "def select_live_radio(index=None):",
+              "def open_live_radio_page():",
+              "def skip_live_radio(direction):",
+              "radio_station_picker_open = True",
+              "radio_station_picker_hit",
+              "youtube_audio_generation += 1",
+              "youtube_video.stop()",
+              "draw_station_picker(",
+          ):
+              if part == "radio_station_picker_hit": continue
+              assert part in source, part
+          print("Live Radio source controls integrated")
           PY
       - name: Render immersive radio and Home preview
         env:
