@@ -539,6 +539,15 @@ def apply_live_volume(level):
     except NameError:
         pass
 
+def switch_landscape_page(page):
+    """Radio tab owns a dedicated receiver; it resumes the last TCRADIOS station."""
+    global active_page
+    active_page = page
+    if page == "radio":
+        return_to_tcradios()
+    return active_page
+
+
 def skip_radio_station(step):
     """Radio previous/next ALWAYS cycles radio stations, not YouTube results."""
     global current_idx
@@ -6425,17 +6434,22 @@ def fit_tail(text, length=28):
     return truncate_display(text, length, tail=True)
 
 def draw_menu_screen(now):
-    # The existing PAGE_ORDER and card hitboxes remain the navigation source.
+    # The legacy portrait view also uses separate radio/YouTube audio state.
     draw_home(screen, f_sm, f_tiny, menu_card_rects, ios_ui_mode)
     bible_active = bible_player.playing
     station = stations[current_idx] if stations else {}
-    youtube_active = not bible_active and bool(station.get("youtube_id"))
-    radio_active = not bible_active and player.get_state() == vlc.State.Playing
-    title = (f"Bible {bible_player.book+1} - Chapter {bible_player.chapter}" if bible_active
-             else station.get("name", "TC RADIOS"))
+    youtube_active = youtube_audio_active and not bible_active
+    if youtube_active:
+        title = youtube_current_title or "YouTube audio"
+        is_active = youtube_audio_player.get_state() == vlc.State.Playing
+    elif bible_active:
+        title = f"Bible {bible_player.book+1} - Chapter {bible_player.chapter}"
+        is_active = not bible_player.paused
+    else:
+        title = station.get("name", "TC RADIOS")
+        is_active = player.get_state() == vlc.State.Playing
     draw_mini_player(screen, f_tiny, ios_ui_mode, title,
-                     (not bible_player.paused if bible_active else radio_active),
-                     bible_active, youtube=youtube_active)
+                     is_active, bible_active, youtube=youtube_active)
 
 def draw_favorites_screen(now):
     draw_page_base("FAVORITES", now)
@@ -7775,10 +7789,10 @@ while True:
                     if shell_action:
                         kind, value = shell_action
                         if kind == "page":
-                            active_page = {"HOME":"menu","RADIO":"radio",
+                            switch_landscape_page({"HOME":"menu","RADIO":"radio",
                                            "BIBLE":"bible","YOUTUBE":"youtube",
                                            "FAVORITES":"favorites","CLOCK":"clock",
-                                           "WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu")
+                                           "WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu"))
                         elif kind == "open_player" and youtube_video.is_playing():
                             youtube_video.restore_video()
                         elif kind == "audio":
@@ -7794,11 +7808,11 @@ while True:
                     youtube_video.restore_video()
                     continue
                 if kind == "open_player":
-                    active_page = "bible" if bible_player.playing else ("youtube" if stations and stations[current_idx].get("youtube_id") else "radio")
+                    active_page = "bible" if bible_player.playing else ("youtube" if (youtube_audio_active or youtube_video.is_playing()) else "radio")
                 elif kind == "page":
-                    active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
+                    switch_landscape_page({"HOME":"menu","RADIO":"radio","BIBLE":"bible",
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
-                                   "CLOCK":"clock","WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu")
+                                   "CLOCK":"clock","WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu"))
                 elif value == "pause":
                     toggle_active_playback()
                 elif youtube_video.is_playing():
@@ -7827,32 +7841,33 @@ while True:
             if action:
                 kind, value = action
                 if kind == "open_player":
-                    active_page = "bible" if bible_player.playing else ("youtube" if stations and stations[current_idx].get("youtube_id") else "radio")
+                    active_page = "bible" if bible_player.playing else ("youtube" if (youtube_audio_active or youtube_video.is_playing()) else "radio")
                 elif kind == "page":
-                    active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
+                    switch_landscape_page({"HOME":"menu","RADIO":"radio","BIBLE":"bible",
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
-                                   "CLOCK":"clock","WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu")
+                                   "CLOCK":"clock","WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu"))
                 elif kind == "audio":
-                    # A phone-started video can remain audio-only behind any
-                    # PiRadio page. Transport must target MPV, not idle VLC.
-                    if youtube_video.is_playing():
-                        if value == "pause": youtube_video.pause()
-                        else: youtube_video.seek(-10 if value == "prev" else 10)
-                    elif active_page == "radio":
+                    # RADIO is exclusively TCRADIOS. Home transport controls
+                    # whichever player actually owns the current audio.
+                    if active_page == "radio":
                         if value == "pause":
-                            if bible_player.playing:
-                                play()  # switches audio ownership to radio
+                            if youtube_audio_active or youtube_video.is_playing() or bible_player.playing:
+                                return_to_tcradios()
                             elif player.get_state() in (vlc.State.Playing, vlc.State.Paused):
                                 player.pause()
                             else:
                                 play()
                         else:
-                            skip_playback(-1 if value == "prev" else 1)
+                            skip_radio_station(-1 if value == "prev" else 1)
+                    elif youtube_video.is_playing():
+                        if value == "pause": youtube_video.pause()
+                        else: youtube_video.seek(-10 if value == "prev" else 10)
                     elif value == "pause":
                         toggle_active_playback()
                     elif bible_player.playing:
                         bible_player.shift(-1 if value=="prev" else 1,stop_other_audio_for_bible)
-                    else:skip_playback(-1 if value=="prev" else 1)
+                    else:
+                        skip_playback(-1 if value=="prev" else 1)
                 elif kind == "volume":
                     apply_live_volume(value)
             continue
@@ -7965,10 +7980,10 @@ while True:
                         if bible_player.playing:
                             bible_player.toggle_pause()
                         else:
-                            player.pause()
+                            toggle_active_playback()
                     else:
                         active_page = ("bible" if bible_player.playing else
-                                       "youtube" if stations and stations[current_idx].get("youtube_id") else "radio")
+                                       "youtube" if (youtube_audio_active or youtube_video.is_playing()) else "radio")
                     continue
                 if TOGGLE.collidepoint(event.pos):
                     ios_ui_mode = toggle_mode(ios_ui_mode)
@@ -8369,29 +8384,48 @@ while True:
         video_status_cache if youtube_video.is_playing()
         and video_status_cache.get("playing") else None
     )
+    if youtube_audio_active and not youtube_video.is_playing():
+        youtube_audio_paused = youtube_audio_player.get_state() == vlc.State.Paused
+        active_audio_status = {
+            "playing": True, "source": "youtube_audio",
+            "title": youtube_current_title or "YouTube audio",
+            "minimized": True, "paused": youtube_audio_paused,
+        }
+    else:
+        active_audio_status = active_video_status
     if active_page in ("menu", "radio"):
         radio_playing = player.get_state() == vlc.State.Playing
+        live_playing = (
+            not active_audio_status.get("paused", False)
+            if active_audio_status is not None else
+            (not bible_player.paused if bible_player.playing else radio_playing)
+        )
         draw_dashboard(
             landscape_display, f_lg, f_sm, f_tiny, active_page,
             current_station, current_meta,
-            (bible_player.playing and not bible_player.paused) if bible_player.playing else radio_playing,
+            radio_playing if active_page == "radio" else live_playing,
             bible_player.playing, bible_player.paused,
             f"Book {bible_player.book+1} - Chapter {bible_player.chapter}",
             vol_level, stations[current_idx] if stations else None,
-            bool(stations and stations[current_idx].get("youtube_id")) and not bible_player.playing,
-            loaded_logo=logo, video_status=active_video_status)
+            bool(youtube_audio_active and not bible_player.playing),
+            loaded_logo=logo, video_status=active_audio_status)
     else:
         # The shell is consistent on every page. The original page is
         # rendered within the right content area without stretching.
         bible_name = f"Book {bible_player.book+1} - Chapter {bible_player.chapter}"
         radio_playing = player.get_state() == vlc.State.Playing
+        live_playing = (
+            not active_audio_status.get("paused", False)
+            if active_audio_status is not None else
+            (not bible_player.paused if bible_player.playing else radio_playing)
+        )
         draw_shell(landscape_display,f_lg,f_sm,f_tiny,active_page,
                    current_station,current_meta,
-                   (bible_player.playing and not bible_player.paused) if bible_player.playing else radio_playing,
+                   live_playing,
                    bible_player.playing,bible_name,
                    stations[current_idx] if stations else None,
-                   bool(stations and stations[current_idx].get("youtube_id")) and not bible_player.playing,
-                   video_status=active_video_status)
+                   youtube_audio_active and not bible_player.playing,
+                   video_status=active_audio_status)
         if active_page == "bible":
             draw_landscape_bible(landscape_display,bible_player,f_lg,f_sm,f_tiny)
         elif active_page == "cast":
