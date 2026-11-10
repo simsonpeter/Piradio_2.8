@@ -30,13 +30,15 @@ DOCK_ITEMS = (
     ("RADIO", "radio", "radio"),
     ("BIBLE", "bible", "bible"),
     ("YOUTUBE", "youtube", "youtube"),
+    ("PHOTO FRAME", "photo_frame", "photo_frame"),
     ("FAVORITES", "favorites", "favorites"),
     ("CLOCK", "clock", "clock"),
     ("WEATHER", "forecast", "weather"),
+    ("GUEST CAST", "cast", "cast"),
     ("SETTINGS", "settings", "settings"),
 )
 DOCK_TILES = {
-    name: pygame.Rect(51 + (i % 4) * 182, 193 + (i // 4) * 94, 151, 78)
+    name: pygame.Rect(51 + (i % 5) * 144, 193 + (i // 5) * 94, 130, 78)
     for i, (name, _, _) in enumerate(DOCK_ITEMS)
 }
 
@@ -100,7 +102,8 @@ def draw_topbar(screen, font, small, tiny, active_page, dock_open=False):
         "menu": "HOME", "radio": "RADIO", "youtube": "YOUTUBE",
         "youtube_player": "NOW PLAYING", "bible": "BIBLE",
         "favorites": "FAVORITES", "clock": "CLOCK", "forecast": "WEATHER",
-        "cast": "GUEST CAST", "settings": "SETTINGS",
+        "cast": "GUEST CAST", "photo_frame": "PHOTO FRAME",
+        "settings": "SETTINGS",
     }.get(active_page, active_page.upper())
     _text(screen, tiny, label, 319, 23, ACCENT, 154)
     _text(screen, small, datetime.now().strftime("%H:%M"),
@@ -165,6 +168,17 @@ def _dock_icon(surface, name, center):
         pygame.draw.arc(surface,white,(x-13,y-5,27,22),0,3.14,2)
         pygame.draw.circle(surface,white,(x+3,y-1),9,2)
         pygame.draw.line(surface,white,(x-13,y+10),(x+15,y+10),2)
+    elif name == "photo_frame":
+        pygame.draw.rect(surface,white,(x-15,y-12,30,24),2,border_radius=3)
+        pygame.draw.circle(surface,white,(x+7,y-5),3)
+        pygame.draw.lines(surface,white,False,
+                          [(x-11,y+7),(x-4,y),(x+1,y+4),(x+5,y-1),
+                           (x+12,y+7)],2)
+    elif name == "cast":
+        pygame.draw.rect(surface,white,(x-12,y-10,27,21),2,border_radius=3)
+        pygame.draw.circle(surface,white,(x-14,y+13),2)
+        pygame.draw.arc(surface,white,(x-17,y+6,14,14),0,1.57,2)
+        pygame.draw.arc(surface,white,(x-21,y+2,22,22),0,1.57,2)
     elif name == "settings":
         pygame.draw.circle(surface,white,(x,y),11,3)
         pygame.draw.circle(surface,white,(x,y),4,2)
@@ -176,7 +190,7 @@ def _dock_icon(surface, name, center):
 
 
 def draw_dock(screen, font, small, tiny, active_page):
-    """Floating 4×2 navigation grid, visible only when invited."""
+    """Floating 5×2 navigation grid, visible only when invited."""
 
     veil = pygame.Surface((800, 480), pygame.SRCALPHA)
     veil.fill((0, 0, 0, 194))
