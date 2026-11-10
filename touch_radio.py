@@ -2368,8 +2368,12 @@ HTML_TEMPLATE = """
             
             <div class="view" id="view-stations">
                 <div class="section-header">
-                    <span class="section-title">Radio Stations</span>
+                    <span class="section-title">TCRADIOS · Live Stations</span>
                     <span class="section-action">{{ stations|length }} stations</span>
+                </div>
+                <div class="card" style="border:1px solid #666;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                    <div style="flex:1;min-width:140px"><strong>Dedicated Radio Player</strong><div style="font-size:12px;color:#aaa;margin-top:5px">Play your last TCRADIOS station, separately from YouTube and videos.</div></div>
+                    <button class="btn-primary" onclick="activateTCRadios()" style="padding:12px 20px;border-radius:12px">▶ Play TCRADIOS</button>
                 </div>
                 <div class="station-grid" id="station-grid">
                     {% for s in stations %}
@@ -2391,6 +2395,10 @@ HTML_TEMPLATE = """
             <div class="view" id="view-youtube">
                 <div class="section-header">
                     <span class="section-title">YouTube</span>
+                </div>
+                <div class="card" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                    <div style="flex:1;min-width:180px"><strong>YouTube Player</strong><div style="font-size:12px;color:#aaa;margin-top:5px">Independent from live TCRADIOS stations</div></div>
+                    <button class="btn-primary" onclick="switchView('stations')" style="border-radius:12px;padding:12px 16px">📻 Back to TCRADIOS</button>
                 </div>
                 
                 <div class="card">
@@ -2912,10 +2920,31 @@ HTML_TEMPLATE = """
         function switchView(view) {
             document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
             document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-            document.getElementById('view-' + view).classList.add('active');
-            event.currentTarget.classList.add('active');
+            const panel = document.getElementById('view-' + view);
+            if (panel) panel.classList.add('active');
+            // The call also works from the YouTube page's Back to TCRADIOS
+            // button, not just from bottom navigation.
+            const nav = [...document.querySelectorAll('.nav-item')].find(
+                n => (n.getAttribute('onclick') || '').includes("switchView('" + view + "')")
+            );
+            if (nav) nav.classList.add('active');
+            if (view === 'stations') activateTCRadios();
         }
-        
+
+        async function activateTCRadios() {
+            try {
+                const response = await fetch(apiBase + '/api/radio/activate', {method: 'POST'});
+                const data = await response.json();
+                if (!response.ok || !data.success) throw new Error(data.error || 'Radio unavailable');
+                currentStationIdx = data.station;
+                refreshStatus();
+                updateStationGrid();
+                showToast('TCRADIOS: ' + data.name);
+            } catch (error) {
+                showToast('TCRADIOS: ' + (error.message || 'Unable to play'));
+            }
+        }
+
         function sendCmd(cmd) {
             fetch(apiBase + '/api/' + cmd).then(() => refreshStatus());
         }
@@ -2925,12 +2954,13 @@ HTML_TEMPLATE = """
         }
         
         function playStation(idx) {
-            fetch(apiBase + '/api/play/' + idx).then(() => {
+            fetch(apiBase + '/api/play/' + idx).then(r => {
+                if (!r.ok) throw new Error('Radio station unavailable');
                 currentStationIdx = idx;
                 refreshStatus();
                 updateStationGrid();
-                showToast('Playing station');
-            });
+                showToast('Playing TCRADIOS station');
+            }).catch(error => showToast(error.message || 'Cannot play radio'));
         }
         
         function updateStationGrid() {
