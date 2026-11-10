@@ -7,6 +7,7 @@ on:
       - feature/7inch-youtube-unified-controls
       - feature/7inch-guest-cast
       - feature/7inch-youtube-dedicated-player
+      - feature/7inch-immersive-player
   pull_request:
     paths:
       - touch_radio.py
@@ -16,6 +17,7 @@ on:
       - piradio_guest_cast.py
       - landscape_cast.py
       - landscape_youtube_player.py
+      - landscape_immersive.py
 
 jobs:
   validate:
@@ -26,7 +28,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile Python files
-        run: python3 -m py_compile touch_radio.py landscape_screensaver.py weather_service.py youtube_video_backend.py landscape_dashboard.py piradio_guest_cast.py landscape_cast.py landscape_youtube_player.py
+        run: python3 -m py_compile touch_radio.py landscape_screensaver.py weather_service.py youtube_video_backend.py landscape_dashboard.py piradio_guest_cast.py landscape_cast.py landscape_youtube_player.py landscape_immersive.py
       - name: Create isolated renderer environment
         run: python3 -m venv .venv
       - name: Install Pygame renderer
@@ -142,6 +144,61 @@ jobs:
           pygame.image.save(display,"youtube-dedicated-player-preview.png")
           print("Dedicated YouTube player preview created")
           PY
+      - name: Test immersive player, hidden navigation and secondary touch mapping
+        env:
+          SDL_VIDEODRIVER: dummy
+          PYGAME_HIDE_SUPPORT_PROMPT: "1"
+        run: .venv/bin/python -m unittest discover -s tests -p 'test_immersive_layout.py' -v
+      - name: Verify native immersive integration
+        run: |
+          .venv/bin/python - <<'PY'
+          from pathlib import Path
+          source = Path("touch_radio.py").read_text()
+          required = (
+            "draw_immersive_radio(",
+            "draw_immersive_home(",
+            "draw_immersive_dock(",
+            "immersive_to_legacy(event.pos)",
+            "immersive_compose_page(landscape_display, immersive_legacy_surface)",
+            "immersive_dock_open = not immersive_dock_open",
+          )
+          for marker in required:
+              assert marker in source, marker
+          print("Immersive PiRadio integration checks passed")
+          PY
+      - name: Render immersive radio and Home preview
+        env:
+          SDL_VIDEODRIVER: dummy
+          PYGAME_HIDE_SUPPORT_PROMPT: "1"
+        run: |
+          .venv/bin/python - <<'PY'
+          import pygame
+          from landscape_immersive import (
+              draw_radio, draw_home, draw_header, draw_handle, draw_dock
+          )
+          from landscape_cast import draw_cast_button
+          pygame.init()
+          s=pygame.display.set_mode((800,480))
+          font=lambda n: pygame.font.Font(None,n)
+          art=pygame.Surface((180,180))
+          art.fill((80,80,80))
+          draw_radio(s,font(32),font(23),font(17),
+              "Tamil Christian Radio","Beautiful Tamil praise music",
+              True,48,art)
+          draw_header(s,font(32),font(17),"radio")
+          draw_cast_button(s,font(22),False)
+          draw_handle(s,font(17))
+          pygame.image.save(s,"immersive-radio-preview.png")
+          draw_home(s,font(32),font(23),font(17),
+                    "Bayapadathey – Tamil Christian Song",False,"youtube_audio")
+          draw_header(s,font(32),font(17),"menu")
+          draw_cast_button(s,font(22),False)
+          draw_handle(s,font(17))
+          pygame.image.save(s,"immersive-home-preview.png")
+          draw_dock(s,font(32),font(23),font(17),"radio")
+          pygame.image.save(s,"immersive-navigation-preview.png")
+          print("Three native immersive previews rendered")
+          PY
       - name: Render screensaver smoke test
         env:
           SDL_VIDEODRIVER: dummy
@@ -187,6 +244,14 @@ jobs:
           assert 'saver_wake_ignore_up = True' in source
           print("800x480 render and auto-activation integration checks passed")
           PY
+      - name: Attach immersive previews
+        uses: actions/upload-artifact@v4
+        with:
+          name: seven-inch-immersive-layout-previews
+          path: |
+            immersive-radio-preview.png
+            immersive-home-preview.png
+            immersive-navigation-preview.png
       - name: Attach YouTube player preview
         uses: actions/upload-artifact@v4
         with:
