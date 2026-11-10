@@ -100,7 +100,8 @@ def draw_topbar(screen, font, small, tiny, active_page, dock_open=False):
 
     label = {
         "menu": "HOME", "radio": "RADIO", "youtube": "YOUTUBE",
-        "youtube_player": "NOW PLAYING", "bible": "BIBLE",
+        "youtube_player": "YOUTUBE PLAYER", "now_playing": "NOW PLAYING",
+        "bible": "BIBLE",
         "favorites": "FAVORITES", "clock": "CLOCK", "forecast": "WEATHER",
         "cast": "GUEST CAST", "photo_frame": "PHOTO FRAME",
         "settings": "SETTINGS",
