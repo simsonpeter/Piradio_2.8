@@ -7893,6 +7893,23 @@ while True:
                 else:
                     skip_playback(-1 if value=="prev" else 1)
                 continue
+        if active_page == "radio_picker":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                current_choices = radio_indices(stations)
+                picker_action = radio_picker_hit(event.pos, current_choices, radio_picker_offset)
+                if picker_action:
+                    picker_kind, picker_value = picker_action
+                    if picker_kind == "close":
+                        active_page = "radio"
+                    elif picker_kind == "prev":
+                        radio_picker_offset = max(0, radio_picker_offset - RADIO_PAGE_SIZE)
+                    elif picker_kind == "next":
+                        if radio_picker_offset + RADIO_PAGE_SIZE < len(current_choices):
+                            radio_picker_offset += RADIO_PAGE_SIZE
+                    elif picker_kind == "station":
+                        select_radio_station(picker_value)
+                touch_consumed = False
+            continue
         if active_page == "youtube" and youtube_view_mode == "player":
             if event.type == pygame.MOUSEBUTTONDOWN:
                 action = youtube_player_hit(event.pos, youtube_player_state())
@@ -7950,10 +7967,12 @@ while True:
             if press_time - last_touch_down_time < 0.14:
                 continue
             last_touch_down_time = press_time
-            action = landscape_hit(event.pos)
+            action = landscape_hit(event.pos, active_page)
             if action:
                 kind, value = action
-                if kind == "open_player":
+                if kind == "radio_stations":
+                    open_radio_stations()
+                elif kind == "open_player":
                     open_active_media_page()
                 elif kind == "page":
                     open_main_page(value)
@@ -8529,6 +8548,12 @@ while True:
             thumbnail = logo if player_snapshot["mode"] == "audio" and current_youtube_id() else None
             draw_youtube_player(landscape_display, f_lg, f_sm, f_tiny,
                                 player_snapshot, thumbnail)
+        elif active_page == "radio_picker":
+            choices = radio_indices(stations)
+            if radio_picker_offset >= len(choices):
+                radio_picker_offset = max(0, ((len(choices)-1) // RADIO_PAGE_SIZE) * RADIO_PAGE_SIZE)
+            draw_radio_picker(landscape_display, f_lg, f_sm, f_tiny,
+                              stations, choices, radio_picker_offset, current_idx)
         elif active_page == "cast":
             guest_url = f"http://{current_ip}:{web_port}/cast"
             draw_cast_page(landscape_display, f_lg, f_sm, f_tiny,
