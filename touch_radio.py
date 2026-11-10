@@ -7851,8 +7851,12 @@ while True:
                 if destination == "dismiss":
                     immersive_dock_open = False
                 elif destination not in ("consume", "dismiss"):
-                    active_page = destination
+                    if destination == "radio":
+                        open_live_radio_page()
+                    else:
+                        active_page = destination
                     immersive_dock_open = False
+                    radio_station_picker_open = False
                 last_interaction_time = now
                 continue
             if event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
@@ -7873,6 +7877,29 @@ while True:
             continue
         if event.type == pygame.MOUSEMOTION and immersive_swipe_start is not None:
             continue
+
+        # A station picker owns all touches while open; it is distinct from
+        # the YouTube queue, even when that queue is still playing.
+        if active_page == "radio" and radio_station_picker_open:
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                indices = regular_radio_choices()
+                action, value = station_picker_hit(
+                    event.pos, indices, radio_station_picker_page
+                )
+                if action == "close":
+                    radio_station_picker_open = False
+                elif action == "page":
+                    page_count = max(1, (len(indices) + STATIONS_PER_PAGE - 1)
+                                     // STATIONS_PER_PAGE)
+                    radio_station_picker_page = max(
+                        0, min(page_count - 1, radio_station_picker_page + value)
+                    )
+                elif action == "station":
+                    if select_live_radio(value):
+                        radio_station_picker_open = False
+                continue
+            if event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
+                continue
 
         # Minimized MPV keeps its own controls over every PiRadio page.
         # Consume the touch before the underlying VLC mini-player receives it.
@@ -7917,6 +7944,8 @@ while True:
                                            "BIBLE":"bible","YOUTUBE":"youtube",
                                            "FAVORITES":"favorites","CLOCK":"clock",
                                            "WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu")
+                            if active_page == "radio":
+                                open_live_radio_page()
                         elif kind == "open_player" and youtube_video.is_playing():
                             youtube_video.restore_video()
                         elif kind == "audio":
@@ -7937,6 +7966,8 @@ while True:
                     active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
                                    "CLOCK":"clock","WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu")
+                    if active_page == "radio":
+                        open_live_radio_page()
                 elif value == "pause":
                     toggle_active_playback()
                 elif youtube_video.is_playing():
@@ -8003,7 +8034,7 @@ while True:
             if press_time - last_touch_down_time < 0.14:
                 continue
             last_touch_down_time = press_time
-            action = (immersive_radio_hit(event.pos, video_status_cache)
+            action = (immersive_radio_hit(event.pos, None)
                       if active_page == "radio"
                       else immersive_home_hit(event.pos))
             if action:
@@ -8014,27 +8045,36 @@ while True:
                     active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
                                    "CLOCK":"clock","WEATHER":"forecast","SETTINGS":"settings"}.get(value,"menu")
+                    if active_page == "radio":
+                        open_live_radio_page()
+                elif kind == "radio_stations":
+                    radio_station_picker_open = True
+                    radio_station_picker_page = 0
+                elif kind == "radio_play":
+                    select_live_radio()
+                elif kind == "audio" and active_page == "radio":
+                    if value == "pause":
+                        if (current_idx not in regular_radio_choices()
+                                or youtube_video.is_playing()
+                                or bible_player.playing):
+                            select_live_radio()
+                        elif player.get_state() in (vlc.State.Playing, vlc.State.Paused):
+                            player.pause()
+                        else:
+                            select_live_radio()
+                    else:
+                        skip_live_radio(-1 if value == "prev" else 1)
                 elif kind == "audio":
-                    # A phone-started video can remain audio-only behind any
-                    # PiRadio page. Transport must target MPV, not idle VLC.
                     if youtube_video.is_playing():
                         if value == "pause": youtube_video.pause()
                         else: youtube_video.seek(-10 if value == "prev" else 10)
-                    elif active_page == "radio":
-                        if value == "pause":
-                            if bible_player.playing:
-                                play()  # switches audio ownership to radio
-                            elif player.get_state() in (vlc.State.Playing, vlc.State.Paused):
-                                player.pause()
-                            else:
-                                play()
-                        else:
-                            skip_playback(-1 if value == "prev" else 1)
+                    elif bible_player.playing:
+                        if value == "pause": bible_player.toggle_pause()
+                        else: bible_player.shift(-1 if value == "prev" else 1, player.stop)
                     elif value == "pause":
                         toggle_active_playback()
-                    elif bible_player.playing:
-                        bible_player.shift(-1 if value=="prev" else 1,player.stop)
-                    else:skip_playback(-1 if value=="prev" else 1)
+                    else:
+                        skip_playback(-1 if value == "prev" else 1)
                 elif kind == "volume":
                     apply_live_volume(value)
                 elif kind == "seek" and youtube_video.is_playing():
@@ -8560,12 +8600,18 @@ while True:
     radio_playing = player.get_state() == vlc.State.Playing
     bible_title = f"Book {bible_player.book+1} - Chapter {bible_player.chapter}"
     if active_page == "radio":
+        radio_index = preferred_radio_index()
+        radio_station = stations[radio_index] if radio_index is not None else {}
+        radio_is_active = (radio_index is not None and current_idx == radio_index
+                           and not youtube_video.is_playing()
+                           and not bible_player.playing)
         draw_immersive_radio(
             landscape_display, f_lg, f_sm, f_tiny,
-            current_station, current_meta,
-            radio_playing, vol_level, station_logo=logo,
-            video_status=active_video_status,
-            youtube_audio=bool(current_youtube_id()) and not bible_player.playing,
+            radio_station.get("name", "TC RADIOS"),
+            current_meta if radio_is_active else "Select PLAY TC RADIOS to listen",
+            bool(radio_is_active and radio_playing), vol_level,
+            station_logo=logo if radio_is_active else None,
+            video_status=None, youtube_audio=False,
         )
     elif active_page == "menu":
         if active_video_status:
@@ -8656,6 +8702,13 @@ while True:
                 video_status_cache,
             )
         immersive_compose_page(landscape_display, immersive_legacy_surface)
+
+    if active_page == "radio" and radio_station_picker_open:
+        draw_station_picker(
+            landscape_display, f_lg, f_sm, f_tiny, stations,
+            regular_radio_choices(), radio_station_picker_page,
+            selected_index=preferred_radio_index(),
+        )
 
     # A tiny header + a single grab handle replace the permanent sidebar.
     draw_immersive_header(
