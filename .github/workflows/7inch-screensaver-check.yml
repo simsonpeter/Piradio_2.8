@@ -4,10 +4,13 @@ on:
   push:
     branches:
       - feature/7inch-ambient-screensaver
+      - feature/7inch-youtube-unified-controls
   pull_request:
     paths:
       - touch_radio.py
       - landscape_screensaver.py
+      - youtube_video_backend.py
+      - landscape_dashboard.py
 
 jobs:
   validate:
@@ -42,6 +45,23 @@ jobs:
           for marker in checks:
               assert marker in source, f"Weather integration missing: {marker}"
           print("Weather integration markers found")
+          PY
+      - name: Test minimized video transport and touchscreen controls
+        env:
+          SDL_VIDEODRIVER: dummy
+          PYGAME_HIDE_SUPPORT_PROMPT: "1"
+        run: .venv/bin/python -m unittest discover -s tests -p 'test_youtube_video_controls.py' -v
+      - name: Check active player routing in PiRadio integration
+        run: |
+          .venv/bin/python - <<'PY'
+          from pathlib import Path
+          source = Path("touch_radio.py").read_text()
+          assert "def toggle_active_playback():" in source
+          assert "video_mini_hit(event.pos, video_status_cache)" in source
+          assert "draw_video_mini(landscape_display" in source
+          assert "video_backend.seek(10 if step > 0 else -10)" in source
+          assert "source = \"youtube_audio\" if current_youtube_id() else \"radio\"" in source
+          print("All active-source routing checks passed")
           PY
       - name: Render screensaver smoke test
         env:
