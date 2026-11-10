@@ -15,6 +15,14 @@ from landscape_cast import (CAST_BUTTON, RENEW_BUTTON, CLOSE_BUTTON,
                             draw_cast_button, draw_cast_page)
 from landscape_youtube_player import (draw as draw_youtube_player,
                                       hit as youtube_player_hit)
+from landscape_immersive import (
+    MENU_BUTTON as IMMERSIVE_MENU, NAV_HANDLE as IMMERSIVE_HANDLE,
+    draw_header as draw_immersive_header, draw_handle as draw_immersive_handle,
+    draw_radio as draw_immersive_radio, radio_hit as immersive_radio_hit,
+    draw_home as draw_immersive_home, home_hit as immersive_home_hit,
+    draw_dock as draw_immersive_dock, dock_hit as immersive_dock_hit,
+    to_legacy as immersive_to_legacy, compose_page as immersive_compose_page,
+)
 from ios_ipod_ui import (draw_home, draw_player_frame, draw_mini_player,
     draw_youtube_skin, raised_card, MINI_BAR, MINI_ACTION, THEMES as IOS_THEMES, load_mode, toggle_mode, TOGGLE)
 
@@ -5029,6 +5037,11 @@ try:
 except Exception:
     landscape_display = pygame.display.set_mode((800, 480))
 screen = pygame.Surface((320, 480))
+# Keep the previously working secondary pages' original hitbox geometry
+# privately; compose them at full width without displaying a side menu.
+immersive_legacy_surface = pygame.Surface((800, 480))
+immersive_dock_open = False
+immersive_swipe_start = None
 
 # Cover application initialization with the same branding as the boot splash.
 screen.fill((0, 0, 0))
@@ -7736,8 +7749,10 @@ while True:
 
         # Minimized MPV keeps its own controls over every PiRadio page.
         # Consume the touch before the underlying VLC mini-player receives it.
-        if event.type == pygame.MOUSEBUTTONDOWN and youtube_video.is_playing():
-            video_hit = video_mini_hit(event.pos, video_status_cache)
+        if (event.type == pygame.MOUSEBUTTONDOWN
+                and active_page not in ("radio", "menu")
+                and youtube_video.is_playing()):
+            video_hit = video_mini_hit(immersive_to_legacy(event.pos), video_status_cache)
             if video_hit is not None:
                 action, value = video_hit
                 if action == "seek_relative":
@@ -7752,16 +7767,6 @@ while True:
                     youtube_video.stop()
                 touch_consumed = False
                 continue
-        if event.type == pygame.MOUSEBUTTONDOWN and youtube_video.is_playing():
-            hero_action = video_hero_hit(event.pos, video_status_cache, active_page)
-            if hero_action is not None:
-                action, value = hero_action
-                if action == "seek":
-                    youtube_video.seek_absolute(value)
-                elif action == "restore":
-                    youtube_video.restore_video()
-                touch_consumed = False
-                continue
         # The owner explicitly opens pairing on the physical 7-inch screen.
         if event.type == pygame.MOUSEBUTTONDOWN and CAST_BUTTON.collidepoint(event.pos):
             cast_session.open()
@@ -7770,13 +7775,14 @@ while True:
             continue
         if active_page == "cast":
             if event.type == pygame.MOUSEBUTTONDOWN:
-                if RENEW_BUTTON.collidepoint(event.pos):
+                cast_touch = immersive_to_legacy(event.pos)
+                if RENEW_BUTTON.collidepoint(cast_touch):
                     cast_session.open()
-                elif CLOSE_BUTTON.collidepoint(event.pos):
+                elif CLOSE_BUTTON.collidepoint(cast_touch):
                     cast_session.close()
                     active_page = "menu"
                 else:
-                    shell_action = shell_hit(event.pos)
+                    shell_action = shell_hit(immersive_to_legacy(event.pos))
                     if shell_action:
                         kind, value = shell_action
                         if kind == "page":
@@ -7792,7 +7798,7 @@ while True:
                 touch_consumed = False
             continue
         if active_page not in ("menu", "radio") and event.type == pygame.MOUSEBUTTONDOWN:
-            shell_action = shell_hit(event.pos)
+            shell_action = shell_hit(immersive_to_legacy(event.pos))
             if shell_action:
                 kind, value = shell_action
                 if kind == "open_player" and youtube_video.is_playing():
@@ -7815,7 +7821,7 @@ while True:
                 continue
         if active_page == "youtube_player":
             if event.type == pygame.MOUSEBUTTONDOWN:
-                action = youtube_player_hit(event.pos, youtube_player_state())
+                action = youtube_player_hit(immersive_to_legacy(event.pos), youtube_player_state())
                 if action:
                     kind, value = action
                     if kind == "search":
@@ -7859,7 +7865,7 @@ while True:
             press_time = time.monotonic()
             if press_time - last_touch_down_time >= 0.14:
                 last_touch_down_time = press_time
-                if landscape_bible_hit(bible_player, event.pos, player.stop) == "home":
+                if landscape_bible_hit(bible_player, immersive_to_legacy(event.pos), player.stop) == "home":
                     active_page = "menu"
             continue
         if active_page == "bible" and event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
@@ -7870,7 +7876,9 @@ while True:
             if press_time - last_touch_down_time < 0.14:
                 continue
             last_touch_down_time = press_time
-            action = landscape_hit(event.pos)
+            action = (immersive_radio_hit(event.pos, video_status_cache)
+                      if active_page == "radio"
+                      else immersive_home_hit(event.pos))
             if action:
                 kind, value = action
                 if kind == "open_player":
