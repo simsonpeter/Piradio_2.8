@@ -8461,79 +8461,123 @@ while True:
                 volume_bar_timer = time.time()
     
     apply_display_brightness(now)
-    landscape_display.blit(screen, (0, 0))
     current_station = stations[current_idx].get("name", "TC RADIOS") if stations else "TC RADIOS"
     current_meta = meta_text if meta_text and meta_text != current_station else ""
-    # A minimized YouTube video is the actual now-playing source, not the
-    # previously selected VLC station. Reuse the already-polled IPC snapshot.
     active_video_status = (
         video_status_cache if youtube_video.is_playing()
         and video_status_cache.get("playing") else None
     )
-    if active_page in ("menu", "radio"):
-        radio_playing = player.get_state() == vlc.State.Playing
-        draw_dashboard(
-            landscape_display, f_lg, f_sm, f_tiny, active_page,
+    radio_playing = player.get_state() == vlc.State.Playing
+    bible_title = f"Book {bible_player.book+1} - Chapter {bible_player.chapter}"
+    if active_page == "radio":
+        draw_immersive_radio(
+            landscape_display, f_lg, f_sm, f_tiny,
             current_station, current_meta,
-            (bible_player.playing and not bible_player.paused) if bible_player.playing else radio_playing,
-            bible_player.playing, bible_player.paused,
-            f"Book {bible_player.book+1} - Chapter {bible_player.chapter}",
-            vol_level, stations[current_idx] if stations else None,
-            bool(stations and stations[current_idx].get("youtube_id")) and not bible_player.playing,
-            loaded_logo=logo, video_status=active_video_status)
+            radio_playing, vol_level, station_logo=logo,
+            video_status=active_video_status,
+            youtube_audio=bool(current_youtube_id()) and not bible_player.playing,
+        )
+    elif active_page == "menu":
+        if active_video_status:
+            now_title = active_video_status.get("title") or "YouTube video"
+            now_source = "youtube_video"
+            now_paused = bool(active_video_status.get("paused"))
+        elif bible_player.playing:
+            now_title = "Tamil Bible · " + bible_title
+            now_source = "bible"
+            now_paused = bible_player.paused
+        else:
+            now_title = current_station
+            now_source = "youtube_audio" if current_youtube_id() else "radio"
+            now_paused = not radio_playing
+        draw_immersive_home(
+            landscape_display, f_lg, f_sm, f_tiny,
+            now_title, paused=now_paused, source=now_source,
+        )
     else:
-        # The shell is consistent on every page. The original page is
-        # rendered within the right content area without stretching.
-        bible_name = f"Book {bible_player.book+1} - Chapter {bible_player.chapter}"
-        radio_playing = player.get_state() == vlc.State.Playing
-        draw_shell(landscape_display,f_lg,f_sm,f_tiny,active_page,
-                   current_station,current_meta,
-                   (bible_player.playing and not bible_player.paused) if bible_player.playing else radio_playing,
-                   bible_player.playing,bible_name,
-                   stations[current_idx] if stations else None,
-                   bool(stations and stations[current_idx].get("youtube_id")) and not bible_player.playing,
-                   video_status=active_video_status)
+        # Existing pages keep their original native drawing logic on a
+        # temporary surface. Scale only the content + mini bar horizontally
+        # into the new wide viewport. Inverse mapping above keeps touch exact.
+        immersive_legacy_surface.fill((0, 0, 0))
+        draw_shell(
+            immersive_legacy_surface, f_lg, f_sm, f_tiny, active_page,
+            current_station, current_meta,
+            (bible_player.playing and not bible_player.paused) if bible_player.playing
+            else radio_playing,
+            bible_player.playing, bible_title,
+            stations[current_idx] if stations else None,
+            bool(stations and stations[current_idx].get("youtube_id"))
+            and not bible_player.playing,
+            video_status=active_video_status,
+        )
         if active_page == "bible":
-            draw_landscape_bible(landscape_display,bible_player,f_lg,f_sm,f_tiny)
+            draw_landscape_bible(immersive_legacy_surface, bible_player, f_lg, f_sm, f_tiny)
         elif active_page == "youtube_player":
-            player_snapshot = youtube_player_state()
-            thumbnail = logo if player_snapshot["mode"] == "audio" and current_youtube_id() else None
-            draw_youtube_player(landscape_display, f_lg, f_sm, f_tiny,
-                                player_snapshot, thumbnail)
+            snapshot = youtube_player_state()
+            thumbnail = logo if snapshot["mode"] == "audio" and current_youtube_id() else None
+            draw_youtube_player(
+                immersive_legacy_surface, f_lg, f_sm, f_tiny,
+                snapshot, thumbnail,
+            )
         elif active_page == "cast":
             guest_url = f"http://{current_ip}:{web_port}/cast"
-            draw_cast_page(landscape_display, f_lg, f_sm, f_tiny,
-                           cast_session.screen_state(), guest_url)
-        elif active_page in ("favorites","clock","forecast","settings","bluetooth","youtube") and not (active_page=="youtube" and youtube_keyboard_open):
-            draw_landscape_page(landscape_display,active_page,f_lg,f_sm,f_tiny,
-                                station=current_station,temp=current_temp if weather_available else None,
-                                weather_type=weather_type if weather_available else None,
-                                forecast=weather_forecast,
-                                city=device_settings.weather_name,
-                                weather_status=(weather_last_error if not weather_available else
-                                                ("Updated " + datetime.fromtimestamp(weather_last_success).strftime("%H:%M")
-                                                 if weather_last_success else "")) if not weather_loading
-                                               else "Updating weather...",
-                                favorites=favorite_indices,stations=stations,
-                                presets=YOUTUBE_PRESETS,status=youtube_touch_status,
-                                youtube_results=youtube_results_cache,youtube_offset=youtube_touch_offset,
-                                video_available=bool(current_youtube_id()),
-                                player_available=youtube_player_available(),
-                                devices=touch_bluetooth_devices,bt_status=touch_bluetooth_status,
-                                busy=touch_bluetooth_busy)
+            draw_cast_page(
+                immersive_legacy_surface, f_lg, f_sm, f_tiny,
+                cast_session.screen_state(), guest_url,
+            )
+        elif active_page in (
+            "favorites", "clock", "forecast", "settings", "bluetooth", "youtube"
+        ) and not (active_page == "youtube" and youtube_keyboard_open):
+            draw_landscape_page(
+                immersive_legacy_surface, active_page, f_lg, f_sm, f_tiny,
+                station=current_station,
+                temp=current_temp if weather_available else None,
+                weather_type=weather_type if weather_available else None,
+                forecast=weather_forecast,
+                city=device_settings.weather_name,
+                weather_status=(
+                    weather_last_error if not weather_available else
+                    ("Updated " + datetime.fromtimestamp(weather_last_success).strftime("%H:%M")
+                     if weather_last_success else "")
+                ) if not weather_loading else "Updating weather...",
+                favorites=favorite_indices, stations=stations,
+                presets=YOUTUBE_PRESETS, status=youtube_touch_status,
+                youtube_results=youtube_results_cache,
+                youtube_offset=youtube_touch_offset,
+                video_available=bool(current_youtube_id()),
+                player_available=youtube_player_available(),
+                devices=touch_bluetooth_devices,
+                bt_status=touch_bluetooth_status,
+                busy=touch_bluetooth_busy,
+            )
         elif active_page == "youtube" and youtube_keyboard_open:
-            draw_youtube_keyboard(landscape_display,f_lg,f_sm,f_tiny,
-                                  youtube_keyboard_text,youtube_key_rects,
-                                  btn_youtube_search_field,btn_youtube_keyboard_close,
-                                  btn_youtube_search_go)
+            draw_youtube_keyboard(
+                immersive_legacy_surface, f_lg, f_sm, f_tiny,
+                youtube_keyboard_text, youtube_key_rects,
+                btn_youtube_search_field, btn_youtube_keyboard_close,
+                btn_youtube_search_go,
+            )
         else:
-            # Keyboard and remaining legacy pages remain functional.
-            content=pygame.transform.smoothscale(screen,(210,315))
-            landscape_display.blit(content,(365,73))
-    if video_status_cache.get("playing") and video_status_cache.get("minimized"):
-        draw_video_mini(landscape_display, f_lg, f_sm, f_tiny, video_status_cache)
-    # Dedicated Cast launcher is visible from all PiRadio pages.
+            content = pygame.transform.smoothscale(screen, (210, 315))
+            immersive_legacy_surface.blit(content, (365, 73))
+        if video_status_cache.get("playing") and video_status_cache.get("minimized"):
+            draw_video_mini(
+                immersive_legacy_surface, f_lg, f_sm, f_tiny,
+                video_status_cache,
+            )
+        immersive_compose_page(landscape_display, immersive_legacy_surface)
+
+    # A tiny header + a single grab handle replace the permanent sidebar.
+    draw_immersive_header(
+        landscape_display, f_lg, f_tiny,
+        active_page, cast_active=(active_page == "cast"),
+    )
     draw_cast_button(landscape_display, f_sm, active_page == "cast")
+    draw_immersive_handle(landscape_display, f_tiny, immersive_dock_open)
+    if immersive_dock_open:
+        draw_immersive_dock(
+            landscape_display, f_lg, f_sm, f_tiny, active_page,
+        )
     # Draw OVER the native landscape page, not on the older 320x480 surface.
     if saver_active and not youtube_video.is_playing():
         draw_landscape_screensaver(
