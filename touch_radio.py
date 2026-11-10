@@ -4471,6 +4471,7 @@ def remote_youtube_video_status():
 
 @app.route('/api/youtube/video', methods=['POST'])
 def remote_youtube_video():
+    global youtube_current_id, youtube_current_title, youtube_player_view
     try:
         data = request.get_json(silent=True) or {}
         action = str(data.get('action') or '')
@@ -4483,8 +4484,13 @@ def remote_youtube_video():
             stop_youtube_audio()
             if bible_player.playing or bible_player.player.is_playing():
                 bible_player.stop()
-            youtube_video.start_youtube(video_id, title=data.get('title') or "YouTube video")
+            title = str(data.get('title') or "YouTube video")
+            youtube_video.start_youtube(video_id, title=title)
             youtube_video.volume(vol_level)
+            youtube_current_id = video_id
+            youtube_current_title = title[:160]
+            youtube_player_view = True
+            queue_youtube_artwork(video_id)
         elif action in ('seek', 'seek_relative'):
             if not youtube_video.is_playing(): raise ValueError('No video playing')
             value = float(data.get('seconds', 0))
@@ -8652,7 +8658,10 @@ while True:
                                 youtube_player_view=youtube_player_view,
                                 youtube_status=youtube_status_for_screen(),
                                 youtube_artwork=youtube_artwork_surfaces.get(
-                                    youtube_current_id or youtube_video.video_id),
+                                    (youtube_video.video_id
+                                     if youtube_video.is_playing()
+                                     and youtube_video.source_type == "youtube_video"
+                                     else youtube_current_id)),
                                 devices=touch_bluetooth_devices,bt_status=touch_bluetooth_status,
                                 busy=touch_bluetooth_busy)
         elif active_page == "youtube" and youtube_keyboard_open:
