@@ -24,7 +24,11 @@ def validate_bible_command(payload, chapter_counts):
             raise ValueError("Choose a valid Bible book")
         if type(chapter) is not int or not (1 <= chapter <= chapter_counts[book]):
             raise ValueError("Choose a valid Bible chapter")
-        return {"action": action, "book": book, "chapter": chapter}
+        autoplay = payload.get("autoplay", False)
+        if type(autoplay) is not bool:
+            raise ValueError("Invalid autoplay setting")
+        return {"action": action, "book": book, "chapter": chapter,
+                "autoplay": autoplay}
     return {"action": action}
 
 
