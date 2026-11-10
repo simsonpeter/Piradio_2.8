@@ -54,10 +54,16 @@ class ImmersiveTests(unittest.TestCase):
         self.assertFalse(FRAME_BUTTON.colliderect(CAST_BUTTON))
 
     def test_floating_dock_navigation(self):
+        self.assertEqual(len(DOCK_ITEMS), 10)
+        self.assertEqual(dock_hit(DOCK_TILES["PHOTO FRAME"].center), "photo_frame")
+        self.assertEqual(dock_hit(DOCK_TILES["GUEST CAST"].center), "cast")
+        seen = []
         for name, page, icon in DOCK_ITEMS:
             with self.subTest(name=name):
                 self.assertEqual(dock_hit(DOCK_TILES[name].center), page)
                 self.assertTrue(DOCK_RECT.contains(DOCK_TILES[name]))
+                self.assertFalse(any(DOCK_TILES[name].colliderect(other) for other in seen))
+                seen.append(DOCK_TILES[name])
         self.assertEqual(dock_hit((799, 479)), "dismiss")
         self.assertIsNone(dock_hit((200, 180)))
         self.assertEqual(SWIPE_START_Y, 465)
