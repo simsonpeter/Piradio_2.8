@@ -182,12 +182,22 @@ def draw_video_hero(s, font, small, tiny, status):
           (689, 315), MUTED, 69)
 
 def media_display_info(media_snapshot, station, metadata, bible_playing,
-                       bible_name, youtube_playing):
+                       bible_name, youtube_playing, video_status=None):
     """Single source label for the home widget and persistent mini-player.
 
     The caller passes the lightweight snapshot from the render loop.  It
     already uses cached MPV status, so drawing never blocks on IPC or HTTP.
     """
+    if media_snapshot is None and video_status and video_status.get("playing"):
+        # Keep compatibility with older draw_dashboard/draw_shell callers
+        # that only provide the existing MPV status dictionary.
+        media_snapshot = {
+            "source": video_status.get("source") or "youtube_video",
+            "title": video_status.get("title") or "PiRadio Media",
+            "playing": not bool(video_status.get("paused")),
+            "paused": bool(video_status.get("paused")),
+            "minimized": bool(video_status.get("minimized")),
+        }
     if media_snapshot is not None:
         source = media_snapshot.get("source") or "radio"
         title = media_snapshot.get("title") or station or "PiRadio"
@@ -243,8 +253,9 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
     now=datetime.datetime.now()
     active_video = video_status if video_status and video_status.get("playing") else None
     media = media_display_info(media_snapshot, station, metadata,
-                               bible_playing, bible_name, youtube_playing)
-    if media_snapshot is None:
+                               bible_playing, bible_name, youtube_playing,
+                               video_status=active_video)
+    if media_snapshot is None and active_video is None:
         media["playing"] = bool(playing)
     if active_page=="radio" and active_video:
         draw_video_hero(s, font, small, tiny, active_video)
@@ -326,8 +337,9 @@ def draw_shell(s,font,small,tiny,active_page,station,metadata,playing,bible_play
     _glow_card(s,MINI,(17,17,17),(65,65,65),16)
 
     media = media_display_info(media_snapshot, station, metadata,
-                               bible_playing, bible_name, youtube_playing)
-    if media_snapshot is None:
+                               bible_playing, bible_name, youtube_playing,
+                               video_status=active_video)
+    if media_snapshot is None and active_video is None:
         media["playing"] = bool(playing)
     if media["use_station_logo"]:
         _station_art(s,pygame.Rect(166,410,43,43),station_data)
