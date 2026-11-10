@@ -336,6 +336,7 @@ def draw_shell(s,font,small,tiny,active_page,station,metadata,playing,bible_play
         _text(s,small,name.title(),(rect.x+39,rect.y+8),WHITE,90)
     _glow_card(s,MINI,(17,17,17),(65,65,65),16)
 
+    active_video = video_status if video_status and video_status.get("playing") else None
     media = media_display_info(media_snapshot, station, metadata,
                                bible_playing, bible_name, youtube_playing,
                                video_status=active_video)
