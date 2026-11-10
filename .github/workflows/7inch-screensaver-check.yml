@@ -18,6 +18,7 @@ on:
       - landscape_cast.py
       - landscape_youtube_player.py
       - smart_photo_frame.py
+      - landscape_immersive.py
 
 jobs:
   validate:
@@ -28,7 +29,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile Python files
-        run: python3 -m py_compile touch_radio.py landscape_screensaver.py weather_service.py youtube_video_backend.py landscape_dashboard.py piradio_guest_cast.py landscape_cast.py landscape_youtube_player.py smart_photo_frame.py
+        run: python3 -m py_compile touch_radio.py landscape_screensaver.py weather_service.py youtube_video_backend.py landscape_dashboard.py piradio_guest_cast.py landscape_cast.py landscape_youtube_player.py smart_photo_frame.py landscape_immersive.py
       - name: Create isolated renderer environment
         run: python3 -m venv .venv
       - name: Install Pygame renderer
@@ -214,6 +215,58 @@ jobs:
               pygame.image.save(screen,"smart-photo-frame-pairing.png")
           print("Photo Frame and QR UI rendered")
           PY
+      - name: Test fullscreen immersive menu, touch mapping and dock
+        env:
+          SDL_VIDEODRIVER: dummy
+          PYGAME_HIDE_SUPPORT_PROMPT: "1"
+        run: .venv/bin/python -m unittest discover -s tests -p 'test_immersive_navigation.py' -v
+      - name: Check immersive navigation is integrated
+        run: |
+          .venv/bin/python - <<'PY'
+          from pathlib import Path
+          source=Path("touch_radio.py").read_text()
+          for item in (
+              "immersive_layout(landscape_display)",
+              "immersive_draw_dock(landscape_display",
+              "immersion" if False else "immersive_dock_open",
+              "to_source(actual_pos)",
+              "SWIPE_START_Y",
+              'active_page != "photo_frame"',
+              "draw_cast_button(landscape_display",
+          ):
+              assert item in source, item
+          print("Immersive dock and content touch mapping integrated")
+          PY
+      - name: Render immersive full-width radio and dock previews
+        env:
+          SDL_VIDEODRIVER: dummy
+          PYGAME_HIDE_SUPPORT_PROMPT: "1"
+        run: |
+          .venv/bin/python - <<'PY'
+          import pygame
+          from landscape_dashboard import draw_dashboard
+          from landscape_immersive import (
+              layout,draw_topbar,draw_dock,
+          )
+          from landscape_cast import draw_cast_button
+          from smart_photo_frame import FRAME_BUTTON
+          pygame.init()
+          s=pygame.display.set_mode((800,480))
+          font=lambda n:pygame.font.Font(None,n)
+          draw_dashboard(s,font(31),font(22),font(17),"radio",
+              "Tamil Christian Radio","Worship Songs",True,
+              False,False,"",54)
+          layout(s)
+          draw_topbar(s,font(31),font(22),font(17),"radio")
+          draw_cast_button(s,font(22))
+          pygame.draw.rect(s,(28,28,28),FRAME_BUTTON,border_radius=11)
+          text=font(22).render("PHOTO",True,(246,246,246))
+          s.blit(text,text.get_rect(center=FRAME_BUTTON.center))
+          pygame.image.save(s,"immersive-piradio-player-preview.png")
+          draw_dock(s,font(31),font(22),font(17),"radio")
+          pygame.image.save(s,"immersive-piradio-dock-preview.png")
+          print("Immersive 800x480 player and dock previews saved")
+          PY
       - name: Render screensaver smoke test
         env:
           SDL_VIDEODRIVER: dummy
@@ -259,6 +312,13 @@ jobs:
           assert 'saver_wake_ignore_up = True' in source
           print("800x480 render and auto-activation integration checks passed")
           PY
+      - name: Attach immersive menu preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: seven-inch-immersive-menu-preview
+          path: |
+            immersive-piradio-player-preview.png
+            immersive-piradio-dock-preview.png
       - name: Attach Smart Photo Frame previews
         uses: actions/upload-artifact@v4
         with:
