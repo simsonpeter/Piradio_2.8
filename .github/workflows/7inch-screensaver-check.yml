@@ -33,7 +33,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile Python files
-        run: python3 -m py_compile touch_radio.py landscape_screensaver.py weather_service.py youtube_video_backend.py landscape_dashboard.py piradio_guest_cast.py landscape_cast.py landscape_youtube_player.py smart_photo_frame.py landscape_immersive.py
+        run: python3 -m py_compile touch_radio.py landscape_screensaver.py weather_service.py youtube_video_backend.py landscape_dashboard.py piradio_guest_cast.py landscape_cast.py landscape_youtube_player.py smart_photo_frame.py landscape_immersive.py landscape_smart_home.py landscape_universal_player.py
       - name: Validate PiRadio desktop app launcher without reboot
         run: |
           bash -n boot/tcradios-start boot/piradio-open install_piradio_app_launcher.sh
@@ -89,6 +89,12 @@ jobs:
           SDL_AUDIODRIVER: dummy
           PYGAME_HIDE_SUPPORT_PROMPT: "1"
         run: .venv/bin/python -m unittest discover -s tests -p 'test_universal_player.py' -v
+      - name: Test native 7-inch Midnight Home Dashboard
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+          PYGAME_HIDE_SUPPORT_PROMPT: "1"
+        run: .venv/bin/python -m unittest discover -s tests -p 'test_smart_home.py' -v
       - name: Check active player routing in PiRadio integration
         run: |
           .venv/bin/python - <<'PY'
