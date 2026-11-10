@@ -42,6 +42,20 @@ RADIO_NEXT = pygame.Rect(618, 278, 63, 58)
 RADIO_VOLUME = pygame.Rect(389, 361, 326, 10)
 RADIO_SEEK = pygame.Rect(387, 248, 332, 10)
 RADIO_FOOTER = pygame.Rect(24, 409, 751, 48)
+RADIO_STATIONS = pygame.Rect(35, 409, 212, 46)
+RADIO_PLAY = pygame.Rect(260, 409, 207, 46)
+RADIO_STATUS = pygame.Rect(485, 414, 290, 37)
+
+# Stations list overlay appears only when requested, not a fixed sidebar.
+STATION_PICKER = pygame.Rect(54, 82, 692, 313)
+STATION_PREV = pygame.Rect(87, 350, 104, 35)
+STATION_NEXT = pygame.Rect(619, 350, 104, 35)
+STATION_CLOSE = pygame.Rect(616, 92, 109, 36)
+STATIONS_PER_PAGE = 6
+STATION_ROWS = tuple(
+    pygame.Rect(83 + (slot % 2) * 329, 147 + (slot // 2) * 63, 307, 53)
+    for slot in range(STATIONS_PER_PAGE)
+)
 
 HOME_PAGES = (
     ("HOME", "home", "menu"),
@@ -257,11 +271,21 @@ def draw_radio(s, font, small, tiny, station, metadata, playing, volume,
         _icon(s, icon, rect, 34 if primary else 29, BLACK if primary else WHITE)
 
     pygame.draw.line(s, (40, 40, 40), (28, 401), (771, 401), 1)
-    label = "Tap MENU for pages  •  Swipe up to navigate"
-    _text(s, tiny, label, (221, 428), MUTED, 488)
+    _card(s, RADIO_STATIONS, (36, 36, 36), BORDER, 12)
+    _text(s, small, "STATIONS", (75, 421), WHITE, 152)
+    _card(s, RADIO_PLAY, (232, 232, 232), WHITE, 12)
+    _text(s, small, "PLAY TC RADIOS", (281, 420), BLACK, 172)
+    _text(s, tiny, "Tap STATIONS to choose a channel",
+          (492, 425), MUTED, 277)
 
 
 def radio_hit(pos, video_status=None):
+    # Radio page always controls live radio stations, even if YouTube MPV
+    # is still playing in the background. YouTube has its own player page.
+    if RADIO_STATIONS.collidepoint(pos):
+        return "radio_stations", None
+    if RADIO_PLAY.collidepoint(pos):
+        return "radio_play", None
     if RADIO_PREV.collidepoint(pos):
         return "audio", "prev"
     if RADIO_PAUSE.collidepoint(pos):
@@ -281,6 +305,78 @@ def radio_hit(pos, video_status=None):
     if mpv and RADIO_ART.collidepoint(pos):
         return "restore", None
     return None
+
+
+
+def radio_station_indices(stations, base_stations=None):
+    """Never mix dynamic YouTube results into the TC RADIOS station picker."""
+    base_urls = {station.get("url") for station in (base_stations or [])
+                 if isinstance(station, dict) and station.get("url")}
+    selected = [
+        index for index, station in enumerate(stations)
+        if isinstance(station, dict) and station.get("url")
+        and not station.get("youtube_id") and not station.get("direct_link_id")
+        and (not base_urls or station.get("url") in base_urls)
+    ]
+    if selected:
+        return selected
+    # Offline/older station lists might not match the cached base URLs.
+    return [
+        index for index, station in enumerate(stations)
+        if isinstance(station, dict) and station.get("url")
+        and not station.get("youtube_id") and not station.get("direct_link_id")
+    ]
+
+
+def draw_station_picker(surface, font, small, tiny, stations, indices, page,
+                        selected_index=None):
+    """Page through radio stations in an intentional overlay."""
+    shade = pygame.Surface((800, 480), pygame.SRCALPHA)
+    shade.fill((0, 0, 0, 205))
+    surface.blit(shade, (0, 0))
+    _card(surface, STATION_PICKER, (17, 17, 17), (105, 105, 105), 22)
+    _text(surface, font, "TC RADIOS · STATIONS", (85, 97), WHITE, 485)
+    _text(surface, tiny, "Select a station to replace YouTube playback",
+          (86, 129), MUTED, 478)
+    _card(surface, STATION_CLOSE, (36, 36, 36), BORDER, 11)
+    _text(surface, tiny, "CLOSE", (644, 102), WHITE, 69)
+    pages = max(1, (len(indices) + STATIONS_PER_PAGE - 1) // STATIONS_PER_PAGE)
+    page = max(0, min(page, pages - 1))
+    for offset, index in enumerate(indices[page * STATIONS_PER_PAGE:
+                                           (page + 1) * STATIONS_PER_PAGE]):
+        station = stations[index]
+        rect = STATION_ROWS[offset]
+        selected = index == selected_index
+        _card(surface, rect, (35, 73, 78) if selected else (29, 29, 29),
+              ACCENT if selected else BORDER, 11)
+        _icon(surface, "radio",
+              pygame.Rect(rect.x + 7, rect.y + 10, 36, 34), 23,
+              ACCENT if selected else WHITE)
+        _text(surface, small, station.get("name", "Radio"),
+              (rect.x + 51, rect.y + 8), WHITE, 246)
+        _text(surface, tiny, station.get("genre") or "Live station",
+              (rect.x + 51, rect.y + 33), MUTED, 240)
+    _card(surface, STATION_PREV, (35, 35, 35), BORDER, 9)
+    _text(surface, tiny, "PREVIOUS", (102, 362), WHITE, 85)
+    _card(surface, STATION_NEXT, (35, 35, 35), BORDER, 9)
+    _text(surface, tiny, "NEXT", (648, 362), WHITE, 65)
+    _text(surface, tiny, f"Page {page + 1} / {pages} · {len(indices)} stations",
+          (312, 360), MUTED, 247)
+
+
+def station_picker_hit(pos, station_indices, page):
+    if STATION_CLOSE.collidepoint(pos):
+        return "close", None
+    if STATION_PREV.collidepoint(pos):
+        return "page", -1
+    if STATION_NEXT.collidepoint(pos):
+        return "page", 1
+    for offset, index in enumerate(station_indices[page * STATIONS_PER_PAGE:
+                                                   (page + 1) * STATIONS_PER_PAGE]):
+        if STATION_ROWS[offset].collidepoint(pos):
+            return "station", index
+    return "consume", None
+
 
 
 def draw_home(s, font, small, tiny, player_title, paused=False,
