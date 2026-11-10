@@ -14,6 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
       - name: Compile Python files
         run: python3 -m py_compile touch_radio.py landscape_screensaver.py youtube_video_backend.py landscape_dashboard.py
       - name: Create isolated renderer environment
