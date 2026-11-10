@@ -152,6 +152,10 @@ class YouTubeVideoBackend:
         """Seek to a specific playback timestamp (seconds)."""
         return self._command("seek", max(0, float(seconds)), "absolute", "exact")
 
+    def skip_playlist(self, step):
+        """Advance guest photo slides rather than seeking inside an image."""
+        return self._command("playlist-next" if step > 0 else "playlist-prev", "force")
+
     def playback_status(self):
         """Read the active mpv state for both Pi and phone controls.
 
