@@ -24,6 +24,9 @@ from landscape_immersive import (
 )
 from landscape_youtube_player import (draw as draw_youtube_player,
                                       hit as youtube_player_hit)
+from landscape_universal_player import (
+    draw as draw_universal_player, hit as universal_player_hit,
+)
 from ios_ipod_ui import (draw_home, draw_player_frame, draw_mini_player,
     draw_youtube_skin, raised_card, MINI_BAR, MINI_ACTION, THEMES as IOS_THEMES, load_mode, toggle_mode, TOGGLE)
 
@@ -7164,6 +7167,7 @@ touch_start_time = 0
 last_touch_down_time = 0.0
 touch_consumed = False
 active_page = "radio"
+now_playing_return_page = "menu"
 ios_ui_mode = load_mode()
 PAGE_ORDER = [
     "radio", "favorites", "forecast", "clock",
@@ -7924,6 +7928,46 @@ while True:
                 continue
             if immersive_dock_open:
                 continue
+            # The dedicated 7-inch player uses physical hitboxes.
+            # Other pages retain the existing native-coordinate translation.
+            if active_page == "now_playing":
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if CAST_BUTTON.collidepoint(actual_pos):
+                        cast_session.open()
+                        active_page = "cast"
+                    elif FRAME_BUTTON.collidepoint(actual_pos):
+                        photo_frame_return_page = "now_playing"
+                        photo_frame_renderer.activate(now)
+                        saver_active = False
+                        active_page = "photo_frame"
+                    else:
+                        result = universal_player_hit(
+                            actual_pos, globals().get("screen_media", {})
+                        )
+                        if result:
+                            kind, value = result
+                            if kind == "back":
+                                active_page = (now_playing_return_page
+                                               if now_playing_return_page != "now_playing"
+                                               else "menu")
+                            elif kind == "volume":
+                                apply_live_volume(value)
+                            elif kind == "restore":
+                                control_active_media("restore", mpv_only=True)
+                            elif kind == "toggle":
+                                state = globals().get("screen_media", {})
+                                if (state.get("source") == "radio"
+                                        and not (state.get("playing") or state.get("paused"))):
+                                    play()
+                                else:
+                                    control_active_media("toggle")
+                            elif kind != "consume":
+                                try:
+                                    control_active_media(kind, value)
+                                except ValueError as error:
+                                    youtube_touch_status = str(error)[:70]
+                    touch_consumed = False
+                continue
             if 65 <= actual_pos[1] < 465:
                 event = pygame.event.Event(
                     event.type, {**event.dict, "pos": to_source(actual_pos)})
@@ -7959,7 +8003,10 @@ while True:
             video_hit = video_mini_hit(event.pos, current_video_visual_status() or {})
             if video_hit is not None:
                 action, value = video_hit
-                if action != "consume":
+                if action == "open_player":
+                    now_playing_return_page = active_page
+                    active_page = "now_playing"
+                elif action != "consume":
                     control_active_media("toggle" if action == "pause" else action, value,
                                          mpv_only=True)
                 touch_consumed = False
@@ -8008,7 +8055,8 @@ while True:
                     control_active_media("restore", mpv_only=True)
                     continue
                 if kind == "open_player":
-                    active_page = "bible" if bible_player.playing else ("youtube_player" if youtube_player_available() else "radio")
+                    now_playing_return_page = active_page
+                    active_page = "now_playing"
                 elif kind == "page":
                     active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
@@ -8067,7 +8115,8 @@ while True:
             if action:
                 kind, value = action
                 if kind == "open_player":
-                    active_page = "bible" if bible_player.playing else ("youtube_player" if youtube_player_available() else "radio")
+                    now_playing_return_page = active_page
+                    active_page = "now_playing"
                 elif kind == "page":
                     active_page = {"HOME":"menu","RADIO":"radio","BIBLE":"bible",
                                    "YOUTUBE":"youtube","FAVORITES":"favorites",
@@ -8726,6 +8775,13 @@ while True:
     # Photo Frame and ambient clock keep their existing full-screen views.
     if not saver_active and active_page != "photo_frame":
         immersive_layout(landscape_display)
+        if active_page == "now_playing":
+            media_artwork = (logo if screen_media.get("source")
+                             in ("radio", "youtube_audio") else None)
+            draw_universal_player(
+                landscape_display, f_lg, f_sm, f_tiny,
+                screen_media, media_artwork,
+            )
         immersive_topbar(landscape_display, f_lg, f_sm, f_tiny,
                          active_page, immersive_dock_open)
         draw_cast_button(landscape_display, f_sm, active_page == "cast")
