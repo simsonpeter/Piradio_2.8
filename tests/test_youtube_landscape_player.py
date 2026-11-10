@@ -74,8 +74,11 @@ class YouTubeNativePlayerTests(unittest.TestCase):
         picture = pygame.Surface((320, 180))
         picture.fill((219, 64, 38))
         self.render_player(artwork=picture)
-        self.assertEqual(tuple(self.surface.get_at((210, 154))[:3]),
-                         (219, 64, 38))
+        # smoothscale applies slight colour rounding even to a solid image.
+        actual = tuple(self.surface.get_at((210, 154))[:3])
+        self.assertTrue(all(abs(a - b) <= 4
+                            for a, b in zip(actual, (219, 64, 38))),
+                        f"Artwork pixel not rendered: {actual}")
 
     def test_audio_and_video_and_paused_modes(self):
         for video, paused, active in [
