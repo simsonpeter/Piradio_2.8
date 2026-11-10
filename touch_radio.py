@@ -5509,11 +5509,10 @@ def fetch_github_stations():
     return normalize_stations(response.json())
 
 def choose_station_index(loaded):
-    youtube_id = str(saved_playback.get("youtube_id") or "").strip()
-    if youtube_id:
-        for index, station in enumerate(loaded):
-            if station.get("youtube_id") == youtube_id:
-                return index
+    # Previous builds stored a YouTube track as a radio station. Its saved
+    # numeric index must not be reused for an unrelated TCRADIOS station.
+    if saved_playback.get("youtube_id"):
+        return 0
     direct_link_id = saved_playback.get("direct_link_id")
     if direct_link_id not in (None, ""):
         for index, station in enumerate(loaded):
