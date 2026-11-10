@@ -6,7 +6,10 @@ from urllib.parse import urlparse
 from datetime import datetime, timedelta
 from flask import Flask, render_template_string, Response, jsonify, request
 import subprocess
-from tamil_bible import BiblePlayer
+import queue
+from tamil_bible import BiblePlayer, NAMES as BIBLE_NAMES, COUNTS as BIBLE_COUNTS
+from remote_v2_actions import validate_bible_command, validate_favorite_command
+from smart_remote_v2 import REMOTE_V2_HTML
 from fa_icons import draw_icon
 from weather_service import fetch_weather
 from media_session import resolve_media_snapshot
@@ -2282,6 +2285,7 @@ HTML_TEMPLATE = """
         <div class="app-header">
             <div class="app-title">🎵 TC RADIOS</div>
             <div class="header-actions">
+                <a class="icon-btn" href="/remote-v2" title="Open Smart Remote 2.0" aria-label="Open Smart Remote 2.0" style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none">V2</a>
                 <button class="icon-btn" onclick="openMirror()" title="Live 7-inch Screen Mirror" aria-label="Open live screen mirror">🖥️</button>
                 <button class="icon-btn" onclick="refreshStatus()" title="Refresh">🔄</button>
                 <button class="icon-btn" onclick="showThemeModal()" title="Theme">🎨</button>
@@ -3630,6 +3634,85 @@ def get_logo_data_url(logo_url, station_name):
     except:
         pass
     return None
+
+# Safe cross-thread handoff for Smart Remote 2.0. Flask handles requests
+# and validates inputs; Pygame's main thread owns the Bible and favourites.
+remote_v2_commands = queue.Queue(maxsize=48)
+
+
+def enqueue_remote_v2_command(kind, command):
+    try:
+        remote_v2_commands.put_nowait((kind, command))
+    except queue.Full:
+        return jsonify({"success": False, "error": "PiRadio is busy; retry"}), 429
+    return jsonify({"success": True, "queued": True})
+
+
+@app.route('/remote-v2')
+def smart_remote_v2_page():
+    response = Response(REMOTE_V2_HTML, mimetype='text/html')
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'none'; base-uri 'none'; form-action 'self'; "
+        "script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+        "connect-src 'self'; img-src 'self' data:"
+    )
+    return response
+
+
+@app.route('/api/remote-v2/bible', methods=['GET', 'POST'])
+def smart_remote_v2_bible():
+    if request.method == 'GET':
+        book = max(0, min(len(BIBLE_COUNTS)-1, bible_player.book))
+        return jsonify({
+            "success": True,
+            "books": [{"name": name} for name in BIBLE_NAMES],
+            "counts": BIBLE_COUNTS,
+            "book": book,
+            "chapter": bible_player.chapter,
+            "name": BIBLE_NAMES[book],
+            "playing": bool(bible_player.playing),
+            "paused": bool(bible_player.paused),
+            "bookmarks": list(bible_player.bookmarks),
+            "speed": bible_player.speed,
+        })
+    try:
+        command = validate_bible_command(
+            request.get_json(silent=True) or {}, BIBLE_COUNTS,
+        )
+    except ValueError as error:
+        return jsonify({"success": False, "error": str(error)}), 400
+    return enqueue_remote_v2_command("bible", command)
+
+
+@app.route('/api/remote-v2/favorites', methods=['GET', 'POST'])
+def smart_remote_v2_favorites():
+    if request.method == 'GET':
+        return jsonify({
+            "success": True,
+            "indices": [int(index) for index in favorite_indices
+                        if 0 <= index < len(stations)],
+            "limit": 6,
+        })
+    try:
+        command = validate_favorite_command(
+            request.get_json(silent=True) or {}, len(stations),
+        )
+        if not stations[command["index"]].get("url"):
+            raise ValueError("Station is not ready")
+    except ValueError as error:
+        return jsonify({"success": False, "error": str(error)}), 400
+    return enqueue_remote_v2_command("favorite", command)
+
+
+@app.route('/api/remote-v2/transport', methods=['POST'])
+def smart_remote_v2_transport():
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict) or data.get("action") != "stop":
+        return jsonify({"success": False, "error": "Unsupported action"}), 400
+    return enqueue_remote_v2_command("transport", {"action": "stop"})
+
 
 @app.route('/')
 def home():
@@ -7609,6 +7692,59 @@ immersive_swipe_start = None
 
 while True:
     now = time.time()
+    # Drain bounded Smart Remote V2 commands on the Pygame owner thread.
+    # Do not manipulate the separate VLC, MPV, or SDL objects in Flask.
+    for _remote_v2_attempt in range(12):
+        try:
+            remote_kind, remote_command = remote_v2_commands.get_nowait()
+        except queue.Empty:
+            break
+        try:
+            remote_action_name = remote_command["action"]
+            if remote_kind == "bible":
+                if remote_action_name == "select":
+                    if bible_player.playing:
+                        bible_player.stop()
+                    bible_player.book = remote_command["book"]
+                    bible_player.chapter = remote_command["chapter"]
+                    bible_player.save()
+                    if remote_command["autoplay"]:
+                        if youtube_video.is_playing():
+                            youtube_video.stop()
+                        player.stop()
+                        bible_player.play(player.stop)
+                elif remote_action_name == "play":
+                    if youtube_video.is_playing():
+                        youtube_video.stop()
+                    player.stop()
+                    bible_player.play(player.stop)
+                elif remote_action_name == "pause":
+                    bible_player.toggle_pause()
+                elif remote_action_name in ("next", "prev"):
+                    bible_player.shift(1 if remote_action_name == "next" else -1,
+                                       player.stop)
+                elif remote_action_name == "bookmark":
+                    bible_player.toggle_bookmark()
+                elif remote_action_name == "stop":
+                    bible_player.stop()
+            elif remote_kind == "favorite":
+                station_index = remote_command["index"]
+                if station_index >= len(stations):
+                    continue
+                if remote_action_name == "toggle":
+                    if station_index in favorite_indices:
+                        favorite_indices.remove(station_index)
+                    else:
+                        favorite_indices.insert(0, station_index)
+                        del favorite_indices[6:]
+                    save_favorites()
+                elif remote_action_name == "play":
+                    current_idx = station_index
+                    play()
+            elif remote_kind == "transport" and remote_action_name == "stop":
+                control_active_media("stop")
+        except Exception as remote_error:
+            print("Smart Remote 2.0 command failed:", remote_error)
     # Phone gallery controls only enqueue requests. Apply the queued
     # commands on Pygame's main thread (never touch Pygame from Flask).
     for frame_command in photo_frame_library.consume_commands():
