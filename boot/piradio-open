@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Start the existing PiRadio Python app from its installed files, without a reboot.
+# This launcher is deliberately separate from the initial kiosk installer.
+set -euo pipefail
+
+REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+MODE="${1:-start}"
+
+if [[ "${MODE}" == "--help" || "${MODE}" == "help" ]]; then
+    printf 'Usage: piradio7 [start|status]\n'
+    exit 0
+fi
+
+if [[ "${MODE}" == "status" ]]; then
+    if pgrep -f '[/]usr/bin/python3 .*/touch_radio.py$' >/dev/null 2>&1; then
+        printf 'PiRadio 7 is running.\n'
+    else
+        printf 'PiRadio 7 is not running. Use piradio7 to open it.\n'
+    fi
+    exit 0
+fi
+
+if [[ "${MODE}" != "start" && "${MODE}" != "--start" ]]; then
+    printf 'Unknown command: %s\n' "${MODE}" >&2
+    exit 2
+fi
+
+if [[ ! -f "${REPO_DIR}/touch_radio.py" ]]; then
+    printf 'PiRadio Python app not found at %s\n' "${REPO_DIR}" >&2
+    exit 1
+fi
+
+# A desktop launcher usually inherits these values. An SSH/terminal launch
+# may not; use the same session values as the kiosk boot launcher.
+export DISPLAY="${DISPLAY:-:0}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+if [[ -z "${WAYLAND_DISPLAY:-}" && -S "${XDG_RUNTIME_DIR}/wayland-0" ]]; then
+    export WAYLAND_DISPLAY="wayland-0"
+fi
+
+# Never launch as root: that would create a different preferences/gallery
+# and may collide with the logged-in desktop user's display session.
+if [[ ${EUID} -eq 0 ]]; then
+    echo 'Run PiRadio as your normal Raspberry Pi desktop user, without sudo.' >&2
+    exit 1
+fi
+
+# Existing boot launcher owns an exclusive flock. If PiRadio is already
+# running the second invocation exits harmlessly; a terminated process
+# releases the lock and can be opened again immediately.
+nohup "${REPO_DIR}/boot/tcradios-start" </dev/null >/dev/null 2>&1 &
+printf 'PiRadio 7 launch requested. If already running, it stays open.\n'
