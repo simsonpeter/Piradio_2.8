@@ -132,6 +132,10 @@ class DedicatedRadioTests(unittest.TestCase):
             "_youtube_ended_handled": False,
             "time": time, "re": re,
             "remember_youtube_queue": Mock(),
+            # Native 7-inch YouTube artwork fetch is isolated from the VLC
+            # ownership tests; it performs no network I/O in CI.
+            "queue_youtube_artwork": Mock(),
+            "youtube_player_view": False,
             "continue_youtube_queue": Mock(return_value=True),
             "update_logo": Mock(),
             "save_playback_state": Mock(),
