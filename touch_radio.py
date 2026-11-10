@@ -27,6 +27,9 @@ from landscape_youtube_player import (draw as draw_youtube_player,
 from landscape_universal_player import (
     draw as draw_universal_player, hit as universal_player_hit,
 )
+from landscape_smart_home import (
+    draw as draw_smart_home, hit as smart_home_hit,
+)
 from ios_ipod_ui import (draw_home, draw_player_frame, draw_mini_player,
     draw_youtube_skin, raised_card, MINI_BAR, MINI_ACTION, THEMES as IOS_THEMES, load_mode, toggle_mode, TOGGLE)
 
@@ -7928,8 +7931,43 @@ while True:
                 continue
             if immersive_dock_open:
                 continue
-            # The dedicated 7-inch player uses physical hitboxes.
+            # Home and the full player both use unscaled 800x480 hitboxes.
             # Other pages retain the existing native-coordinate translation.
+            if active_page == "menu":
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if CAST_BUTTON.collidepoint(actual_pos):
+                        cast_session.open()
+                        active_page = "cast"
+                    elif FRAME_BUTTON.collidepoint(actual_pos):
+                        photo_frame_return_page = "menu"
+                        photo_frame_renderer.activate(now)
+                        saver_active = False
+                        active_page = "photo_frame"
+                    else:
+                        home_action = smart_home_hit(actual_pos)
+                        if home_action:
+                            kind, value = home_action
+                            if kind == "toggle":
+                                state = globals().get("screen_media", {})
+                                if (state.get("source") == "radio"
+                                        and not (state.get("playing") or state.get("paused"))):
+                                    play()
+                                else:
+                                    control_active_media("toggle")
+                            elif kind == "now_playing":
+                                now_playing_return_page = "menu"
+                                active_page = "now_playing"
+                            elif kind == "page" and value == "photo_frame":
+                                photo_frame_return_page = "menu"
+                                photo_frame_renderer.activate(now)
+                                saver_active = False
+                                active_page = "photo_frame"
+                            elif kind == "page":
+                                active_page = value
+                            elif kind in ("clock", "forecast"):
+                                active_page = kind
+                    touch_consumed = False
+                continue
             if active_page == "now_playing":
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     if CAST_BUTTON.collidepoint(actual_pos):
@@ -8775,6 +8813,18 @@ while True:
     # Photo Frame and ambient clock keep their existing full-screen views.
     if not saver_active and active_page != "photo_frame":
         immersive_layout(landscape_display)
+        if active_page == "menu":
+            home_artwork = (logo if screen_media.get("source")
+                            in ("radio", "youtube_audio") else None)
+            draw_smart_home(
+                landscape_display, f_lg, f_sm, f_tiny,
+                screen_media,
+                temperature=current_temp if weather_available else None,
+                weather_type=weather_type if weather_available else None,
+                weather_available=weather_available,
+                city=device_settings.weather_name,
+                artwork=home_artwork,
+            )
         if active_page == "now_playing":
             media_artwork = (logo if screen_media.get("source")
                              in ("radio", "youtube_audio") else None)
