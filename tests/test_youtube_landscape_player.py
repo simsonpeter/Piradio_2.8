@@ -92,6 +92,31 @@ class YouTubeNativePlayerTests(unittest.TestCase):
                 self.render_player(video=video, paused=paused, active=active)
                 self.assertEqual(hit((557, 346)), ("yt", "toggle"))
 
+    def test_write_800x480_player_preview(self):
+        from landscape_dashboard import draw_shell
+        self.surface.fill((0, 0, 0))
+        draw_shell(
+            self.surface, self.font, self.small, self.tiny,
+            "youtube", "TCRADIOS Tamil", "Previous radio title", False,
+            False, "Tamil Bible", youtube_playing=True,
+            video_status={
+                "playing": True, "source": "youtube_audio",
+                "title": "Tamil Christian Song - New Tamil Praise Audio",
+                "minimized": True, "paused": False,
+            },
+        )
+        draw(self.surface, "youtube", self.font, self.small, self.tiny,
+             youtube_player_view=True, youtube_status={
+                 "active": True, "video": False, "paused": False,
+                 "title": "Tamil Christian Song - New Tamil Praise Audio",
+                 "uploader": "Tamil Christian Music",
+                 "position_ms": 81000, "length_ms": 224000,
+             },
+             video_available=True)
+        pygame.image.save(self.surface, "youtube-player-preview.png")
+        self.assertEqual(self.surface.get_size(), (800, 480))
+        self.assertEqual(hit((685, 94)), ("yt", "search"))
+
     def test_main_application_integration_and_radio_isolation(self):
         source = (Path(__file__).resolve().parents[1] /
                   "touch_radio.py").read_text(encoding="utf-8")
