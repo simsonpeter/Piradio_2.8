@@ -77,6 +77,12 @@ jobs:
           SDL_VIDEODRIVER: dummy
           PYGAME_HIDE_SUPPORT_PROMPT: "1"
         run: .venv/bin/python -m unittest discover -s tests -p 'test_youtube_video_controls.py' -v
+      - name: Validate active media title on all touchscreen pages
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+          PYGAME_HIDE_SUPPORT_PROMPT: "1"
+        run: .venv/bin/python -m unittest discover -s tests -p 'test_universal_media_ui.py' -v
       - name: Check active player routing in PiRadio integration
         run: |
           .venv/bin/python - <<'PY'
