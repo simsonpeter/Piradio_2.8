@@ -8147,8 +8147,14 @@ while True:
             draw_landscape_bible(landscape_display,bible_player,f_lg,f_sm,f_tiny)
         elif active_page in ("favorites","clock","forecast","settings","bluetooth","youtube") and not (active_page=="youtube" and youtube_keyboard_open):
             draw_landscape_page(landscape_display,active_page,f_lg,f_sm,f_tiny,
-                                station=current_station,temp=current_temp,weather_type=weather_type,forecast=weather_forecast,
+                                station=current_station,temp=current_temp if weather_available else None,
+                                weather_type=weather_type if weather_available else None,
+                                forecast=weather_forecast,
                                 city=device_settings.weather_name,
+                                weather_status=(weather_last_error if not weather_available else
+                                                ("Updated " + datetime.fromtimestamp(weather_last_success).strftime("%H:%M")
+                                                 if weather_last_success else "")) if not weather_loading
+                                               else "Updating weather...",
                                 favorites=favorite_indices,stations=stations,
                                 presets=YOUTUBE_PRESETS,status=youtube_touch_status,
                                 youtube_results=youtube_results_cache,youtube_offset=youtube_touch_offset,
