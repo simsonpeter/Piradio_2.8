@@ -7464,6 +7464,7 @@ while True:
         # Shared input gate: all landscape pages must wake without clicking
         # through to the page beneath the screensaver.
         if event.type == pygame.MOUSEBUTTONDOWN:
+            touch_previous_interaction = last_interaction_time
             last_interaction_time = now
             if saver_active:
                 saver_active = False
@@ -7611,7 +7612,7 @@ while True:
             was_auto_dimmed = (
                 target_display_brightness(now) < device_settings.brightness
             )
-            previous_interaction = last_interaction_time
+            previous_interaction = touch_previous_interaction
             last_interaction_time = now
             morning_greeting = (
                 not wifi_setup_required
