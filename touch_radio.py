@@ -15,6 +15,9 @@ from landscape_cast import (CAST_BUTTON, RENEW_BUTTON, CLOSE_BUTTON,
                             draw_cast_button, draw_cast_page)
 from landscape_youtube_player import (draw as draw_youtube_player,
                                       hit as youtube_player_hit)
+from radio_source import (radio_indices, radio_resume_index, radio_step_index)
+from landscape_radio_picker import (draw as draw_radio_picker,
+                                    hit as radio_picker_hit, PAGE_SIZE as RADIO_PAGE_SIZE)
 from ios_ipod_ui import (draw_home, draw_player_frame, draw_mini_player,
     draw_youtube_skin, raised_card, MINI_BAR, MINI_ACTION, THEMES as IOS_THEMES, load_mode, toggle_mode, TOGGLE)
 
@@ -551,8 +554,9 @@ def skip_playback(step):
     except NameError:
         pass
     try:
-        if stations:
-            current_idx = (current_idx + step) % len(stations)
+        index = radio_step_index(stations, current_idx, step, last_radio_url)
+        if index is not None:
+            current_idx = index
             play()
     except (NameError, ZeroDivisionError):
         pass
@@ -5507,6 +5511,10 @@ except Exception as error:
 
 base_stations = [station.copy() for station in stations if station.get("url")]
 current_idx = choose_station_index(stations) if stations and stations[0].get("url") else 0
+# Never replace the radio station memory when a temporary YouTube track starts.
+last_radio_index = radio_resume_index(stations, current_idx, saved_station_url)
+last_radio_url = (stations[last_radio_index]["url"] if last_radio_index is not None else "")
+radio_picker_offset = 0
 
 FAVORITES_FILE = os.path.expanduser("~/.radio_favorites")
 favorite_indices = []
@@ -5695,6 +5703,7 @@ def update_logo(url):
 
 def play():
     global meta_text, scroll_x, saver_scroll_x, saved_station_url, saved_station_index
+    global last_radio_index, last_radio_url
     scroll_x = 320
     saver_scroll_x = 320
     if youtube_video.is_playing():
@@ -5718,6 +5727,9 @@ def play():
         player.audio_set_volume(vol_level)
         audio_manager.set_volume(vol_level)
         update_logo(station.get('logo', ''))
+        if current_idx in radio_indices(stations):
+            last_radio_index = current_idx
+            last_radio_url = station.get("url", "")
         saved_station_url = station.get("url", "")
         saved_station_index = current_idx
         save_playback_state(force=True)
@@ -5742,6 +5754,9 @@ def apply_github_station_list(loaded):
     ]
     stations[:] = list(loaded) + extras
     base_stations = [station.copy() for station in loaded]
+    # A refreshed radio catalogue can reorder items; recover saved radio by URL.
+    global last_radio_index, last_radio_url
+    last_radio_index = radio_resume_index(stations, last_radio_index, last_radio_url)
     matched = None
     for index, station in enumerate(stations):
         if previous_youtube and station.get("youtube_id") == previous_youtube:
@@ -5836,6 +5851,27 @@ def play_youtube_station(video_id, title, audio_url):
     _youtube_ended_handled = False
     _youtube_was_playing = False
     play()
+
+def enter_tc_radio():
+    """Switch audio ownership to the last genuine TC Radio stream.
+
+    Explicit RADIO navigation always selects a real radio station rather than
+    replaying the last YouTube result. If there is no valid station yet, keep
+    the UI usable while waiting for the normal station updater.
+    """
+    global current_idx, youtube_player_open_requested
+    youtube_player_open_requested = False
+    index = radio_resume_index(stations, last_radio_index, last_radio_url)
+    if index is None:
+        return False
+    if current_idx != index or youtube_video.is_playing() or bible_player.playing:
+        current_idx = index
+        play()
+    elif player.get_state() not in (vlc.State.Playing, vlc.State.Buffering, vlc.State.Opening):
+        current_idx = index
+        play()
+    return True
+
 
 def save_favorites():
     try:
