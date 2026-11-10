@@ -84,7 +84,64 @@ def _text(s, font, value, xy, color=WHITE, max_width=None):
 
 
 def _icon(surface, name, rect, size=27, color=WHITE):
-    draw_icon(surface, name, rect.center, size, color)
+    """Crisp built-in outlines; no system icon-font dependency."""
+    x, y = rect.center
+    k = max(12, int(size * 0.46))
+    line = max(2, int(size / 14))
+    if name in ("home", "house"):
+        pygame.draw.lines(surface, color, False,
+                          [(x-k, y-2), (x, y-k), (x+k, y-2)], line + 1)
+        pygame.draw.lines(surface, color, False,
+                          [(x-k+4,y-2),(x-k+4,y+k),(x+k-4,y+k),(x+k-4,y-2)], line)
+        pygame.draw.rect(surface, color, (x-4,y+2,8,k-2),line)
+    elif name == "radio":
+        pygame.draw.rect(surface, color,
+                         (x-k,y-k//2,2*k, k+k//2),line,border_radius=5)
+        pygame.draw.circle(surface, color, (x+k//3,y+k//3),k//3,line)
+        pygame.draw.line(surface,color,(x-k+4,y-k//2),(x+k//2,y-k-5),line)
+        pygame.draw.line(surface,color,(x-k+4,y+2),(x-1,y+2),line)
+    elif name == "bible":
+        pygame.draw.rect(surface, color,(x-k,y-k,2*k,2*k),line,border_radius=4)
+        pygame.draw.line(surface,color,(x-k//2,y-k),(x-k//2,y+k),line)
+        pygame.draw.line(surface,color,(x+2,y-k//2),(x+2,y+k//2),line)
+        pygame.draw.line(surface,color,(x-k//4,y),(x+k//2,y),line)
+    elif name == "youtube":
+        pygame.draw.rect(surface,color,(x-k-2,y-k//2-5,2*k+4,k+10),
+                         line,border_radius=7)
+        pygame.draw.polygon(surface,color,
+                            [(x-5,y-9),(x+10,y),(x-5,y+9)])
+    elif name == "favorites":
+        points=[(x,y+k),(x-k,y-1),(x-k,y-k//2),
+                (x-k//2,y-k),(x,y-k//2),(x+k//2,y-k),
+                (x+k,y-k//2),(x+k,y-1)]
+        pygame.draw.lines(surface,color,True,points,line+1)
+    elif name == "clock":
+        pygame.draw.circle(surface,color,(x,y),k,line)
+        pygame.draw.lines(surface,color,False,
+                          [(x,y-k//2),(x,y),(x+k//2,y+k//4)],line+1)
+    elif name == "weather":
+        pygame.draw.circle(surface,color,(x-4,y-4),max(5,k//2),line)
+        for dx,dy in ((0,-k),(k,0),(-k,0),(0,k)):
+            pygame.draw.line(surface,color,
+                             (x-4+dx*3//4,y-4+dy*3//4),
+                             (x-4+dx,y-4+dy),line)
+        pygame.draw.lines(surface,color,False,
+                          [(x-8,y+k//2),(x+11,y+k//2),
+                           (x+14,y+k//4)],line+1)
+    elif name == "settings":
+        pygame.draw.circle(surface,color,(x,y),k//2,line)
+        pygame.draw.circle(surface,color,(x,y),max(3,k//6),line)
+        for index in range(8):
+            radians=2*math.pi*index/8
+            start=(int(x+math.cos(radians)*k*0.64),
+                   int(y+math.sin(radians)*k*0.64))
+            end=(int(x+math.cos(radians)*k),
+                 int(y+math.sin(radians)*k))
+            pygame.draw.line(surface,color,start,end,line+1)
+    elif name in ("prev","next","play","pause"):
+        draw_icon(surface,name,rect.center,size,color)
+    else:
+        draw_icon(surface,name,rect.center,size,color)
 
 
 def _card(s, rect, fill=PANEL, border=BORDER, radius=19):
@@ -130,6 +187,7 @@ def draw_header(s, font, tiny, page="radio", cast_active=False):
         pygame.draw.line(s, WHITE, (27, y), (55, y), 2)
     _text(s, font, "PiRadio Pro", (84, 14), WHITE, 211)
     _text(s, tiny, page.replace("_", " ").upper(), (329, 20), MUTED, 207)
+    _text(s, tiny, datetime.now().strftime("%H:%M"), (612, 20), WHITE, 65)
 
 
 def draw_handle(s, tiny, opened=False):
