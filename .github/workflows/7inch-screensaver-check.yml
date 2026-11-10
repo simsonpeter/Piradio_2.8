@@ -7,6 +7,7 @@ on:
       - feature/7inch-youtube-unified-controls
       - feature/7inch-guest-cast
       - feature/7inch-youtube-dedicated-player
+      - feature/7inch-smart-photo-frame
   pull_request:
     paths:
       - touch_radio.py
@@ -16,6 +17,7 @@ on:
       - piradio_guest_cast.py
       - landscape_cast.py
       - landscape_youtube_player.py
+      - smart_photo_frame.py
 
 jobs:
   validate:
@@ -26,7 +28,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile Python files
-        run: python3 -m py_compile touch_radio.py landscape_screensaver.py weather_service.py youtube_video_backend.py landscape_dashboard.py piradio_guest_cast.py landscape_cast.py landscape_youtube_player.py
+        run: python3 -m py_compile touch_radio.py landscape_screensaver.py weather_service.py youtube_video_backend.py landscape_dashboard.py piradio_guest_cast.py landscape_cast.py landscape_youtube_player.py smart_photo_frame.py
       - name: Create isolated renderer environment
         run: python3 -m venv .venv
       - name: Install Pygame renderer
@@ -142,6 +144,76 @@ jobs:
           pygame.image.save(display,"youtube-dedicated-player-preview.png")
           print("Dedicated YouTube player preview created")
           PY
+      - name: Test Smart Photo Frame photo uploads and touchscreen
+        env:
+          SDL_VIDEODRIVER: dummy
+          PYGAME_HIDE_SUPPORT_PROMPT: "1"
+        run: .venv/bin/python -m unittest discover -s tests -p 'test_smart_photo_frame.py' -v
+      - name: Verify Photo Frame integration
+        run: |
+          .venv/bin/python - <<'PY'
+          from pathlib import Path
+          source = Path("touch_radio.py").read_text()
+          required = (
+              "photo_frame_library = PhotoFrameLibrary()",
+              "register_frame_routes(app, photo_frame_library)",
+              "photo_frame_renderer.activate(now)",
+              'if active_page == "photo_frame":',
+              'url=f"http://{current_ip}:{web_port}/frame"',
+              'photo_frame_library.options["auto_idle"]',
+              "photo_frame_renderer.draw(",
+          )
+          for item in required:
+              assert item in source, item
+          print("Smart Photo Frame integration is wired to PiRadio 7")
+          PY
+      - name: Render 800x480 Smart Photo Frame preview
+        env:
+          SDL_VIDEODRIVER: dummy
+          PYGAME_HIDE_SUPPORT_PROMPT: "1"
+        run: |
+          .venv/bin/python - <<'PY'
+          import pygame
+          from PIL import Image, ImageDraw
+          import tempfile, time
+          from pathlib import Path
+          from smart_photo_frame import PhotoFrameLibrary, PhotoFrameRenderer
+          pygame.init()
+          screen=pygame.display.set_mode((800,480))
+          with tempfile.TemporaryDirectory() as root:
+              library=PhotoFrameLibrary(
+                  Path(root)/"photos",Path(root)/"settings.json")
+              # Test asset created programmatically; no outside image dependency.
+              pic=Image.new("RGB",(1280,768),(31,55,69))
+              draw=ImageDraw.Draw(pic)
+              for i in range(0,1280,60):
+                  draw.polygon([(i,480),(i+270,240),(i+540,480)],
+                               fill=(20+i%80,85+i%40,111+i%80))
+              draw.rectangle((0,490,1280,768),fill=(20,52,65))
+              draw.ellipse((945,72,1120,247),fill=(239,206,137))
+              pic.save(library.root/"sample.jpg")
+              renderer=PhotoFrameRenderer(library)
+              now=time.time()
+              renderer.activate(now)
+              renderer.show_pairing=False
+              renderer.refresh(now)
+              renderer.path=library.list_photos()[0]
+              raw=pygame.image.fromstring(
+                  pic.resize((800,480)).tobytes(),(800,480),"RGB")
+              renderer.image=raw
+              renderer.controls_until=now+10
+              font=lambda n:pygame.font.Font(None,n)
+              renderer.draw(screen,font(31),font(23),font(18),now,
+                            city="Antwerp",temperature=19,
+                            playing="PiRadio Music")
+              pygame.image.save(screen,"smart-photo-frame-preview.png")
+              renderer.show_pairing=True
+              renderer.draw(screen,font(31),font(23),font(18),now,
+                            city="Antwerp",temperature=19,
+                            url="http://192.168.1.25:8080/frame")
+              pygame.image.save(screen,"smart-photo-frame-pairing.png")
+          print("Photo Frame and QR UI rendered")
+          PY
       - name: Render screensaver smoke test
         env:
           SDL_VIDEODRIVER: dummy
@@ -187,6 +259,13 @@ jobs:
           assert 'saver_wake_ignore_up = True' in source
           print("800x480 render and auto-activation integration checks passed")
           PY
+      - name: Attach Smart Photo Frame previews
+        uses: actions/upload-artifact@v4
+        with:
+          name: seven-inch-smart-photo-frame-preview
+          path: |
+            smart-photo-frame-preview.png
+            smart-photo-frame-pairing.png
       - name: Attach YouTube player preview
         uses: actions/upload-artifact@v4
         with:
