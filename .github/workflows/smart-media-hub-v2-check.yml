@@ -6,12 +6,18 @@ on:
       - feature/7inch-smart-media-hub-v2
     paths:
       - 'media_session.py'
+      - 'media_transport.py'
+      - 'youtube_video_backend.py'
+      - 'tests/test_media_transport.py'
       - 'touch_radio.py'
       - 'tests/test_media_session.py'
       - '.github/workflows/smart-media-hub-v2-check.yml'
   pull_request:
     paths:
       - 'media_session.py'
+      - 'media_transport.py'
+      - 'youtube_video_backend.py'
+      - 'tests/test_media_transport.py'
       - 'touch_radio.py'
       - 'tests/test_media_session.py'
       - '.github/workflows/smart-media-hub-v2-check.yml'
@@ -26,9 +32,11 @@ jobs:
         with:
           python-version: '3.12'
       - name: Check Python syntax without Raspberry Pi hardware
-        run: python -m py_compile media_session.py touch_radio.py
+        run: python -m py_compile media_session.py media_transport.py youtube_video_backend.py touch_radio.py
       - name: Test active media source priority
         run: python -m unittest discover -s tests -p 'test_media_session.py' -v
+      - name: Validate unified transport command planning
+        run: python -m unittest discover -s tests -p 'test_media_transport.py' -v
       - name: Verify backwards-compatible remote routes
         run: |
           python - <<'PY'
@@ -40,5 +48,9 @@ jobs:
           assert "@app.route('/api/nowplaying')" in source
           assert "@app.route('/api/status')" in source
           assert "return jsonify(active_media_snapshot().as_dict())" in source
+          assert "def control_active_media(" in source
+          assert "from media_transport import plan_media_command" in source
+          assert 'control_active_media("next")' in source
+          assert 'control_active_media("prev")' in source
           print("Playback integration and existing endpoints confirmed")
           PY
