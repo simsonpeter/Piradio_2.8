@@ -103,6 +103,25 @@ def _video_clock(value):
     return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
 
 
+VIDEO_HERO_SEEK = pygame.Rect(421, 294, 329, 8)
+VIDEO_HERO_ART = pygame.Rect(163, 79, 225, 265)
+
+
+def video_hero_hit(pos, status, active_page):
+    """Video-only hero hit targets; avoid VLC volume-slider overlap."""
+    if active_page != "radio" or not status or not status.get("playing"):
+        return None
+    if VIDEO_HERO_SEEK.inflate(0, 20).collidepoint(pos):
+        duration = float(status.get("duration") or 0)
+        if duration > 0:
+            ratio = max(0, min(1, (pos[0] - VIDEO_HERO_SEEK.x) / VIDEO_HERO_SEEK.width))
+            return ("seek", duration * ratio)
+        return ("consume", None)
+    if VIDEO_HERO_ART.collidepoint(pos):
+        return ("restore", None)
+    return None
+
+
 def draw_video_hero(s, font, small, tiny, status):
     """Replace the stale VLC radio hero with the real mpv video session."""
     art = pygame.Rect(163, 79, 225, 265)
@@ -138,7 +157,7 @@ def draw_video_hero(s, font, small, tiny, status):
 
     position = status.get("position") or 0
     duration = status.get("duration") or 0
-    progress_rect = pygame.Rect(421, 294, 329, 8)
+    progress_rect = VIDEO_HERO_SEEK
     pygame.draw.rect(s, (58, 58, 58), progress_rect, border_radius=5)
     if duration:
         ratio = max(0.0, min(1.0, float(position) / max(1.0, float(duration))))
