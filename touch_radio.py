@@ -8,6 +8,7 @@ from flask import Flask, render_template_string, Response, jsonify, request
 import subprocess
 from tamil_bible import BiblePlayer
 from fa_icons import draw_icon
+from weather_service import fetch_weather
 from landscape_screensaver import draw as draw_landscape_screensaver
 from ios_ipod_ui import (draw_home, draw_player_frame, draw_mini_player,
     draw_youtube_skin, raised_card, MINI_BAR, MINI_ACTION, THEMES as IOS_THEMES, load_mode, toggle_mode, TOGGLE)
@@ -852,10 +853,11 @@ BACKGROUND = current_theme.pygame_background
 class DeviceSettingsManager:
     def __init__(self):
         self.settings_file = os.path.expanduser("~/.radio_device_settings")
-        self.weather_name = "Hove"
-        self.weather_country = "United Kingdom"
-        self.weather_latitude = 50.83
-        self.weather_longitude = -0.17
+        # Default to Belgium; persisted user-selected location takes precedence.
+        self.weather_name = "Antwerpen"
+        self.weather_country = "Belgium"
+        self.weather_latitude = 51.2194
+        self.weather_longitude = 4.4025
         self.brightness = 100
         self.auto_dim_enabled = False
         self.auto_dim_minutes = 5
@@ -921,8 +923,7 @@ class DeviceSettingsManager:
             "https://api.open-meteo.com/v1/forecast"
             f"?latitude={self.weather_latitude}"
             f"&longitude={self.weather_longitude}"
-            "&current_weather=true"
-            "&current=relative_humidity_2m"
+            "&current=temperature_2m,relative_humidity_2m,weather_code"
             "&daily=weather_code,temperature_2m_max,temperature_2m_min"
             "&forecast_days=5&timezone=auto"
         )
@@ -2240,7 +2241,7 @@ HTML_TEMPLATE = """
                     <div id="remote-weather-temp" style="font-size:72px;font-weight:750;line-height:1.3">--°</div>
                     <div id="remote-weather-condition" style="color:#ccc">Loading weather...</div>
                     <div id="remote-weather-days" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(80px,1fr));gap:9px;margin-top:20px"></div>
-                    <button class="btn-primary" style="margin-top:20px" onclick="loadRemoteWeather()">Refresh forecast</button>
+                    <button class="btn-primary" style="margin-top:20px" onclick="refreshRemoteWeather()">Refresh forecast</button>
                 </div>
             </div>
             <div class="view active" id="view-home">
@@ -2797,14 +2798,31 @@ HTML_TEMPLATE = """
                 });
         }
         
+        async function refreshRemoteWeather() {
+            try {
+                const response = await fetch(apiBase + '/api/weather/refresh', {method:'POST'});
+                if (!response.ok) throw new Error('Unable to request a weather update');
+                await loadRemoteWeather();
+                setTimeout(loadRemoteWeather, 2500);
+                setTimeout(loadRemoteWeather, 8000);
+            } catch (error) {
+                showToast(error.message || 'Weather refresh failed');
+            }
+        }
+
         async function loadRemoteWeather() {
             try {
                 const response = await fetch(apiBase + '/api/weather/current');
                 if (!response.ok) throw new Error('Weather unavailable');
                 const w = await response.json();
                 document.getElementById('remote-weather-city').textContent = w.city || 'Weather';
-                document.getElementById('remote-weather-temp').textContent = Math.round(Number(w.temp || 0)) + '°';
-                document.getElementById('remote-weather-condition').textContent = (w.condition || 'Current conditions').replace(/_/g, ' ');
+                document.getElementById('remote-weather-temp').textContent =
+                    w.available && w.temp !== null ? Math.round(Number(w.temp)) + '°' : '--°';
+                document.getElementById('remote-weather-condition').textContent =
+                    w.available
+                        ? ((w.condition || 'Current conditions').replace(/_/g, ' ') +
+                            (w.humidity !== null ? ' · Humidity ' + w.humidity + '%' : ''))
+                        : (w.loading ? 'Loading current weather…' : (w.error || 'Weather data unavailable. Try Refresh.'));
                 const days = document.getElementById('remote-weather-days');
                 days.replaceChildren();
                 (w.forecast || []).forEach(day => {
@@ -3740,14 +3758,27 @@ def get_status():
 def remote_weather_current():
     return jsonify({
         'city': device_settings.weather_name,
-        'temp': current_temp,
-        'condition': weather_type,
-        'forecast': weather_forecast[:5]
+        'country': device_settings.weather_country,
+        'temp': current_temp if weather_available else None,
+        'humidity': current_humidity,
+        'condition': weather_type if weather_available else None,
+        'forecast': weather_forecast[:5],
+        'available': weather_available,
+        'loading': weather_loading,
+        'updated_at': weather_last_success if weather_last_success else None,
+        'error': weather_last_error if not weather_available else None,
     })
+
+@app.route('/api/weather/refresh', methods=['POST'])
+def remote_weather_refresh():
+    global weather_next_check
+    weather_next_check = 0
+    return jsonify({'success': True, 'message': 'Weather refresh requested'})
 
 @app.route('/api/weather/location', methods=['GET', 'POST'])
 def weather_location():
-    global last_weather_update
+    global last_weather_update, weather_next_check, weather_available
+    global weather_last_error, weather_forecast, current_humidity
     if request.method == 'GET':
         return jsonify({'success': True, **device_settings.as_dict()})
 
@@ -3787,6 +3818,11 @@ def weather_location():
         device_settings.weather_longitude = float(location['longitude'])
         device_settings.save()
         last_weather_update = 0
+        weather_next_check = 0
+        weather_available = False
+        weather_last_error = ''
+        weather_forecast = []
+        current_humidity = None
         return jsonify({
             'success': True,
             **device_settings.as_dict()
@@ -5343,6 +5379,11 @@ except Exception as error:
     print(f"Volume restore error: {error}")
 print(f"Restored volume {vol_level}%")
 last_weather_update = 0
+weather_next_check = 0
+weather_loading = False
+weather_pending = None
+weather_last_error = ""
+weather_last_success = 0
 last_system_update = 0
 saver_mode = False
 show_qr = False
@@ -7184,6 +7225,16 @@ def start_rotary_encoder():
 rotary_controls = []
 start_rotary_encoder()
 
+
+def fetch_weather_background(coords, url):
+    global weather_pending
+    try:
+        data = fetch_weather(url)
+        weather_pending = (coords, data, None)
+    except Exception as error:
+        weather_pending = (coords, None, f"{type(error).__name__}: {error}")
+
+
 # Idle time begins when the 7-inch app is ready, not while it is booting.
 last_interaction_time = time.time()
 
@@ -7218,37 +7269,51 @@ while True:
         maybe_advance_youtube_queue()
     apply_wifi_result()
     
-    if now - last_weather_update > 1200:
-        try:
-            r = requests.get(device_settings.weather_url(), timeout=5)
-            if r.status_code == 200:
-                weather_data = r.json()
-                data = weather_data['current_weather']
-                current_temp = int(round(data['temperature']))
-                current_humidity = weather_data.get("current", {}).get("relative_humidity_2m")
+    # Apply background weather updates on the UI thread. A slow or failing
+    # internet request must never freeze radio, touch, or the screensaver.
+    if weather_pending is not None:
+        result_coords, weather_result, weather_error = weather_pending
+        weather_pending = None
+        weather_loading = False
+        now_coords = (device_settings.weather_latitude, device_settings.weather_longitude)
+        if result_coords == now_coords:
+            last_weather_update = now
+            if weather_error:
+                weather_last_error = weather_error[:180]
+                weather_next_check = now + 60  # retry failures promptly
+                print("PiRadio weather update failed:", weather_last_error)
+            else:
+                current_temp = weather_result['temperature']
+                current_humidity = weather_result['humidity']
+                weather_type = weather_code_to_type(weather_result['weather_code'])
+                weather_forecast = [
+                    {
+                        'day': item['day'],
+                        'type': weather_code_to_type(item['weather_code']),
+                        'label': weather_code_label(item['weather_code']),
+                        'high': item['high'],
+                        'low': item['low'],
+                    }
+                    for item in weather_result['forecast']
+                ]
                 weather_available = True
-                code = data['weathercode']
-                weather_type = weather_code_to_type(code)
+                weather_last_error = ""
+                weather_last_success = now
+                weather_next_check = now + 600  # refresh every ten minutes
+                print(f"PiRadio weather updated: {device_settings.weather_name} {current_temp}C")
+        else:
+            # The location changed while the previous request was in flight.
+            weather_next_check = 0
 
-                daily = weather_data.get('daily', {})
-                dates = daily.get('time', [])
-                codes = daily.get('weather_code', [])
-                highs = daily.get('temperature_2m_max', [])
-                lows = daily.get('temperature_2m_min', [])
-                weather_forecast = []
-                for date, daily_code, high, low in zip(
-                    dates, codes, highs, lows
-                ):
-                    forecast_date = datetime.strptime(date, "%Y-%m-%d")
-                    weather_forecast.append({
-                        'day': forecast_date.strftime("%a"),
-                        'type': weather_code_to_type(daily_code),
-                        'label': weather_code_label(daily_code),
-                        'high': int(round(high)),
-                        'low': int(round(low))
-                    })
-        except: pass
-        last_weather_update = now
+    if not weather_loading and now >= weather_next_check:
+        weather_loading = True
+        weather_next_check = now + 60
+        weather_coords = (device_settings.weather_latitude, device_settings.weather_longitude)
+        threading.Thread(
+            target=fetch_weather_background,
+            args=(weather_coords, device_settings.weather_url()),
+            daemon=True,
+        ).start()
 
     if (
         active_page in ("system", "settings")
