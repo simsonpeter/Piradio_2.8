@@ -13,6 +13,8 @@ from landscape_screensaver import draw as draw_landscape_screensaver
 from piradio_guest_cast import GuestCastSession, register_cast_routes
 from landscape_cast import (CAST_BUTTON, RENEW_BUTTON, CLOSE_BUTTON,
                             draw_cast_button, draw_cast_page)
+from smart_photo_frame import (PhotoFrameLibrary, PhotoFrameRenderer,
+                               FRAME_BUTTON, register_frame_routes)
 from landscape_youtube_player import (draw as draw_youtube_player,
                                       hit as youtube_player_hit)
 from ios_ipod_ui import (draw_home, draw_player_frame, draw_mini_player,
@@ -1014,6 +1016,11 @@ last_interaction_time = time.time()
 
 # --- WEB REMOTE APP ---
 app = Flask(__name__)
+photo_frame_library = PhotoFrameLibrary()
+photo_frame_renderer = PhotoFrameRenderer(photo_frame_library)
+photo_frame_renderer.refresh()
+register_frame_routes(app, photo_frame_library)
+photo_frame_return_page = "menu"
 cast_session = GuestCastSession()
 web_port = 8080
 
@@ -7406,6 +7413,31 @@ last_interaction_time = time.time()
 
 while True:
     now = time.time()
+    # Phone gallery controls only enqueue requests. Apply the queued
+    # commands on Pygame's main thread (never touch Pygame from Flask).
+    for frame_command in photo_frame_library.consume_commands():
+        if frame_command == "open":
+            if active_page != "photo_frame":
+                photo_frame_return_page = active_page
+            active_page = "photo_frame"
+            photo_frame_renderer.controls_until = now + 8
+            saver_active = False
+            last_interaction_time = now
+        elif frame_command == "close":
+            if active_page == "photo_frame":
+                active_page = photo_frame_return_page
+            photo_frame_renderer.close()
+            saver_active = False
+        elif frame_command in ("next", "previous"):
+            photo_frame_renderer.step(1 if frame_command == "next" else -1, now)
+        elif frame_command == "pause":
+            photo_frame_renderer.paused = True
+        elif frame_command == "resume":
+            photo_frame_renderer.paused = False
+            photo_frame_renderer.change_at = now + photo_frame_library.options["interval"]
+        elif frame_command == "refresh":
+            photo_frame_renderer.refresh(now)
+            photo_frame_renderer.path = None
     # A YouTube song selected from the Android remote opens the same native
     # player screen as a result selected on the Pi touchscreen.
     if youtube_player_open_requested:
@@ -7422,7 +7454,7 @@ while True:
         not saver_active
         and not wifi_setup_required
         and not show_qr
-        and active_page != "cast"  # keep the pairing PIN and QR visible for guests
+        and active_page not in ("cast", "photo_frame")
         and now - last_interaction_time >= SCREENSAVER_TIMEOUT_SECONDS
     ):
         saver_active = True
@@ -7733,6 +7765,31 @@ while True:
             continue
         elif event.type == pygame.MOUSEMOTION and any(getattr(event, "buttons", ())):
             last_interaction_time = now
+
+        # Full-screen Photo Frame receives all touches before the sidebar,
+        # MPV mini-player, Guest Cast, or underlying radio controls.
+        if active_page == "photo_frame":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                result = photo_frame_renderer.hit(event.pos, now)
+                if result == "close":
+                    photo_frame_renderer.close()
+                    active_page = photo_frame_return_page
+                elif result == "settings":
+                    # Quick fit/fill toggle; detailed options remain on phone.
+                    next_fit = "contain" if photo_frame_library.options["fit"] == "cover" else "cover"
+                    photo_frame_library.set_options({"fit": next_fit})
+                    photo_frame_renderer.refresh(now)
+                    photo_frame_renderer.path = None
+                touch_consumed = False
+            continue
+        # PHOTO remains accessible from the normal top bar on every page.
+        if event.type == pygame.MOUSEBUTTONDOWN and FRAME_BUTTON.collidepoint(event.pos):
+            photo_frame_return_page = active_page
+            active_page = "photo_frame"
+            photo_frame_renderer.activate(now)
+            saver_active = False
+            touch_consumed = False
+            continue
 
         # Minimized MPV keeps its own controls over every PiRadio page.
         # Consume the touch before the underlying VLC mini-player receives it.
@@ -8482,22 +8539,47 @@ while True:
             landscape_display.blit(content,(365,73))
     if video_status_cache.get("playing") and video_status_cache.get("minimized"):
         draw_video_mini(landscape_display, f_lg, f_sm, f_tiny, video_status_cache)
-    # Dedicated Cast launcher is visible from all PiRadio pages.
+    # Top bar shortcuts to guest casting and the Smart Photo Frame.
     draw_cast_button(landscape_display, f_sm, active_page == "cast")
+    frame_shortcut_fill = (33, 87, 93) if active_page == "photo_frame" else (28, 28, 28)
+    pygame.draw.rect(landscape_display, frame_shortcut_fill,
+                     FRAME_BUTTON, border_radius=11)
+    pygame.draw.rect(landscape_display, (78, 78, 78), FRAME_BUTTON,
+                     1, border_radius=11)
+    photo_label = f_sm.render("PHOTO", True, (246,246,246))
+    landscape_display.blit(photo_label,
+                           photo_label.get_rect(center=FRAME_BUTTON.center))
     # Draw OVER the native landscape page, not on the older 320x480 surface.
     if saver_active and not youtube_video.is_playing():
-        draw_landscape_screensaver(
-            landscape_display,
-            SCREENSAVER_FONTS,
-            now=now,
-            weather_type=weather_type,
-            temperature=current_temp if weather_available else None,
+        if photo_frame_library.options["auto_idle"] and photo_frame_renderer.photos:
+            photo_frame_renderer.draw(
+                landscape_display, f_lg, f_sm, f_tiny, now,
+                city=device_settings.weather_name,
+                temperature=current_temp if weather_available else None,
+                playing=screensaver_playing_label(),
+                ambient=True,
+            )
+        else:
+            draw_landscape_screensaver(
+                landscape_display,
+                SCREENSAVER_FONTS,
+                now=now,
+                weather_type=weather_type,
+                temperature=current_temp if weather_available else None,
+                city=device_settings.weather_name,
+                forecast=weather_forecast,
+                humidity=current_humidity,
+                now_playing=screensaver_playing_label(),
+                alarm_time=alarm_system.alarm_time if alarm_system.alarm_enabled else None,
+                weather_icon=draw_weather_icon,
+            )
+    if active_page == "photo_frame":
+        photo_frame_renderer.draw(
+            landscape_display, f_lg, f_sm, f_tiny, now,
             city=device_settings.weather_name,
-            forecast=weather_forecast,
-            humidity=current_humidity,
-            now_playing=screensaver_playing_label(),
-            alarm_time=alarm_system.alarm_time if alarm_system.alarm_enabled else None,
-            weather_icon=draw_weather_icon,
+            temperature=current_temp if weather_available else None,
+            playing=screensaver_playing_label(),
+            url=f"http://{current_ip}:{web_port}/frame",
         )
     pygame.display.flip()
     time.sleep(0.05)
