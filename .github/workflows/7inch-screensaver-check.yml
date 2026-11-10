@@ -6,9 +6,11 @@ on:
       - feature/7inch-ambient-screensaver
       - feature/7inch-youtube-unified-controls
       - feature/7inch-guest-cast
+      - feature/7inch-dedicated-tcradios
   pull_request:
     paths:
       - touch_radio.py
+      - tests/test_dedicated_tcradios.py
       - landscape_screensaver.py
       - youtube_video_backend.py
       - landscape_dashboard.py
@@ -68,6 +70,8 @@ jobs:
           PY
       - name: Test guest pairing security, casting and RTSP validation
         run: .venv/bin/python -m unittest discover -s tests -p 'test_guest_cast.py' -v
+      - name: Test dedicated TCRADIOS and YouTube media ownership
+        run: .venv/bin/python -m unittest discover -s tests -p 'test_dedicated_tcradios.py' -v
       - name: Render Cast PIN/QR screen
         env:
           SDL_VIDEODRIVER: dummy
