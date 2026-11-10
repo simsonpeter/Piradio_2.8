@@ -195,7 +195,7 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
     pygame.draw.rect(s,(0,0,0),SIDEBAR)
     for name,icon in zip(NAV,NAV_ICONS):
         r=NAV_RECTS[name]
-        selected=(name=="HOME" and active_page=="menu") or (name=="RADIO" and active_page=="radio")
+        selected=(name=="HOME" and active_page=="menu") or (name=="RADIO" and active_page in ("radio", "radio_picker"))
         _glow_card(s,r,(36,36,36) if selected else (12,12,12),(125,125,125) if selected else (48,48,48),14)
         _icon(s,icon,pygame.Rect(r.x+7,r.y+5,28,28),20,WHITE)
         _text(s,small,name.title(),(r.x+39,r.y+8),WHITE,90)
@@ -265,9 +265,9 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
         _icon(s,icon,rect,25,WHITE)
     return True
 
-def hit(pos):
+def hit(pos, active_page=None):
     """Resolve exactly one target for a touch-down."""
-    if RADIO_STATIONS_BUTTON.collidepoint(pos):
+    if active_page == "radio" and RADIO_STATIONS_BUTTON.collidepoint(pos):
         return ("radio_stations", None)
     for name,rect in NAV_RECTS.items():
         if rect.collidepoint(pos):return ("page",name)
