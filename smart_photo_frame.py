@@ -535,6 +535,9 @@ class PhotoFrameRenderer:
 
     def hit(self, point, now):
         """Tap to reveal actions, or handle visible overlay safely."""
+        # The exit button must remain functional even with zero images.
+        if PHOTO_CLOSE.collidepoint(point):
+            return "close"
         if self.show_pairing or not self.photos:
             renew=pygame.Rect(413,339,146,45)
             done=pygame.Rect(571,339,167,45)
