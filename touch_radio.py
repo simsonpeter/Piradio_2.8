@@ -5030,7 +5030,7 @@ def poll_video_status():
 
 
 def start_fullscreen_youtube_video():
-    global youtube_video_id, youtube_touch_status
+    global youtube_video_id, youtube_touch_status, youtube_player_view
     video_id = current_youtube_id()
     if not video_id:
         youtube_touch_status = "Play a YouTube audio result first"
@@ -5045,6 +5045,8 @@ def start_fullscreen_youtube_video():
         if bible_player.playing or bible_player.player.is_playing():
             bible_player.stop()
         youtube_video_id = video_id
+        youtube_player_view = True
+        queue_youtube_artwork(video_id)
         youtube_touch_status = "Video started"
     except Exception as error:
         youtube_touch_status = "Video error: " + str(error)[:60]
@@ -5359,6 +5361,161 @@ youtube_audio_active = False
 youtube_current_id = ""
 youtube_current_title = ""
 youtube_current_url = ""
+youtube_player_view = False
+youtube_artwork_surfaces = {}
+youtube_artwork_pending = {}
+youtube_artwork_attempted = set()
+
+
+def queue_youtube_artwork(video_id):
+    """Download only trusted YouTube thumbnails away from the touch/UI thread."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", str(video_id or "")):
+        return
+    if video_id in youtube_artwork_attempted:
+        return
+    if len(youtube_artwork_attempted) > 25:
+        youtube_artwork_attempted.clear()
+        youtube_artwork_surfaces.clear()
+    youtube_artwork_attempted.add(video_id)
+
+    def worker():
+        try:
+            response = requests.get(
+                f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+                timeout=(3, 5),
+            )
+            response.raise_for_status()
+            if (response.headers.get("Content-Type", "").lower().startswith("image/")
+                    and len(response.content) < 1000000
+                    and response.content[:3] == b"\xff\xd8\xff"):
+                youtube_artwork_pending[video_id] = response.content
+        except (requests.RequestException, ValueError) as error:
+            print(f"PiRadio YouTube thumbnail unavailable: {error}")
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def youtube_status_for_screen():
+    """Single Now Playing data model for either YouTube audio VLC or MPV."""
+    mpv = globals().get("youtube_video")
+    mpv_playing = bool(mpv and mpv.is_playing() and
+                       mpv.source_type == "youtube_video")
+    if mpv_playing:
+        snapshot = globals().get("video_status_cache") or {}
+        audio_title = youtube_current_title
+        return {
+            "active": True,
+            "video": True,
+            "paused": bool(snapshot.get("paused", False)),
+            "title": mpv.title or audio_title or "YouTube video",
+            "video_id": mpv.video_id or youtube_current_id,
+            "uploader": youtube_uploader_for_id(mpv.video_id or youtube_current_id),
+            "position_ms": float(snapshot.get("position") or 0) * 1000,
+            "length_ms": float(snapshot.get("duration") or 0) * 1000,
+        }
+    pos = 0
+    length = 0
+    paused = False
+    if youtube_audio_active:
+        try:
+            pos = max(0, youtube_audio_player.get_time())
+            length = max(0, youtube_audio_player.get_length())
+            paused = youtube_audio_player.get_state() == vlc.State.Paused
+        except Exception:
+            pass
+    return {
+        "active": youtube_audio_active,
+        "video": False,
+        "paused": paused,
+        "title": youtube_current_title or "Choose a YouTube song",
+        "video_id": youtube_current_id,
+        "uploader": youtube_uploader_for_id(youtube_current_id),
+        "position_ms": pos, "length_ms": length,
+    }
+
+
+def youtube_uploader_for_id(video_id):
+    for item in youtube_queue:
+        if item.get("id") == video_id:
+            return item.get("uploader") or "YouTube audio"
+    for item in youtube_results_cache:
+        if item.get("id") == video_id:
+            return item.get("uploader") or "YouTube audio"
+    return "YouTube audio"
+
+
+def youtube_player_touch(action, pos=None):
+    """Control only the selected YouTube media; never touch radio station list."""
+    global youtube_player_view
+    if action == "search":
+        youtube_player_view = False
+        return
+    if action == "player":
+        youtube_player_view = True
+        return
+
+    backend = youtube_video
+    mpv_active = backend.is_playing() and backend.source_type == "youtube_video"
+    if action == "video":
+        if mpv_active:
+            backend.restore_video()
+        elif current_youtube_id():
+            start_fullscreen_youtube_video()
+        return
+    if action == "toggle":
+        if mpv_active:
+            backend.pause()
+        elif youtube_audio_active:
+            youtube_audio_player.pause()
+        elif youtube_current_id and not youtube_touch_busy:
+            selected = next(
+                (dict(item) for item in youtube_queue
+                 if item.get("id") == youtube_current_id),
+                {"id": youtube_current_id, "title": youtube_current_title},
+            )
+            begin_youtube_play(selected)
+        return
+    if action in ("previous", "next"):
+        step = -1 if action == "previous" else 1
+        if mpv_active:
+            # MPV video does not own YouTube's audio playlist: explicitly
+            # choose the selected audio result and switch to audio playback.
+            if len(youtube_queue) > 1:
+                continue_youtube_queue(step, user=True)
+        elif youtube_audio_active and len(youtube_queue) > 1:
+            continue_youtube_queue(step, user=True)
+        elif youtube_audio_active:
+            youtube_audio_player.set_time(0)
+        return
+    if action not in ("back10", "forward10", "seek"):
+        return
+    if mpv_active:
+        if action == "seek":
+            from landscape_pages import YOUTUBE_SEEK
+            snapshot = youtube_status_for_screen()
+            duration_s = float(snapshot.get("length_ms") or 0) / 1000
+            if duration_s and pos is not None:
+                ratio = min(1.0, max(0.0, (pos[0] - YOUTUBE_SEEK.x) /
+                                      YOUTUBE_SEEK.width))
+                backend.seek_absolute(duration_s * ratio)
+        else:
+            backend.seek(-10 if action == "back10" else 10)
+    elif youtube_audio_active:
+        try:
+            current = max(0, youtube_audio_player.get_time())
+            duration = max(0, youtube_audio_player.get_length())
+            if action == "seek" and duration > 0 and pos is not None:
+                from landscape_pages import YOUTUBE_SEEK
+                ratio = min(1.0, max(0.0, (pos[0] - YOUTUBE_SEEK.x) /
+                                      YOUTUBE_SEEK.width))
+                target = int(duration * ratio)
+            else:
+                target = current + (-10000 if action == "back10" else 10000)
+            youtube_audio_player.set_time(max(0, min(duration, target))
+                                          if duration > 0 else max(0, target))
+        except (ValueError, TypeError):
+            pass
+
 
 def stop_youtube_audio():
     """Stop only YouTube's VLC player without disturbing radio selection."""
@@ -5857,7 +6014,7 @@ def play_youtube_station(video_id, title, audio_url):
     """Dedicated YouTube VLC player: never append to the radio stations list."""
     global youtube_audio_active, youtube_current_id, youtube_current_title
     global youtube_current_url, _youtube_play_started_at, _youtube_ended_handled
-    global _youtube_was_playing
+    global _youtube_was_playing, youtube_player_view
     if not re.fullmatch(r"[A-Za-z0-9_-]{11}", str(video_id)):
         raise ValueError("Invalid YouTube video")
     if not str(audio_url).startswith(("https://", "http://")):
@@ -5876,6 +6033,8 @@ def play_youtube_station(video_id, title, audio_url):
     youtube_current_id = video_id
     youtube_current_title = str(title or "YouTube Audio")[:160]
     youtube_current_url = audio_url
+    youtube_player_view = True
+    queue_youtube_artwork(video_id)
     remember_youtube_queue(video_id, youtube_current_title)
     youtube_skip_ids.discard(video_id)
     _youtube_play_started_at = time.time()
@@ -7189,13 +7348,14 @@ def fetch_youtube_audio(video, auto=False):
 
 def begin_youtube_search(query):
     global youtube_touch_busy, youtube_touch_status, youtube_touch_query
-    global youtube_keyboard_open, youtube_keyboard_text
+    global youtube_keyboard_open, youtube_keyboard_text, youtube_player_view
     query = str(query or '').strip()
     if youtube_touch_busy:
         return
     if not query:
         youtube_touch_status = "Type a search"
         return
+    youtube_player_view = False
     youtube_touch_query = query
     youtube_keyboard_text = query
     youtube_keyboard_open = False
@@ -7911,6 +8071,11 @@ while True:
         if native_page and event.type in (
                 pygame.MOUSEBUTTONDOWN,pygame.MOUSEBUTTONUP,pygame.MOUSEMOTION):
             target=landscape_page_hit(event.pos)
+            if (isinstance(target, tuple) and len(target) == 2
+                    and target[0] == "yt"):
+                if event.type == pygame.MOUSEBUTTONDOWN and active_page == "youtube":
+                    youtube_player_touch(target[1], event.pos)
+                continue
             if target == ("youtube_video",):
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     if youtube_video.is_playing():
@@ -8403,6 +8568,15 @@ while True:
                 )
                 volume_bar_timer = time.time()
     
+    # Decode downloaded thumbnails on the display thread (never on the
+    # network worker); no blocking I/O during actual screen rendering.
+    for thumb_id, image_bytes in list(youtube_artwork_pending.items()):
+        youtube_artwork_pending.pop(thumb_id, None)
+        try:
+            photo = pygame.image.load(io.BytesIO(image_bytes)).convert()
+            youtube_artwork_surfaces[thumb_id] = photo
+        except (pygame.error, ValueError):
+            pass
     apply_display_brightness(now)
     landscape_display.blit(screen, (0, 0))
     current_station = stations[current_idx].get("name", "TC RADIOS") if stations else "TC RADIOS"
@@ -8475,6 +8649,10 @@ while True:
                                 presets=YOUTUBE_PRESETS,status=youtube_touch_status,
                                 youtube_results=youtube_results_cache,youtube_offset=youtube_touch_offset,
                                 video_available=bool(current_youtube_id()),
+                                youtube_player_view=youtube_player_view,
+                                youtube_status=youtube_status_for_screen(),
+                                youtube_artwork=youtube_artwork_surfaces.get(
+                                    youtube_current_id or youtube_video.video_id),
                                 devices=touch_bluetooth_devices,bt_status=touch_bluetooth_status,
                                 busy=touch_bluetooth_busy)
         elif active_page == "youtube" and youtube_keyboard_open:
