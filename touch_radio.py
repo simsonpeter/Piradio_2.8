@@ -7435,6 +7435,7 @@ while True:
         not saver_active
         and not wifi_setup_required
         and not show_qr
+        and not immersive_dock_open
         and active_page != "cast"  # keep the pairing PIN and QR visible for guests
         and now - last_interaction_time >= SCREENSAVER_TIMEOUT_SECONDS
     ):
@@ -7747,6 +7748,42 @@ while True:
         elif event.type == pygame.MOUSEMOTION and any(getattr(event, "buttons", ())):
             last_interaction_time = now
 
+        # Hidden navigation. The physical MENU button is always available;
+        # the small bottom grab bar also opens it without hijacking playback.
+        if event.type == pygame.MOUSEBUTTONDOWN and IMMERSIVE_MENU.collidepoint(event.pos):
+            immersive_dock_open = not immersive_dock_open
+            immersive_swipe_start = None
+            last_interaction_time = now
+            continue
+        if immersive_dock_open:
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                destination = immersive_dock_hit(event.pos)
+                if destination == "dismiss":
+                    immersive_dock_open = False
+                elif destination not in ("consume", "dismiss"):
+                    active_page = destination
+                    immersive_dock_open = False
+                last_interaction_time = now
+                continue
+            if event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
+                continue
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                immersive_dock_open = False
+                continue
+        if (event.type == pygame.MOUSEBUTTONDOWN and
+                270 <= event.pos[0] <= 530 and event.pos[1] >= 456):
+            immersive_swipe_start = event.pos
+            continue
+        if event.type == pygame.MOUSEBUTTONUP and immersive_swipe_start is not None:
+            start_x, start_y = immersive_swipe_start
+            if start_y - event.pos[1] >= 28 or IMMERSIVE_HANDLE.collidepoint(immersive_swipe_start):
+                immersive_dock_open = True
+                last_interaction_time = now
+            immersive_swipe_start = None
+            continue
+        if event.type == pygame.MOUSEMOTION and immersive_swipe_start is not None:
+            continue
+
         # Minimized MPV keeps its own controls over every PiRadio page.
         # Consume the touch before the underlying VLC mini-player receives it.
         if (event.type == pygame.MOUSEBUTTONDOWN
@@ -7910,6 +7947,10 @@ while True:
                     else:skip_playback(-1 if value=="prev" else 1)
                 elif kind == "volume":
                     apply_live_volume(value)
+                elif kind == "seek" and youtube_video.is_playing():
+                    youtube_video.seek_absolute(value)
+                elif kind == "restore" and youtube_video.is_playing():
+                    youtube_video.restore_video()
             continue
         if active_page in ("menu", "radio") and event.type in (pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
             continue
@@ -7921,7 +7962,7 @@ while True:
             native_page=False
         if native_page and event.type in (
                 pygame.MOUSEBUTTONDOWN,pygame.MOUSEBUTTONUP,pygame.MOUSEMOTION):
-            target=landscape_page_hit(event.pos)
+            target=landscape_page_hit(immersive_to_legacy(event.pos))
             if target == ("youtube_player",):
                 if event.type == pygame.MOUSEBUTTONDOWN and youtube_player_available():
                     active_page = "youtube_player"
@@ -7955,7 +7996,7 @@ while True:
             if "rel" in attributes:attributes["rel"]=(0,0)
             event=pygame.event.Event(event.type,attributes)
         elif active_page == "youtube" and youtube_keyboard_open and event.type in (pygame.MOUSEBUTTONDOWN,pygame.MOUSEBUTTONUP,pygame.MOUSEMOTION):
-            target=youtube_keyboard_hit(event.pos)
+            target=youtube_keyboard_hit(immersive_to_legacy(event.pos))
             if target is None:
                 continue
             attributes=event.dict.copy();attributes["pos"]=target
@@ -7963,8 +8004,9 @@ while True:
             event=pygame.event.Event(event.type,attributes)
         elif active_page not in ("menu","radio","bible") and event.type in (
                 pygame.MOUSEBUTTONDOWN,pygame.MOUSEBUTTONUP,pygame.MOUSEMOTION):
-            mapped=(max(0,min(319,round((event.pos[0]-365)*320/210))),
-                    max(0,min(479,round((event.pos[1]-73)*480/315))))
+            legacy_pos = immersive_to_legacy(event.pos)
+            mapped=(max(0,min(319,round((legacy_pos[0]-365)*320/210))),
+                    max(0,min(479,round((legacy_pos[1]-73)*480/315))))
             attributes=event.dict.copy();attributes["pos"]=mapped
             if "rel" in attributes:attributes["rel"]=(0,0)
             event=pygame.event.Event(event.type,attributes)
