@@ -11,6 +11,7 @@ from fa_icons import draw_icon
 from weather_service import fetch_weather
 from media_session import resolve_media_snapshot
 from media_transport import plan_media_command
+from video_cinema import cinema_remote_state, validate_cinema_seek
 from landscape_screensaver import draw as draw_landscape_screensaver
 from piradio_guest_cast import GuestCastSession, register_cast_routes
 from landscape_cast import (CAST_BUTTON, RENEW_BUTTON, CLOSE_BUTTON,
@@ -4435,7 +4436,12 @@ def youtube_play():
 
 @app.route('/api/youtube/video/status')
 def remote_youtube_video_status():
-    return jsonify(youtube_video.playback_status())
+    # Keep historical fields, but add a consistent seekable/buffering state
+    # for phone controls. Do not expose mpv IPC paths or media URLs.
+    raw_status = youtube_video.playback_status()
+    result = jsonify({**raw_status, **cinema_remote_state(raw_status)})
+    result.headers["Cache-Control"] = "no-store"
+    return result
 
 @app.route('/api/youtube/video', methods=['POST'])
 def remote_youtube_video():
@@ -4452,18 +4458,31 @@ def remote_youtube_video():
                 bible_player.stop()
             youtube_video.start_youtube(video_id, title=data.get('title') or "YouTube video")
             youtube_video.volume(vol_level)
-        elif action in ('seek', 'seek_relative', 'pause', 'minimize', 'restore', 'stop'):
+        elif action in ('seek', 'seek_relative', 'pause', 'minimize',
+                        'restore', 'stop', 'next', 'prev'):
             if not youtube_video.is_playing():
                 if action == 'stop':
                     return jsonify({'success':True,'action':action})
-                raise ValueError('No video playing')
-            seek_time = data.get('seconds', 0) if action in ('seek', 'seek_relative') else None
+                return jsonify({'success':False,'error':'Nothing playing on Pi'}),409
+            seek_time = None
+            if action in ('seek', 'seek_relative', 'next', 'prev'):
+                status = cinema_remote_state(youtube_video.playback_status())
+                if action in ('next', 'prev'):
+                    if status.get('source') != 'guest_photos':
+                        raise ValueError('Next/previous is for photo slideshows')
+                else:
+                    seek_time = validate_cinema_seek(
+                        action, data.get('seconds', 0), status
+                    )
             transport_action = "toggle" if action == "pause" else action
             if not control_active_media(transport_action, seek_time, mpv_only=True):
-                raise ValueError('Unable to control this media source')
+                return jsonify({'success':False,
+                                'error':'Unable to control this media source'}),409
         else:
             return jsonify({'success':False,'error':'Unknown action'}),400
         return jsonify({'success':True,'action':action})
+    except ValueError as error:
+        return jsonify({'success':False,'error':str(error)}),400
     except Exception as error:
         return jsonify({'success':False,'error':str(error)}),500
 
