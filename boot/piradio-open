@@ -48,5 +48,5 @@ fi
 # Existing boot launcher owns an exclusive flock. If PiRadio is already
 # running the second invocation exits harmlessly; a terminated process
 # releases the lock and can be opened again immediately.
-nohup "${REPO_DIR}/boot/tcradios-start" </dev/null >/dev/null 2>&1 &
+nohup /usr/bin/bash "${REPO_DIR}/boot/tcradios-start" </dev/null >/dev/null 2>&1 &
 printf 'PiRadio 7 launch requested. If already running, it stays open.\n'
