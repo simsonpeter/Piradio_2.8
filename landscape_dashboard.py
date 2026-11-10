@@ -31,6 +31,7 @@ PREV=pygame.Rect(588,226,49,48)
 PAUSE=pygame.Rect(652,226,49,48)
 NEXT=pygame.Rect(716,226,49,48)
 VOLUME=pygame.Rect(421,268,240,20)
+RADIO_STATIONS_BUTTON=pygame.Rect(646,93,118,36)
 MINI=pygame.Rect(157,399,629,65)
 MINI_PREV=pygame.Rect(634,410,43,44)
 MINI_PAUSE=pygame.Rect(683,406,50,51)
@@ -212,6 +213,8 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
         _station_art(s,pygame.Rect(190,109,170,170),station_data,loaded_logo)
         _text(s,small,"TC RADIOS",(212,300),WHITE,145)
         _text(s,tiny,"LIVE RADIO",(422,100),MUTED,175)
+        _glow_card(s,RADIO_STATIONS_BUTTON,(30,30,30),(111,111,111),11)
+        _text(s,tiny,"STATIONS",(RADIO_STATIONS_BUTTON.x+19,RADIO_STATIONS_BUTTON.y+10),WHITE,94)
         _text(s,font,station,(422,135),WHITE,340)
         _text(s,small,metadata or "Live streaming",(422,180),MUTED,335)
         for rect,icon in ((PREV,"prev"),(PAUSE,"pause" if playing else "play"),(NEXT,"next")):
@@ -264,6 +267,8 @@ def draw_dashboard(s,font,small,tiny,active_page,station,metadata,playing,
 
 def hit(pos):
     """Resolve exactly one target for a touch-down."""
+    if RADIO_STATIONS_BUTTON.collidepoint(pos):
+        return ("radio_stations", None)
     for name,rect in NAV_RECTS.items():
         if rect.collidepoint(pos):return ("page",name)
     for name,rect in CARD_RECTS.items():
