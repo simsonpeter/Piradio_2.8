@@ -4881,7 +4881,7 @@ from landscape_ui import draw_companion_panel, companion_hit
 from landscape_dashboard import (draw_dashboard, hit as landscape_hit,
                                  draw_shell, shell_hit, draw_youtube_keyboard,
                                  youtube_keyboard_hit, draw_video_mini,
-                                 video_mini_hit)
+                                 video_mini_hit, video_hero_hit)
 from landscape_bible import draw as draw_landscape_bible, hit as landscape_bible_hit
 from landscape_pages import draw as draw_landscape_page, hit as landscape_page_hit
 import landscape_pages
@@ -7650,6 +7650,16 @@ while True:
                     youtube_video.restore_video()
                 elif action == "stop":
                     youtube_video.stop()
+                touch_consumed = False
+                continue
+        if event.type == pygame.MOUSEBUTTONDOWN and youtube_video.is_playing():
+            hero_action = video_hero_hit(event.pos, video_status_cache, active_page)
+            if hero_action is not None:
+                action, value = hero_action
+                if action == "seek":
+                    youtube_video.seek_absolute(value)
+                elif action == "restore":
+                    youtube_video.restore_video()
                 touch_consumed = False
                 continue
         if active_page not in ("menu", "radio") and event.type == pygame.MOUSEBUTTONDOWN:
