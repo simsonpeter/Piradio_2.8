@@ -6,6 +6,7 @@ on:
       - feature/7inch-ambient-screensaver
       - feature/7inch-youtube-unified-controls
       - feature/7inch-guest-cast
+      - feature/7inch-youtube-dedicated-player
   pull_request:
     paths:
       - touch_radio.py
@@ -14,6 +15,7 @@ on:
       - landscape_dashboard.py
       - piradio_guest_cast.py
       - landscape_cast.py
+      - landscape_youtube_player.py
 
 jobs:
   validate:
@@ -24,7 +26,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile Python files
-        run: python3 -m py_compile touch_radio.py landscape_screensaver.py weather_service.py youtube_video_backend.py landscape_dashboard.py piradio_guest_cast.py landscape_cast.py
+        run: python3 -m py_compile touch_radio.py landscape_screensaver.py weather_service.py youtube_video_backend.py landscape_dashboard.py piradio_guest_cast.py landscape_cast.py landscape_youtube_player.py
       - name: Create isolated renderer environment
         run: python3 -m venv .venv
       - name: Install Pygame renderer
@@ -90,6 +92,56 @@ jobs:
           pygame.image.save(s,"guest-cast-preview.png")
           print("Cast pairing QR rendering passed")
           PY
+      - name: Test dedicated 7-inch YouTube audio player
+        env:
+          SDL_VIDEODRIVER: dummy
+          PYGAME_HIDE_SUPPORT_PROMPT: "1"
+        run: .venv/bin/python -m unittest discover -s tests -p 'test_youtube_dedicated_player.py' -v
+      - name: Check YouTube route and search/player navigation
+        run: |
+          .venv/bin/python - <<'PY'
+          from pathlib import Path
+          source = Path("touch_radio.py").read_text()
+          search = Path("landscape_pages.py").read_text()
+          required = (
+              'active_page = "youtube_player"',
+              'def youtube_player_state():',
+              'draw_youtube_player(landscape_display',
+              'youtube_player_hit(event.pos, youtube_player_state())',
+              'youtube_player_open_requested = True',
+              'player.set_time(int(value * 1000))',
+              'player_available=youtube_player_available()',
+          )
+          for marker in required:
+              assert marker in source, marker
+          assert '"NOW PLAYING"' in search
+          assert '("youtube_player",)' in search
+          print("YouTube audio-to-player navigation checks passed")
+          PY
+      - name: Render dedicated YouTube audio player preview
+        env:
+          SDL_VIDEODRIVER: dummy
+          PYGAME_HIDE_SUPPORT_PROMPT: "1"
+        run: |
+          .venv/bin/python - <<'PY'
+          import pygame
+          from landscape_youtube_player import draw
+          pygame.init()
+          display = pygame.display.set_mode((800,480))
+          display.fill((0,0,0))
+          font=lambda size: pygame.font.Font(None,size)
+          state = dict(
+              mode="audio", playing=True, paused=False,
+              title="Bayapadathey - Tamil Christian Worship",
+              channel="Tamil Christian Music", position=61, duration=250,
+              seekable=True, queue_total=10, queue_position=1
+          )
+          artwork=pygame.Surface((112,112))
+          artwork.fill((95,95,95))
+          draw(display,font(31),font(22),font(18),state,artwork)
+          pygame.image.save(display,"youtube-dedicated-player-preview.png")
+          print("Dedicated YouTube player preview created")
+          PY
       - name: Render screensaver smoke test
         env:
           SDL_VIDEODRIVER: dummy
@@ -135,6 +187,11 @@ jobs:
           assert 'saver_wake_ignore_up = True' in source
           print("800x480 render and auto-activation integration checks passed")
           PY
+      - name: Attach YouTube player preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: seven-inch-youtube-player-preview
+          path: youtube-dedicated-player-preview.png
       - name: Attach guest Cast pairing preview
         uses: actions/upload-artifact@v4
         with:
