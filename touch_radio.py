@@ -3489,63 +3489,117 @@ HTML_TEMPLATE = """
             if (e.key === 'Enter') searchYouTube();
         });
     </script>
-<div id="pi-video-remote" style="display:none;position:fixed;bottom:calc(8px + env(safe-area-inset-bottom));left:8px;right:8px;z-index:99999;background:#101114;color:white;border:1px solid #777;border-radius:14px;padding:12px;box-shadow:0 5px 24px #000a">
- <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px"><strong>📺 Pi Video Remote</strong><span id="pi-video-state" style="font-size:12px">Playing</span></div>
- <div style="display:flex;align-items:center;justify-content:space-between;font-size:13px;margin:7px 0"><span id="pi-video-elapsed">0:00</span><span id="pi-video-total">--:--</span></div>
- <input id="pi-video-seek" type="range" min="0" max="100" value="0" step="0.1" aria-label="Video timeline" style="width:100%;accent-color:white;min-height:32px;touch-action:pan-y" onpointerdown="piVideoSeeking=true" oninput="piVideoSeekPreview(this.value)" onchange="piVideoSeekCommit(this.value)" onpointerup="piVideoSeeking=false">
- <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:7px 0">
- <button style="padding:12px;background:#333;color:white;border-radius:9px" onclick="piVideoSkip(-10)">↶ 10s</button>
- <button style="padding:12px;background:#eee;color:#111;border-radius:9px" onclick="controlYouTubeVideo('pause')">⏯ Play / Pause</button>
- <button style="padding:12px;background:#333;color:white;border-radius:9px" onclick="piVideoSkip(10)">10s ↷</button>
- </div>
- <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
- <button style="padding:13px 2px;color:white;background:#333;border-radius:9px" onclick="controlYouTubeVideo('pause')">⏯ Pause</button>
- <button style="padding:13px 2px;color:white;background:#333;border-radius:9px" onclick="controlYouTubeVideo('minimize')">▾ Minimise</button>
- <button style="padding:13px 2px;color:white;background:#333;border-radius:9px" onclick="controlYouTubeVideo('restore')">⛶ Restore</button>
- <button style="padding:13px 2px;color:white;background:#9b2525;border-radius:9px" onclick="controlYouTubeVideo('stop')">■ Stop</button>
- </div></div>
+<div id="pi-video-remote" style="display:none;position:fixed;bottom:calc(8px + env(safe-area-inset-bottom));left:8px;right:8px;z-index:99999;background:#101316;color:#fff;border:1px solid #68747a;border-radius:16px;padding:13px;box-shadow:0 6px 24px #000b;max-height:48vh;overflow:auto">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+    <div><strong>PiRadio Cinema</strong><div id="pi-video-source" style="font-size:11px;color:#4bd4e2;margin-top:2px">VIDEO ON PI</div></div>
+    <span id="pi-video-state" style="font-size:12px;color:#d9e1e6">Playing</span>
+  </div>
+  <div id="pi-video-title" style="font-size:14px;font-weight:600;margin:9px 0 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Current video</div>
+  <div style="display:flex;justify-content:space-between;font-size:12px;color:#c1c8cc"><span id="pi-video-elapsed">0:00</span><span id="pi-video-total">--:--</span></div>
+  <input id="pi-video-seek" type="range" min="0" max="100" value="0" step="0.1" disabled aria-label="Seek within current video" style="width:100%;accent-color:#4bd4e2;min-height:34px;touch-action:pan-y" onpointerdown="piVideoSeeking=true" oninput="piVideoSeekPreview(this.value)" onchange="piVideoSeekCommit(this.value)" onpointerup="piVideoSeeking=false">
+  <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:8px 0">
+    <button id="pi-video-prev" style="padding:12px 1px;background:#30373b;color:#fff;border-radius:11px" onclick="piVideoSkip(-10)">-10s</button>
+    <button id="pi-video-toggle" style="padding:12px 1px;background:#f2f3f4;color:#101316;border-radius:11px" onclick="piVideoSend('pause')">Pause</button>
+    <button id="pi-video-next" style="padding:12px 1px;background:#30373b;color:#fff;border-radius:11px" onclick="piVideoSkip(10)">+10s</button>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px">
+    <button id="pi-video-minimize" style="padding:11px 1px;color:white;background:#30373b;border-radius:11px" onclick="piVideoSend('minimize')">Minimise</button>
+    <button id="pi-video-restore" style="padding:11px 1px;color:white;background:#30373b;border-radius:11px" onclick="piVideoSend('restore')">Full screen</button>
+    <button id="pi-video-stop" style="padding:11px 1px;color:white;background:#833039;border-radius:11px" onclick="piVideoSend('stop')">Stop</button>
+  </div>
+</div>
 <script>
 let piVideoSeeking=false;
 let piVideoDuration=0;
+let piVideoSource='';
+let piVideoPlaying=false;
+let piVideoSeekable=false;
+let piVideoRefreshBusy=false;
+
 function piVideoTime(seconds) {
- if(!Number.isFinite(seconds)) return '--:--';
+ if (!Number.isFinite(seconds)) return '--:--';
  seconds=Math.max(0,Math.floor(seconds));
  return Math.floor(seconds/3600)>0
   ? Math.floor(seconds/3600)+':'+String(Math.floor(seconds/60)%60).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0')
   : Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');
 }
-function piVideoSend(action,seconds) {
- return fetch(apiBase+'/api/youtube/video',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,seconds})})
-  .then(r=>r.json()).then(d=>{if(!d.success)showToast(d.error||'Video command failed');refreshPiVideoRemote();})
-  .catch(()=>showToast('Video remote unavailable'));
+async function piVideoSend(action,seconds) {
+ try {
+  const response=await fetch(apiBase+'/api/youtube/video',{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({action:action,seconds:seconds})
+  });
+  const data=await response.json();
+  if (!response.ok || !data.success) showToast(data.error||'Cinema command failed');
+  await refreshPiVideoRemote();
+  return data;
+ } catch(error) {
+  showToast('Cinema remote unavailable');
+  return {success:false};
+ }
 }
-function piVideoSkip(seconds){piVideoSend('seek_relative',seconds);}
-function piVideoSeekPreview(value){
+function piVideoSkip(seconds) {
+ if(!piVideoPlaying) return;
+ if(piVideoSource==='guest_photos') return piVideoSend(seconds<0?'prev':'next');
+ if(!piVideoSeekable) return;
+ return piVideoSend('seek_relative',seconds);
+}
+function piVideoSeekPreview(value) {
  document.getElementById('pi-video-elapsed').textContent=piVideoTime(Number(value));
 }
-function piVideoSeekCommit(value){
+function piVideoSeekCommit(value) {
+ if (!piVideoSeekable) {piVideoSeeking=false;return;}
  piVideoSeeking=false;
- piVideoSend('seek',Number(value));
+ return piVideoSend('seek',Number(value));
 }
-async function refreshPiVideoRemote(){
+async function refreshPiVideoRemote() {
+ if(piVideoRefreshBusy) return;
+ piVideoRefreshBusy=true;
+ const bar=document.getElementById('pi-video-remote');
  try {
   const response=await fetch(apiBase+'/api/youtube/video/status',{cache:'no-store'});
+  if(!response.ok) throw new Error('Video status unavailable');
   const data=await response.json();
-  const bar=document.getElementById('pi-video-remote');
-  bar.style.display=data.playing?'block':'none';
-  document.getElementById('pi-video-state').textContent=data.minimized?'Audio only':(data.paused?'Paused':'Fullscreen video');
-  const duration=Number(data.duration)||0;
-  piVideoDuration=duration;
-  document.getElementById('pi-video-total').textContent=piVideoTime(duration);
+  piVideoPlaying=!!data.playing;
+  piVideoSource=data.source||'youtube_video';
+  piVideoSeekable=!!data.seekable;
+  piVideoDuration=Number(data.duration)||0;
+  bar.style.display=piVideoPlaying?'block':'none';
+  if (!piVideoPlaying) return;
+  const sourceLabels={
+   youtube_video:'YOUTUBE VIDEO',guest_video:'PHONE VIDEO',
+   guest_audio:'PHONE AUDIO',guest_photos:'PHOTO SLIDESHOW',
+   screen_mirror:'PHONE SCREEN MIRROR'
+  };
+  document.getElementById('pi-video-source').textContent=sourceLabels[piVideoSource]||'MEDIA ON PI';
+  document.getElementById('pi-video-title').textContent=data.title||'PiRadio media';
+  document.getElementById('pi-video-state').textContent=
+   data.paused?'Paused':(data.buffering?'Buffering…':(data.minimized?'In background':'Playing'));
+  const isPhoto=piVideoSource==='guest_photos';
+  const hasSkip=isPhoto||piVideoSeekable;
+  const prev=document.getElementById('pi-video-prev');
+  const next=document.getElementById('pi-video-next');
+  prev.textContent=isPhoto?'Previous photo':'-10s';
+  next.textContent=isPhoto?'Next photo':'+10s';
+  prev.disabled=next.disabled=!hasSkip;
+  document.getElementById('pi-video-toggle').textContent=data.paused?'Play':'Pause';
+  const supportsVideo=['youtube_video','guest_video','screen_mirror'].includes(piVideoSource);
+  document.getElementById('pi-video-minimize').disabled=!supportsVideo||!!data.minimized;
+  document.getElementById('pi-video-restore').disabled=!supportsVideo||!data.minimized;
+  document.getElementById('pi-video-total').textContent=piVideoSeekable?piVideoTime(piVideoDuration):'LIVE / --:--';
   const slider=document.getElementById('pi-video-seek');
-  slider.max=String(Math.max(1,duration));
-  slider.disabled=duration<=0;
+  slider.disabled=!piVideoSeekable;
+  slider.max=String(Math.max(1,piVideoDuration));
   if(!piVideoSeeking){
    const position=Number(data.position)||0;
-   slider.value=String(Math.max(0,Math.min(duration,position)));
+   slider.value=String(Math.max(0,Math.min(piVideoDuration,position)));
    document.getElementById('pi-video-elapsed').textContent=piVideoTime(position);
   }
- } catch(e) {}
+ } catch(error) {
+  bar.style.display='none';
+ } finally {
+  piVideoRefreshBusy=false;
+ }
 }
 setInterval(refreshPiVideoRemote,2000);
 window.addEventListener('load',refreshPiVideoRemote);
