@@ -7,6 +7,7 @@ on:
       - feature/7inch-youtube-unified-controls
       - feature/7inch-guest-cast
       - feature/7inch-youtube-dedicated-player
+      - feature/7inch-radio-source-switch-fix
   pull_request:
     paths:
       - touch_radio.py
@@ -16,6 +17,8 @@ on:
       - piradio_guest_cast.py
       - landscape_cast.py
       - landscape_youtube_player.py
+      - radio_source.py
+      - landscape_radio_picker.py
 
 jobs:
   validate:
@@ -26,7 +29,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile Python files
-        run: python3 -m py_compile touch_radio.py landscape_screensaver.py weather_service.py youtube_video_backend.py landscape_dashboard.py piradio_guest_cast.py landscape_cast.py landscape_youtube_player.py
+        run: python3 -m py_compile touch_radio.py landscape_screensaver.py weather_service.py youtube_video_backend.py landscape_dashboard.py piradio_guest_cast.py landscape_cast.py landscape_youtube_player.py radio_source.py landscape_radio_picker.py
       - name: Create isolated renderer environment
         run: python3 -m venv .venv
       - name: Install Pygame renderer
@@ -104,7 +107,9 @@ jobs:
           source = Path("touch_radio.py").read_text()
           search = Path("landscape_pages.py").read_text()
           required = (
-              'active_page = "youtube_player"',
+              'active_page = "youtube"',
+              'youtube_view_mode = "player"',
+              'active_page == "youtube" and youtube_view_mode == "player"',
               'def youtube_player_state():',
               'draw_youtube_player(landscape_display',
               'youtube_player_hit(event.pos, youtube_player_state())',
@@ -117,6 +122,34 @@ jobs:
           assert '"NOW PLAYING"' in search
           assert '("youtube_player",)' in search
           print("YouTube audio-to-player navigation checks passed")
+          PY
+      - name: Test separate TC Radio and YouTube tab behavior
+        env:
+          SDL_VIDEODRIVER: dummy
+          PYGAME_HIDE_SUPPORT_PROMPT: "1"
+        run: .venv/bin/python -m unittest discover -s tests -p 'test_radio_source_switch.py' -v
+      - name: Check TC Radio navigation and YouTube subviews
+        run: |
+          .venv/bin/python - <<'PY'
+          from pathlib import Path
+          source = Path("touch_radio.py").read_text()
+          checks = (
+              'def enter_tc_radio():',
+              'def open_main_page(name):',
+              'if active_page == "radio_picker":',
+              'draw_radio_picker(landscape_display',
+              'youtube_view_mode = "search"',
+              'youtube_view_mode = "player"',
+              'if active_page == "youtube" and youtube_view_mode == "player":',
+              'radio_step_index(stations, current_idx, step, last_radio_url)',
+              'open_main_page(value)',
+          )
+          for marker in checks:
+              assert marker in source, marker
+          assert 'active_page = "youtube_player"' not in source, (
+              "YouTube Now Playing must remain in YouTube tab"
+          )
+          print("Radio and YouTube tab routing regression checks passed")
           PY
       - name: Render dedicated YouTube audio player preview
         env:
