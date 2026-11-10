@@ -8,6 +8,7 @@ from flask import Flask, render_template_string, Response, jsonify, request
 import subprocess
 from tamil_bible import BiblePlayer
 from fa_icons import draw_icon
+from landscape_screensaver import draw as draw_landscape_screensaver
 from ios_ipod_ui import (draw_home, draw_player_frame, draw_mini_player,
     draw_youtube_skin, raised_card, MINI_BAR, MINI_ACTION, THEMES as IOS_THEMES, load_mode, toggle_mode, TOGGLE)
 
@@ -921,6 +922,7 @@ class DeviceSettingsManager:
             f"?latitude={self.weather_latitude}"
             f"&longitude={self.weather_longitude}"
             "&current_weather=true"
+            "&current=relative_humidity_2m"
             "&daily=weather_code,temperature_2m_max,temperature_2m_min"
             "&forecast_days=5&timezone=auto"
         )
@@ -5346,6 +5348,8 @@ saver_mode = False
 show_qr = False
 weather_str = f"{device_settings.weather_name.upper()}: --C"
 current_temp = 0
+current_humidity = None
+weather_available = False
 weather_type = "clear"
 weather_forecast = []
 meta_text = ""
@@ -5354,6 +5358,7 @@ saver_scroll_x = 320
 alarm_fade_active = False
 alarm_fade_data = {}
 saver_active = False
+saver_wake_ignore_up = False
 saver_started_at = time.time()
 greeting_until = 0
 greeting_shown_on = None
@@ -6754,6 +6759,26 @@ def draw_youtube_screen(now):
         )
     draw_pages_button()
 
+
+SCREENSAVER_TIMEOUT_SECONDS = 120
+SCREENSAVER_FONTS = {
+    "clock": get_unicode_font(145, bold=True),
+    "temperature": get_unicode_font(54, bold=True),
+    "date": get_unicode_font(23),
+    "medium": get_unicode_font(22, bold=True),
+    "label": get_unicode_font(16, bold=True),
+    "small": get_unicode_font(17),
+}
+
+def screensaver_playing_label():
+    """Use the current audio state without stopping or restarting playback."""
+    if bible_player.playing:
+        return f"Tamil Bible  ·  Book {bible_player.book + 1}  ·  Chapter {bible_player.chapter}"
+    if player.get_state() == vlc.State.Playing:
+        station = stations[current_idx].get("name", "Radio") if stations else "Radio"
+        return meta_text if meta_text and meta_text != station else station
+    return "Ready to play"
+
 def draw_screensaver():
     # Lantern clock: huge dim time and a weather icon only.
     screen.fill((0, 0, 0))
@@ -7159,8 +7184,25 @@ def start_rotary_encoder():
 rotary_controls = []
 start_rotary_encoder()
 
+# Idle time begins when the 7-inch app is ready, not while it is booting.
+last_interaction_time = time.time()
+
 while True:
     now = time.time()
+    # Never dim the experience with a screensaver while mpv YouTube video exists.
+    # Resetting the timer during playback gives a fresh 2 minutes afterwards.
+    if youtube_video.is_playing():
+        saver_active = False
+        last_interaction_time = now
+    elif (
+        not saver_active
+        and not wifi_setup_required
+        and not show_qr
+        and now - last_interaction_time >= SCREENSAVER_TIMEOUT_SECONDS
+    ):
+        saver_active = True
+        saver_started_at = now
+
     update_qr_code()
     
     if alarm_system.check_alarm() and not alarm_fade_active:
@@ -7183,6 +7225,8 @@ while True:
                 weather_data = r.json()
                 data = weather_data['current_weather']
                 current_temp = int(round(data['temperature']))
+                current_humidity = weather_data.get("current", {}).get("relative_humidity_2m")
+                weather_available = True
                 code = data['weathercode']
                 weather_type = weather_code_to_type(code)
 
@@ -7417,6 +7461,26 @@ while True:
     
     bible_player.tick(player.stop)
     for event in pygame.event.get():
+        # Shared input gate: all landscape pages must wake without clicking
+        # through to the page beneath the screensaver.
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            last_interaction_time = now
+            if saver_active:
+                saver_active = False
+                saver_wake_ignore_up = True
+                touch_consumed = False
+                continue
+        elif event.type == pygame.KEYDOWN:
+            last_interaction_time = now
+            if saver_active:
+                saver_active = False
+                continue
+        elif event.type == pygame.MOUSEBUTTONUP and saver_wake_ignore_up:
+            saver_wake_ignore_up = False
+            continue
+        elif event.type == pygame.MOUSEMOTION and any(getattr(event, "buttons", ())):
+            last_interaction_time = now
+
         if active_page not in ("menu", "radio") and event.type == pygame.MOUSEBUTTONDOWN:
             shell_action = shell_hit(event.pos)
             if shell_action:
@@ -8034,6 +8098,20 @@ while True:
             # Keyboard and remaining legacy pages remain functional.
             content=pygame.transform.smoothscale(screen,(210,315))
             landscape_display.blit(content,(365,73))
-    pygame.display.flip()
+    # Draw OVER the native landscape page, not on the older 320x480 surface.
+    if saver_active and not youtube_video.is_playing():
+        draw_landscape_screensaver(
+            landscape_display,
+            SCREENSAVER_FONTS,
+            now=now,
+            weather_type=weather_type,
+            temperature=current_temp if weather_available else None,
+            city=device_settings.weather_name,
+            forecast=weather_forecast,
+            humidity=current_humidity,
+            now_playing=screensaver_playing_label(),
+            alarm_time=alarm_system.alarm_time if alarm_system.alarm_enabled else None,
+            weather_icon=draw_weather_icon,
+        )
     pygame.display.flip()
     time.sleep(0.05)
