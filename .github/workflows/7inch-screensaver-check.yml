@@ -73,7 +73,13 @@ jobs:
               [{"high": 11, "low": 4}], 76, "Radio • A sample with a long Tamil Bible title",
               "06:30", weather_icon,
           )
-          assert surface.get_at((100, 100))[:3] != (0, 0, 0)
+          from landscape_screensaver import WHITE, WEATHER_CYAN, BLACK
+          assert tuple(surface.get_at((0, 0))[:3]) == BLACK
+          assert tuple(surface.get_at((790, 470))[:3]) == BLACK
+          assert any(tuple(surface.get_at((x, y))[:3]) == WHITE
+                     for y in range(140, 260, 2) for x in range(50, 485, 2)), "White clock missing"
+          assert any(tuple(surface.get_at((x, y))[:3]) == WEATHER_CYAN
+                     for y in range(154, 220) for x in range(610, 760)), "Cyan temperature missing"
           pygame.image.save(surface, "screensaver-preview.png")
           source = Path("touch_radio.py").read_text(encoding="utf-8")
           assert 'SCREENSAVER_TIMEOUT_SECONDS = 120' in source
