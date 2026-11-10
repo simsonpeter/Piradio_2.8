@@ -108,8 +108,8 @@ jobs:
           required = (
               'active_page = "youtube_player"',
               'def youtube_player_state():',
-              'draw_youtube_player(landscape_display',
-              'youtube_player_hit(event.pos, youtube_player_state())',
+              'draw_youtube_player(',
+              'youtube_player_hit(immersive_to_legacy(event.pos), youtube_player_state())',
               'youtube_player_open_requested = True',
               'player.set_time(int(value * 1000))',
               'player_available=youtube_player_available()',
