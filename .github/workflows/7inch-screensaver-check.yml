@@ -1,0 +1,64 @@
+name: PiRadio 7-inch ambient screensaver
+
+on:
+  push:
+    branches:
+      - feature/7inch-ambient-screensaver
+  pull_request:
+    paths:
+      - touch_radio.py
+      - landscape_screensaver.py
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile Python files
+        run: python3 -m py_compile touch_radio.py landscape_screensaver.py youtube_video_backend.py landscape_dashboard.py
+      - name: Install Pygame renderer
+        run: python3 -m pip install pygame==2.6.1
+      - name: Render screensaver smoke test
+        env:
+          SDL_VIDEODRIVER: dummy
+          PYGAME_HIDE_SUPPORT_PROMPT: "1"
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import pygame
+          from landscape_screensaver import draw
+
+          pygame.display.init()
+          pygame.font.init()
+          surface = pygame.display.set_mode((800, 480))
+          def font(size, bold=False):
+              return pygame.font.Font(None, size)
+          fonts = {
+              "clock": font(145),
+              "temperature": font(54),
+              "date": font(23),
+              "medium": font(22),
+              "label": font(16),
+              "small": font(17),
+          }
+          def weather_icon(surface, x, y, kind, size, dimmed, on_background):
+              pygame.draw.circle(surface, (160, 190, 240), (x, y), size // 2)
+          draw(
+              surface, fonts, 1794282000, "cloud", 8, "Mortsel",
+              [{"high": 11, "low": 4}], 76, "Radio • A sample with a long Tamil Bible title",
+              "06:30", weather_icon,
+          )
+          assert surface.get_at((100, 100))[:3] != (0, 0, 0)
+          pygame.image.save(surface, "screensaver-preview.png")
+          source = Path("touch_radio.py").read_text(encoding="utf-8")
+          assert 'SCREENSAVER_TIMEOUT_SECONDS = 120' in source
+          assert 'if youtube_video.is_playing():' in source
+          assert 'if saver_active and not youtube_video.is_playing():' in source
+          assert 'saver_wake_ignore_up = True' in source
+          print("800x480 render and auto-activation integration checks passed")
+          PY
+      - name: Attach optional visual preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: seven-inch-screensaver-preview
+          path: screensaver-preview.png
