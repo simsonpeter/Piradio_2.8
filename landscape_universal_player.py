@@ -28,7 +28,7 @@ TOGGLE = pygame.Rect(447, 297, 101, 72)
 NEXT = pygame.Rect(558, 308, 78, 55)
 STOP = pygame.Rect(658, 308, 91, 55)
 VOLUME = pygame.Rect(461, 415, 283, 11)
-VOLUME_TOUCH = VOLUME.inflate(0, 29)
+VOLUME_TOUCH = VOLUME.inflate(18, 29)  # Include both 0% and 100% end stops
 BACK_BG = (30, 34, 38)
 
 SOURCES = {
