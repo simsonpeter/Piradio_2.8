@@ -168,6 +168,7 @@ class YouTubeVideoBackend:
             "playing": False, "position": 0, "duration": 0,
             "paused": False, "minimized": False, "title": "",
             "video_id": None, "source": self.source_type,
+            "seekable": False, "buffering": False,
         }
         if not self.is_playing() or not self.socket_path:
             self.minimized = False
@@ -177,6 +178,7 @@ class YouTubeVideoBackend:
             "paused": False, "minimized": self.minimized,
             "title": self.title or "PiRadio Media", "video_id": self.video_id,
             "source": self.source_type,
+            "seekable": False, "buffering": False,
         }
         keys = {
             1: ("time-pos", "position"),
@@ -184,6 +186,8 @@ class YouTubeVideoBackend:
             3: ("pause", "paused"),
             4: ("vid", "_video_track"),
             5: ("window-minimized", "_window_minimized"),
+            6: ("seekable", "_seekable"),
+            7: ("paused-for-cache", "_buffering"),
         }
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -232,12 +236,19 @@ class YouTubeVideoBackend:
             if isinstance(minimized, bool):
                 self.minimized = self.minimized or minimized
         result["minimized"] = self.minimized
+        can_seek = result.pop("_seekable", None)
+        result["buffering"] = bool(result.pop("_buffering", False))
         for numeric in ("position", "duration"):
             try:
                 value = float(result[numeric])
                 result[numeric] = value if math.isfinite(value) and value >= 0 else 0
             except (ValueError, TypeError, OverflowError):
                 result[numeric] = 0
+        # Treat missing seekability on old MPV versions conservatively:
+        # duration alone does not prove a stream can seek.
+        result["seekable"] = (self.source_type in (
+            "youtube_video", "guest_video", "guest_audio")
+            and can_seek is True and result["duration"] > 0)
         return result
 
     def volume(self, value):
