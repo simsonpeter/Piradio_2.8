@@ -7,9 +7,9 @@ timeout 2 plymouth quit >/dev/null 2>&1 || true
 
 exec 9>"/tmp/tcradios-${UID:-0}.lock"
 if ! flock -n 9; then
-    if pgrep -f touch_radio.py >/dev/null 2>&1; then
-        exit 0
-    fi
+    # Another launch already holds this lock. A second PiRadio process
+    # must never start (duplicate VLC/MPV output, web server and touch UI).
+    exit 0
 fi
 
 if [[ ! -t 1 ]]; then
