@@ -251,9 +251,9 @@ def draw_home(s, font, small, tiny, player_title, paused=False,
 
 
 def home_hit(pos):
-    for rect, (_, _icon_name, page) in HOME_TILES:
+    for rect, (label, _icon_name, page) in HOME_TILES:
         if rect.collidepoint(pos):
-            return "page", page
+            return "page", label
     if HOME_OPEN.collidepoint(pos):
         return "open_player", None
     for name, rect in (("prev", HOME_PREV), ("pause", HOME_PAUSE), ("next", HOME_NEXT)):
