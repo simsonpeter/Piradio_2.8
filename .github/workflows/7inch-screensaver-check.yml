@@ -18,11 +18,31 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile Python files
-        run: python3 -m py_compile touch_radio.py landscape_screensaver.py youtube_video_backend.py landscape_dashboard.py
+        run: python3 -m py_compile touch_radio.py landscape_screensaver.py weather_service.py youtube_video_backend.py landscape_dashboard.py
       - name: Create isolated renderer environment
         run: python3 -m venv .venv
       - name: Install Pygame renderer
-        run: .venv/bin/python -m pip install pygame==2.6.1
+        run: .venv/bin/python -m pip install pygame==2.6.1 requests
+      - name: Test weather parser and network error handling
+        run: .venv/bin/python -m unittest discover -s tests -p 'test_weather_service.py' -v
+      - name: Check weather integration
+        run: |
+          .venv/bin/python - <<'PY'
+          from pathlib import Path
+          source = Path("touch_radio.py").read_text()
+          checks = (
+              "&current=temperature_2m,relative_humidity_2m,weather_code",
+              "def fetch_weather_background(coords, url):",
+              "weather_next_check = now + 60",
+              "weather_next_check = now + 600",
+              "weather_last_error",
+              "weather_available",
+              "@app.route('/api/weather/refresh', methods=['POST'])",
+          )
+          for marker in checks:
+              assert marker in source, f"Weather integration missing: {marker}"
+          print("Weather integration markers found")
+          PY
       - name: Render screensaver smoke test
         env:
           SDL_VIDEODRIVER: dummy
