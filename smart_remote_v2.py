@@ -255,11 +255,8 @@ async function transport(action){
   }else{
    await post("/api/youtube/video",{action:command});
   }
- }else if(action==="stop"){
-  await post("/api/remote-v2/transport",{action:"stop"});
  }else{
-  if(action==="toggle")await api("/api/toggle");
-  else await api("/api/"+action);
+  await post("/api/remote-v2/transport",{action:action});
  }
  await updateSession();
 }
@@ -302,7 +299,9 @@ function renderRadio(){
   play.addEventListener("click",()=>run(api("/api/play/"+item.index).then(updateSession)));
   const fav=tag("button",state.favorites.includes(item.index)?"★":"☆","small-btn");
   fav.type="button";fav.setAttribute("aria-label","Toggle favourite "+String(item.st.name||"station"));
-  fav.addEventListener("click",()=>run(post("/api/remote-v2/favorites",{action:"toggle",index:item.index}).then(loadRadio)));
+  fav.addEventListener("click",()=>run(post("/api/remote-v2/favorites",{action:"toggle",index:item.index}).then(()=>{
+    toast("Favourite update sent");setTimeout(()=>run(loadRadio()),350);
+   })));
   row.append(label,fav,play);$("station-list").append(row);
  }
  if(!filtered.length)$("station-list").append(tag("p","No matching stations","muted"));
