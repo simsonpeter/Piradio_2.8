@@ -16,6 +16,8 @@ CODES = {
     "clock": 0xf017, "alarm": 0xf0f3, "system": 0xf108,
     "languages": 0xf0ac, "settings": 0xf013, "youtube": 0xf16a,
     "bible": 0xf02d, "library": 0xf00a, "play": 0xf04b,
+    "film": 0xf008, "music": 0xf001, "image": 0xf03e,
+    "monitor": 0xf108,
     "pause": 0xf04c, "prev": 0xf048, "next": 0xf051,
     "volume": 0xf028, "close": 0xf00d, "qr": 0xf029,
     "sun": 0xf185, "moon": 0xf186, "home": 0xf015, "search": 0xf002, "wifi": 0xf1eb, "plus": 0xf067, "minus": 0xf068, "chevron-left": 0xf053, "chevron-right": 0xf054,
