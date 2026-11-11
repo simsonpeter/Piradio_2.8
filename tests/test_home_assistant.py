@@ -160,6 +160,7 @@ class HomeAssistantBridgeTests(unittest.TestCase):
         self.assertFalse(client.post_calls[0][3])
         self.assertEqual(client.headers["Authorization"], "Bearer " + self.token)
         self.assertEqual(bridge.snapshot()["items"][0]["busy"], False)
+        self.assertEqual(bridge.snapshot()["items"][0]["state"], "off")
 
         with patch("home_assistant_bridge.threading.Thread") as thread:
             self.assertTrue(bridge.toggle(1))
@@ -168,6 +169,7 @@ class HomeAssistantBridgeTests(unittest.TestCase):
         callback(*args)
         self.assertEqual(self.sessions[-1].post_calls[0][0],
                          "http://homeassistant.local:8123/api/services/switch/turn_on")
+        self.assertEqual(bridge.snapshot()["items"][1]["state"], "on")
 
     def test_unavailable_entities_never_toggle(self):
         bridge = self.make_bridge()
