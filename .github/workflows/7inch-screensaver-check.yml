@@ -19,6 +19,12 @@ on:
       - landscape_cast.py
       - landscape_youtube_player.py
       - smart_photo_frame.py
+      - audio_visualizer.py
+      - landscape_audio_visualizer.py
+      - bluetooth_reconnect.py
+      - tests/test_audio_visualizer.py
+      - tests/test_bluetooth_reconnect.py
+      - tests/test_photo_frame_pro.py
       - landscape_immersive.py
       - boot/piradio-open
       - boot/tcradios-start
@@ -33,7 +39,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile Python files
-        run: python3 -m py_compile touch_radio.py landscape_screensaver.py weather_service.py youtube_video_backend.py landscape_dashboard.py piradio_guest_cast.py landscape_cast.py landscape_youtube_player.py smart_photo_frame.py landscape_immersive.py landscape_smart_home.py landscape_universal_player.py home_assistant_bridge.py landscape_home_assistant.py
+        run: python3 -m py_compile touch_radio.py landscape_screensaver.py weather_service.py youtube_video_backend.py landscape_dashboard.py piradio_guest_cast.py landscape_cast.py landscape_youtube_player.py smart_photo_frame.py landscape_immersive.py landscape_smart_home.py landscape_universal_player.py home_assistant_bridge.py landscape_home_assistant.py audio_visualizer.py landscape_audio_visualizer.py bluetooth_reconnect.py
       - name: Validate PiRadio desktop app launcher without reboot
         run: |
           bash -n boot/tcradios-start boot/piradio-open install_piradio_app_launcher.sh
@@ -101,6 +107,20 @@ jobs:
           SDL_AUDIODRIVER: dummy
           PYGAME_HIDE_SUPPORT_PROMPT: "1"
         run: .venv/bin/python -m unittest discover -s tests -p 'test_home_assistant.py' -v
+      - name: Test Audio Visualizer Pro (real monitor only)
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+          PYGAME_HIDE_SUPPORT_PROMPT: "1"
+        run: .venv/bin/python -m unittest discover -s tests -p 'test_audio_visualizer.py' -v
+      - name: Test Bluetooth Auto-Reconnect 2.0 (no live device)
+        run: .venv/bin/python -m unittest discover -s tests -p 'test_bluetooth_reconnect.py' -v
+      - name: Test Smart Photo Frame Pro albums and transitions
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+          PYGAME_HIDE_SUPPORT_PROMPT: "1"
+        run: .venv/bin/python -m unittest discover -s tests -p 'test_photo_frame_pro.py' -v
       - name: Check active player routing in PiRadio integration
         run: |
           .venv/bin/python - <<'PY'
