@@ -131,6 +131,7 @@ class AudioOutputManager:
         self.settings_file = os.path.expanduser('~/.radio_audio')
         self.default_bluetooth_address = None
         self.load_settings()
+        self.bluetooth_auto_restore_enabled = bool(self.default_bluetooth_address)
         self.scan_outputs()
         # The lightweight supervisor below handles startup and later
         # disconnects without a second competing retry worker.
@@ -383,6 +384,7 @@ class AudioOutputManager:
             sink_name = self._make_sink_default(address)
             self.default_bluetooth_address = address
             self.current_output = 'bluetooth'
+            self.bluetooth_auto_restore_enabled = True
             self.save_settings()
             self.scan_outputs()
             self.current_output = 'bluetooth'
@@ -461,20 +463,24 @@ class AudioOutputManager:
         if output_name == 'auto':
             os.system("amixer cset numid=3 0")
             self.current_output = output_name
+            self.bluetooth_auto_restore_enabled = False
             return True
         elif output_name == 'analog':
             os.system("amixer cset numid=3 1")
             self.current_output = output_name
+            self.bluetooth_auto_restore_enabled = False
             return True
         elif output_name == 'hdmi':
             os.system("amixer cset numid=3 2")
             self.current_output = output_name
+            self.bluetooth_auto_restore_enabled = False
             return True
         elif output_name == 'bluetooth':
             try:
                 if self.default_bluetooth_address:
                     self._make_sink_default(self.default_bluetooth_address)
                     self.current_output = output_name
+                    self.bluetooth_auto_restore_enabled = True
                     return True
                 result = self._run(['pactl', 'list', 'sinks', 'short'])
                 for line in result.stdout.splitlines():
@@ -482,6 +488,7 @@ class AudioOutputManager:
                     if len(parts) >= 2 and 'bluez' in parts[1].lower():
                         self._run(['pactl', 'set-default-sink', parts[1]])
                         self.current_output = output_name
+                        self.bluetooth_auto_restore_enabled = True
                         return True
             except Exception as e:
                 print(f"Bluetooth switch error: {e}")
