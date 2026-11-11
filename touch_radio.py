@@ -34,6 +34,10 @@ from landscape_universal_player import (
 from landscape_smart_home import (
     draw as draw_smart_home, hit as smart_home_hit,
 )
+from home_assistant_bridge import HomeAssistantBridge
+from landscape_home_assistant import (
+    draw as draw_home_assistant, hit as home_assistant_hit,
+)
 from ios_ipod_ui import (draw_home, draw_player_frame, draw_mini_player,
     draw_youtube_skin, raised_card, MINI_BAR, MINI_ACTION, THEMES as IOS_THEMES, load_mode, toggle_mode, TOGGLE)
 
@@ -1037,6 +1041,7 @@ photo_frame_library = PhotoFrameLibrary()
 photo_frame_renderer = PhotoFrameRenderer(photo_frame_library)
 photo_frame_renderer.refresh()
 register_frame_routes(app, photo_frame_library)
+home_assistant = HomeAssistantBridge()
 photo_frame_return_page = "menu"
 cast_session = GuestCastSession()
 web_port = 8080
@@ -7740,6 +7745,7 @@ immersive_swipe_start = None
 
 while True:
     now = time.time()
+    home_assistant.tick()
     # Drain bounded Smart Remote V2 commands on the Pygame owner thread.
     # Do not manipulate the separate VLC, MPV, or SDL objects in Flask.
     for _remote_v2_attempt in range(12):
@@ -8232,6 +8238,19 @@ while True:
                                 active_page = value
                             elif kind in ("clock", "forecast"):
                                 active_page = kind
+                    touch_consumed = False
+                continue
+            if active_page == "home_assistant":
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    result = home_assistant_hit(
+                        actual_pos, home_assistant.snapshot(),
+                    )
+                    if result:
+                        kind, value = result
+                        if kind == "page":
+                            active_page = value
+                        elif kind == "toggle":
+                            home_assistant.toggle(value)
                     touch_consumed = False
                 continue
             if active_page == "now_playing":
@@ -9090,6 +9109,11 @@ while True:
                 weather_available=weather_available,
                 city=device_settings.weather_name,
                 artwork=home_artwork,
+            )
+        if active_page == "home_assistant":
+            draw_home_assistant(
+                landscape_display, f_lg, f_sm, f_tiny,
+                home_assistant.snapshot(),
             )
         if active_page == "now_playing":
             media_artwork = (logo if screen_media.get("source")
