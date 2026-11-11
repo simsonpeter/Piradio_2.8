@@ -14,7 +14,7 @@ from fa_icons import draw_icon
 from weather_service import fetch_weather
 from media_session import resolve_media_snapshot
 from media_transport import plan_media_command
-from video_cinema import cinema_remote_state, validate_cinema_seek
+from video_cinema import cinema_remote_state, validate_cinema_seek, validate_cinema_volume
 from landscape_screensaver import draw as draw_landscape_screensaver
 from piradio_guest_cast import GuestCastSession, register_cast_routes
 from landscape_cast import (CAST_BUTTON, RENEW_BUTTON, CLOSE_BUTTON,
@@ -3493,7 +3493,7 @@ HTML_TEMPLATE = """
             if (e.key === 'Enter') searchYouTube();
         });
     </script>
-<div id="pi-video-remote" style="display:none;position:fixed;bottom:calc(8px + env(safe-area-inset-bottom));left:8px;right:8px;z-index:99999;background:#101316;color:#fff;border:1px solid #68747a;border-radius:16px;padding:13px;box-shadow:0 6px 24px #000b;max-height:48vh;overflow:auto">
+<div id="pi-video-remote" style="display:none;position:fixed;bottom:calc(8px + env(safe-area-inset-bottom));left:8px;right:8px;z-index:99999;background:#101316;color:#fff;border:1px solid #68747a;border-radius:16px;padding:13px;box-shadow:0 6px 24px #000b;max-height:60vh;overflow:auto">
   <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
     <div><strong>PiRadio Cinema</strong><div id="pi-video-source" style="font-size:11px;color:#4bd4e2;margin-top:2px">VIDEO ON PI</div></div>
     <span id="pi-video-state" style="font-size:12px;color:#d9e1e6">Playing</span>
@@ -3505,6 +3505,12 @@ HTML_TEMPLATE = """
     <button id="pi-video-prev" style="padding:12px 1px;background:#30373b;color:#fff;border-radius:11px" onclick="piVideoSkip(-10)">-10s</button>
     <button id="pi-video-toggle" style="padding:12px 1px;background:#f2f3f4;color:#101316;border-radius:11px" onclick="piVideoSend('pause')">Pause</button>
     <button id="pi-video-next" style="padding:12px 1px;background:#30373b;color:#fff;border-radius:11px" onclick="piVideoSkip(10)">+10s</button>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin:11px 0 3px;font-size:13px"><label for="pi-video-volume" style="font-weight:650">🔊 Pi volume</label><span id="pi-video-volume-label" aria-live="off">--%</span></div>
+  <div style="display:grid;grid-template-columns:49px minmax(0,1fr) 49px;align-items:center;gap:8px;margin-bottom:9px">
+    <button id="pi-video-volume-down" aria-label="Decrease Pi volume by 5 percent" style="padding:8px 2px;min-height:40px;background:#30373b;color:white;border-radius:10px" onclick="piVideoAdjustVolume(-5)">−</button>
+    <input id="pi-video-volume" type="range" min="0" max="100" step="1" value="80" aria-label="PiRadio Cinema volume" style="width:100%;min-width:0;accent-color:#4bd4e2;min-height:40px;touch-action:pan-y" onpointerdown="piVideoVolumeEditing=true" oninput="piVideoVolumePreview(this.value)" onchange="piVideoVolumeCommit(this.value)">
+    <button id="pi-video-volume-up" aria-label="Increase Pi volume by 5 percent" style="padding:8px 2px;min-height:40px;background:#30373b;color:white;border-radius:10px" onclick="piVideoAdjustVolume(5)">+</button>
   </div>
   <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px">
     <button id="pi-video-minimize" style="padding:11px 1px;color:white;background:#30373b;border-radius:11px" onclick="piVideoSend('minimize')">Minimise</button>
@@ -3519,6 +3525,8 @@ let piVideoSource='';
 let piVideoPlaying=false;
 let piVideoSeekable=false;
 let piVideoRefreshBusy=false;
+let piVideoVolumeEditing=false;
+let piVideoVolumeLevel=80;
 
 function piVideoTime(seconds) {
  if (!Number.isFinite(seconds)) return '--:--';
@@ -3548,6 +3556,34 @@ function piVideoSkip(seconds) {
  if(!piVideoSeekable) return;
  return piVideoSend('seek_relative',seconds);
 }
+function piVideoVolumePreview(value){
+ const level=Math.max(0,Math.min(100,Math.round(Number(value)||0)));
+ piVideoVolumeLevel=level;
+ document.getElementById('pi-video-volume-label').textContent=level+'%';
+}
+async function piVideoSetVolume(value){
+ const level=Math.max(0,Math.min(100,Math.round(Number(value)||0)));
+ try{
+  const response=await fetch(apiBase+'/api/youtube/video',{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({action:'volume',level:level})
+  });
+  const data=await response.json();
+  if(!response.ok||!data.success)throw new Error(data.error||'Volume control failed');
+  piVideoVolumeLevel=Number(data.volume);
+  piVideoVolumePreview(piVideoVolumeLevel);
+  document.getElementById('pi-video-volume').value=String(piVideoVolumeLevel);
+ }catch(error){showToast(error.message||'Volume control unavailable');}
+}
+function piVideoVolumeCommit(value){
+ piVideoVolumeEditing=false;
+ return piVideoSetVolume(value);
+}
+function piVideoAdjustVolume(delta){
+ if(!piVideoPlaying)return;
+ piVideoVolumeEditing=false;
+ return piVideoSetVolume(piVideoVolumeLevel+delta);
+}
 function piVideoSeekPreview(value) {
  document.getElementById('pi-video-elapsed').textContent=piVideoTime(Number(value));
 }
@@ -3570,6 +3606,11 @@ async function refreshPiVideoRemote() {
   piVideoDuration=Number(data.duration)||0;
   bar.style.display=piVideoPlaying?'block':'none';
   if (!piVideoPlaying) return;
+  if(!piVideoVolumeEditing && Number.isFinite(Number(data.volume))){
+   piVideoVolumeLevel=Math.max(0,Math.min(100,Math.round(Number(data.volume))));
+   document.getElementById('pi-video-volume').value=String(piVideoVolumeLevel);
+   document.getElementById('pi-video-volume-label').textContent=piVideoVolumeLevel+'%';
+  }
   const sourceLabels={
    youtube_video:'YOUTUBE VIDEO',guest_video:'PHONE VIDEO',
    guest_audio:'PHONE AUDIO',guest_photos:'PHOTO SLIDESHOW',
@@ -4577,7 +4618,7 @@ def remote_youtube_video_status():
     # Keep historical fields, but add a consistent seekable/buffering state
     # for phone controls. Do not expose mpv IPC paths or media URLs.
     raw_status = youtube_video.playback_status()
-    result = jsonify({**raw_status, **cinema_remote_state(raw_status)})
+    result = jsonify({**raw_status, **cinema_remote_state(raw_status), "volume": vol_level})
     result.headers["Cache-Control"] = "no-store"
     return result
 
@@ -4596,6 +4637,12 @@ def remote_youtube_video():
                 bible_player.stop()
             youtube_video.start_youtube(video_id, title=data.get('title') or "YouTube video")
             youtube_video.volume(vol_level)
+        elif action == 'volume':
+            if not youtube_video.is_playing():
+                return jsonify({'success':False,'error':'Nothing playing on Pi'}),409
+            new_volume = validate_cinema_volume(data.get('level'))
+            apply_live_volume(new_volume)
+            return jsonify({'success':True,'action':'volume','volume':vol_level})
         elif action in ('seek', 'seek_relative', 'pause', 'minimize',
                         'restore', 'stop', 'next', 'prev'):
             if not youtube_video.is_playing():
