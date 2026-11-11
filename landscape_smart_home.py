@@ -22,6 +22,7 @@ WEATHER = pygame.Rect(481, 76, 301, 176)
 MEDIA = pygame.Rect(18, 263, 764, 112)
 MEDIA_ART = pygame.Rect(35, 278, 83, 82)
 MEDIA_PAUSE = pygame.Rect(695, 294, 68, 52)
+VISUALIZER_BUTTON = pygame.Rect(538, 337, 132, 32)
 SHORTCUTS = (
     ("RADIO", "radio", "radio"),
     ("BIBLE", "bible", "bible"),
@@ -156,6 +157,9 @@ def draw(surface, font, small, tiny, media=None, *, temperature=None,
         status = "PLAYING IN BACKGROUND"
     _text(surface, tiny, status + "  ·  TAP FOR PLAYER",
           136, 346, MUTED, 490)
+    pygame.draw.rect(surface, (38, 62, 66), VISUALIZER_BUTTON, border_radius=10)
+    label = tiny.render("VISUALIZER", True, CYAN)
+    surface.blit(label, label.get_rect(center=VISUALIZER_BUTTON.center))
     pygame.draw.rect(surface, WHITE, MEDIA_PAUSE, border_radius=16)
     _icon(surface, "pause" if playing else "play",
           MEDIA_PAUSE.center, 30, (20, 22, 24))
@@ -174,6 +178,8 @@ def hit(pos):
     """Return one action per actual 800x480 touch; no old coordinate scaling."""
     if MEDIA_PAUSE.collidepoint(pos):
         return ("toggle", None)
+    if VISUALIZER_BUTTON.collidepoint(pos):
+        return ("page", "visualizer")
     if MEDIA.collidepoint(pos):
         return ("now_playing", None)
     if CLOCK.collidepoint(pos):
