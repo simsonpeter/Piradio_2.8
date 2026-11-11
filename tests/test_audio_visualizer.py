@@ -3,7 +3,7 @@ import unittest
 import math
 import struct
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import pygame
 from audio_visualizer import (AudioSpectrumMonitor, BANDS,
                               monitor_command, spectrum_from_pcm, np)
@@ -42,6 +42,33 @@ class SpectrumTests(unittest.TestCase):
         self.assertGreater(max(bars[:7]),0.4)
         self.assertLess(max(bars[13:]),0.08)
         self.assertTrue(all(0 <= v <= 1 for v in bars))
+    def test_unavailable_monitor_does_not_spawn_workers_every_frame(self):
+        clock=[100.0]
+        monitor=AudioSpectrumMonitor(clock=lambda:clock[0])
+        with patch("audio_visualizer.threading.Thread") as thread:
+            monitor.start()
+            self.assertEqual(thread.call_count,1)
+            generation=monitor._generation
+            monitor._failure(generation,"Missing monitor")
+            for _ in range(100):
+                monitor.start()
+            self.assertEqual(thread.call_count,1)
+            clock[0]+=21
+            monitor.start()
+            self.assertEqual(thread.call_count,2)
+            monitor.stop()
+            monitor.start()
+            self.assertEqual(thread.call_count,3)
+
+    def test_stale_audio_worker_failure_does_not_override_stop(self):
+        monitor=AudioSpectrumMonitor()
+        monitor.start()
+        old_generation=monitor._generation
+        monitor.stop()
+        monitor._failure(old_generation,"Old sink disconnected")
+        self.assertFalse(monitor.snapshot()["active"])
+        self.assertEqual(monitor.snapshot()["message"],"Visualizer stopped")
+
     def test_real_capture_is_not_run_on_pygame_thread(self):
         code=Path("touch_radio.py").read_text()
         self.assertIn("audio_spectrum_monitor.start()",code)
