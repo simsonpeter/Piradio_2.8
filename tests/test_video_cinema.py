@@ -4,7 +4,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from video_cinema import cinema_remote_state, validate_cinema_seek
+from video_cinema import cinema_remote_state, validate_cinema_seek, validate_cinema_volume
 from youtube_video_backend import YouTubeVideoBackend
 
 
@@ -154,6 +154,33 @@ class CinemaControlsTests(unittest.TestCase):
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, app)
+
+    def test_cinema_volume_accepts_only_integer_percent(self):
+        for level in (0, 1, 5, 50, 99, 100):
+            with self.subTest(level=level):
+                self.assertEqual(validate_cinema_volume(level), level)
+        for invalid in (None, True, False, "50", -1, 101, 10.5,
+                        float("nan"), float("inf"), {}, []):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    validate_cinema_volume(invalid)
+
+    def test_legacy_cinema_has_volume_slider_and_increment_buttons(self):
+        source = Path("touch_radio.py").read_text(encoding="utf-8")
+        for marker in (
+            'id="pi-video-volume"',
+            'id="pi-video-volume-label"',
+            'id="pi-video-volume-up"',
+            'id="pi-video-volume-down"',
+            'piVideoSetVolume(value)',
+            'piVideoVolumeCommit(value)',
+            'piVideoAdjustVolume(delta)',
+            "validate_cinema_volume(data.get('level'))",
+            '"volume": vol_level',
+            'apply_live_volume(new_volume)',
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, source)
 
     def test_remote_keeps_previous_browser_endpoints(self):
         app = Path("touch_radio.py").read_text(encoding="utf-8")
