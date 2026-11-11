@@ -127,6 +127,12 @@ form.search{display:flex;gap:8px;margin-bottom:12px}form.search button{min-width
    <h2 id="video-title" style="margin:7px 0">Current video</h2>
    <div class="space"><small id="video-state" class="muted">Playing</small><small id="video-time" class="muted">--:--</small></div>
    <input type="range" min="0" max="100" value="0" step="0.5" id="video-seek" aria-label="Video timeline">
+   <div class="volume-row"><label for="video-volume">Pi volume</label><span id="video-volume-label">--%</span></div>
+   <div class="action-row" style="align-items:center;gap:8px;margin-top:3px">
+    <button type="button" id="video-volume-down" aria-label="Volume down 5 percent">−</button>
+    <input type="range" id="video-volume" min="0" max="100" step="1" value="80" aria-label="Cinema volume" style="flex:1;min-width:0">
+    <button type="button" id="video-volume-up" aria-label="Volume up 5 percent">+</button>
+   </div>
    <div class="action-row" style="margin:9px 0">
     <button id="video-prev" type="button">-10s</button>
     <button id="video-toggle" class="primary" type="button">Pause</button>
@@ -177,7 +183,7 @@ form.search{display:flex;gap:8px;margin-bottom:12px}form.search button{min-width
 <script>
 "use strict";
 const state = {session:null,stations:[],favorites:[],bible:null,video:null,tab:"home",
- seekEditing:false,volumeEditing:false,videoEditing:false,pollBusy:false};
+ seekEditing:false,volumeEditing:false,videoEditing:false,cinemaVolumeEditing:false,pollBusy:false};
 const $ = id => document.getElementById(id);
 const sources = {radio:"INTERNET RADIO",youtube_audio:"YOUTUBE AUDIO",youtube_video:"YOUTUBE VIDEO",
  bible:"TAMIL BIBLE",guest_audio:"PHONE AUDIO",guest_video:"PHONE VIDEO",
@@ -397,6 +403,25 @@ async function videoCommand(action,seconds){
  await post("/api/youtube/video",{action:action,seconds:seconds});
  await loadVideo();
 }
+async function setCinemaVolume(value){
+ const level=Math.max(0,Math.min(100,Math.round(Number(value)||0)));
+ const response=await post("/api/youtube/video",{action:"volume",level:level});
+ const actual=Number(response.volume);
+ const volume=Number.isFinite(actual)?actual:level;
+ $("video-volume").value=String(volume);
+ text("video-volume-label",volume+"%");
+ $("volume-slider").value=String(volume);
+ text("volume-label",volume+"%");
+ if(state.session)state.session.volume=volume;
+}
+$("video-volume").addEventListener("pointerdown",()=>state.cinemaVolumeEditing=true);
+$("video-volume").addEventListener("input",()=>text("video-volume-label",$("video-volume").value+"%"));
+$("video-volume").addEventListener("change",()=>{
+ state.cinemaVolumeEditing=false;
+ run(setCinemaVolume($("video-volume").value));
+});
+$("video-volume-up").addEventListener("click",()=>run(setCinemaVolume(Number($("video-volume").value)+5)));
+$("video-volume-down").addEventListener("click",()=>run(setCinemaVolume(Number($("video-volume").value)-5)));
 async function loadVideo(){
  if(state.tab!=="video" && !(state.session&&videoSources.has(state.session.source)))return;
  const data=await api("/api/youtube/video/status");
@@ -407,6 +432,11 @@ async function loadVideo(){
  text("video-title",data.title||"PiRadio media");
  text("video-state",data.paused?"Paused":data.buffering?"Buffering…":data.minimized?"Playing in background":"Playing on Pi");
  text("video-time",data.seekable?formatTime(data.position)+" / "+formatTime(data.duration):"Live / No seek");
+ if(!state.cinemaVolumeEditing && Number.isFinite(Number(data.volume))){
+  const level=Math.max(0,Math.min(100,Math.round(Number(data.volume))));
+  $("video-volume").value=String(level);
+  text("video-volume-label",level+"%");
+ }
  const photo=data.source==="guest_photos",seekable=!!data.seekable;
  const prev=$("video-prev"),next=$("video-next");
  prev.textContent=photo?"Previous photo":"-10s";
