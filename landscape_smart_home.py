@@ -28,9 +28,10 @@ SHORTCUTS = (
     ("YOUTUBE", "youtube", "youtube"),
     ("PHOTOS", "photo_frame", "image"),
     ("FAVOURITES", "favorites", "favorites"),
+    ("SMART HOME", "home_assistant", "home"),
 )
 SHORTCUT_RECTS = {
-    name: pygame.Rect(18 + index * 155, 385, 144, 73)
+    name: pygame.Rect(18 + index * 128, 385, 124, 73)
     for index, (name, _, _) in enumerate(SHORTCUTS)
 }
 
@@ -159,12 +160,13 @@ def draw(surface, font, small, tiny, media=None, *, temperature=None,
     _icon(surface, "pause" if playing else "play",
           MEDIA_PAUSE.center, 30, (20, 22, 24))
 
-    # Five deliberate, spacious touch targets instead of the permanent sidebar.
+    # Six physical shortcuts; every existing destination is preserved.
     for name, target, icon in SHORTCUTS:
         rect = SHORTCUT_RECTS[name]
         _card(surface, rect, 15)
-        _icon(surface, icon, (rect.x + 36, rect.y + 34), 27, CYAN)
-        _text(surface, tiny, name, rect.x + 60, rect.y + 29, WHITE, 82)
+        _icon(surface, icon, (rect.centerx, rect.y + 23), 23, CYAN)
+        label = tiny.render(name, True, WHITE)
+        surface.blit(label, label.get_rect(center=(rect.centerx, rect.y + 52)))
     return True
 
 
