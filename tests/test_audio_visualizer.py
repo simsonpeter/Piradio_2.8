@@ -1,5 +1,7 @@
 """Non-invasive PiRadio 7 Audio Visualizer Pro tests."""
 import unittest
+import math
+import struct
 from pathlib import Path
 from unittest.mock import Mock
 import pygame
@@ -29,6 +31,17 @@ class SpectrumTests(unittest.TestCase):
     @unittest.skipIf(np is None,"Optional python3-numpy not installed in runner")
     def test_silence_is_not_fake_signal(self):
         self.assertEqual(spectrum_from_pcm(bytes(2048*2)),tuple([0.0]*BANDS))
+
+    @unittest.skipIf(np is None,"Optional python3-numpy not installed in runner")
+    def test_real_tone_drives_matching_low_frequency_bands(self):
+        sine=[int(14000*math.sin(2*math.pi*100*i/16000))
+              for i in range(2048)]
+        pcm=struct.pack("<2048h",*sine)
+        bars=spectrum_from_pcm(pcm)
+        self.assertEqual(len(bars),24)
+        self.assertGreater(max(bars[:7]),0.4)
+        self.assertLess(max(bars[13:]),0.08)
+        self.assertTrue(all(0 <= v <= 1 for v in bars))
     def test_real_capture_is_not_run_on_pygame_thread(self):
         code=Path("touch_radio.py").read_text()
         self.assertIn("audio_spectrum_monitor.start()",code)
