@@ -8,6 +8,9 @@ on:
       - 'media_session.py'
       - 'media_transport.py'
       - 'video_cinema.py'
+      - 'smart_remote_v2.py'
+      - 'remote_v2_actions.py'
+      - 'tests/test_smart_remote_v2.py'
       - 'youtube_video_backend.py'
       - 'tests/test_video_cinema.py'
       - 'youtube_video_backend.py'
@@ -20,6 +23,9 @@ on:
       - 'media_session.py'
       - 'media_transport.py'
       - 'video_cinema.py'
+      - 'smart_remote_v2.py'
+      - 'remote_v2_actions.py'
+      - 'tests/test_smart_remote_v2.py'
       - 'youtube_video_backend.py'
       - 'tests/test_video_cinema.py'
       - 'youtube_video_backend.py'
@@ -38,13 +44,26 @@ jobs:
         with:
           python-version: '3.12'
       - name: Check Python syntax without Raspberry Pi hardware
-        run: python -m py_compile media_session.py media_transport.py video_cinema.py youtube_video_backend.py touch_radio.py
+        run: python -m py_compile media_session.py media_transport.py video_cinema.py youtube_video_backend.py touch_radio.py smart_remote_v2.py remote_v2_actions.py
       - name: Test active media source priority
         run: python -m unittest discover -s tests -p 'test_media_session.py' -v
       - name: Validate unified transport command planning
         run: python -m unittest discover -s tests -p 'test_media_transport.py' -v
       - name: Test Cinema timeline, buffering and remote state
         run: python -m unittest discover -s tests -p 'test_video_cinema.py' -v
+      - name: Test Smart Remote V2 and safe Bible station commands
+        run: python -m unittest discover -s tests -p 'test_smart_remote_v2.py' -v
+      - name: Validate Smart Remote V2 JavaScript syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from smart_remote_v2 import REMOTE_V2_HTML
+          assert REMOTE_V2_HTML.count('<script>') == 1
+          assert REMOTE_V2_HTML.count('</script>') == 1
+          script = REMOTE_V2_HTML.split('<script>', 1)[1].split('</script>', 1)[0]
+          Path('/tmp/piradio-smart-remote-v2.js').write_text(script)
+          PY
+          node --check /tmp/piradio-smart-remote-v2.js
       - name: Validate phone Cinema JavaScript syntax
         run: |
           python - <<'PY'
