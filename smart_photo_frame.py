@@ -741,6 +741,18 @@ label{display:block;margin:12px 0 4px}.switch{display:flex;align-items:center;ga
 <input id="pin" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="000000">
 <button id="connect" class="primary">Connect to Photo Frame</button></section>
 <div id="album">
+<section><h2>Photo albums</h2>
+<p>Old photos remain in the original gallery. Create an album to organise new uploads.</p>
+<label for="album-select">Show album on PiRadio</label>
+<select id="album-select" aria-label="Choose an album"><option value="All Photos">All Photos</option></select>
+<label for="album-new">New album name</label>
+<div class="row"><input id="album-new" type="text" maxlength="24" placeholder="Family or Holidays" style="flex:1;min-width:150px;margin:4px 0">
+<button id="album-create" type="button" class="primary">Create album</button></div>
+<label for="transition">Picture transition</label>
+<select id="transition"><option value="fade">Smooth fade (0.6 seconds)</option>
+<option value="slow_fade">Cinematic fade (1.5 seconds)</option>
+<option value="instant">Instant change</option></select>
+</section>
 <section><h2>Your photo gallery</h2><p id="count">Loading photos...</p>
 <label for="photos">Choose up to 20 photos</label>
 <input id="photos" type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif">
@@ -787,7 +799,16 @@ async function api(path,options={}){
 }
 async function refresh(){
  const data=await api("/api/frame/status");
- byId("count").textContent=data.photos+" photo"+(data.photos===1?"":"s")+" saved on PiRadio";
+ byId("count").textContent=data.photos+" photo"+(data.photos===1?"":"s")+
+  " in "+(data.album||"All Photos")+" • "+(data.total_photos||0)+" total";
+ const albumSelect=byId("album-select");
+ albumSelect.replaceChildren();
+ for(const name of (data.albums||["All Photos"])){
+  const option=document.createElement("option");
+  option.value=name;option.textContent=name;albumSelect.append(option);
+ }
+ albumSelect.value=data.album||"All Photos";
+ byId("transition").value=data.transition||"fade";
  for(const key of ["interval","fit","shuffle","clock","weather","auto_idle"]){
   const el=byId(key);if(el.type==="checkbox")el.checked=data.settings[key];else el.value=String(data.settings[key]);
  }
@@ -801,14 +822,36 @@ byId("connect").addEventListener("click",async()=>{
   message("Connected. You can add photos and control the frame.");await refresh();
  }catch(err){message(err.message);}
 });
+async function albumCommand(action,payload){
+ const data=await api("/api/frame/albums",{
+  method:"POST",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({action,...payload})
+ });
+ await refresh();
+ message("Photo Frame: "+(data.album||"All Photos")+" selected");
+}
+byId("album-select").addEventListener("change",async()=>{
+ try{await albumCommand("select",{album:byId("album-select").value});}
+ catch(error){message(error.message);await refresh().catch(()=>{});}
+});
+byId("album-create").addEventListener("click",async()=>{
+ const name=byId("album-new").value.trim();
+ if(!name){message("Enter an album name");return;}
+ try{await albumCommand("create",{name});byId("album-new").value="";}
+ catch(error){message(error.message);}
+});
+byId("transition").addEventListener("change",async()=>{
+ try{await albumCommand("transition",{style:byId("transition").value});}
+ catch(error){message(error.message);}
+});
 byId("send").addEventListener("click",async()=>{
  const photos=byId("photos").files;if(!photos.length){message("Choose photos first.");return;}
  const button=byId("send");button.disabled=true;message("Sending photos...");
  try{
   const form=new FormData();for(const f of photos)form.append("photos",f,f.name);
   const data=await api("/api/frame/upload",{method:"POST",body:form});
-  byId("count").textContent=data.total+" photos saved on PiRadio";
   byId("photos").value="";message("Added "+data.added+" photos successfully.");
+  await refresh();
  }catch(err){message(err.message);}finally{button.disabled=false;}
 });
 byId("save").addEventListener("click",async()=>{
