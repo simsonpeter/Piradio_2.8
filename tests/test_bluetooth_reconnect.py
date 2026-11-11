@@ -82,6 +82,23 @@ class Tests(unittest.TestCase):
         self.run_once()
         self.assertEqual(self.supervisor.snapshot()["attempts"],2)
         self.assertIn(str(BACKOFF[1]),self.supervisor.snapshot()["message"])
+    def test_manual_audio_selection_stops_automatic_bluetooth_takeover(self):
+        self.manager.bluetooth_auto_restore_enabled=False
+        self.manager.current_output="analog"
+        self.supervisor.tick()
+        self.assertEqual(DeferredThread.calls,[])
+        self.assertEqual(self.manager.calls,[])
+        self.assertIn("manual audio",self.supervisor.snapshot()["message"])
+        self.manager.bluetooth_auto_restore_enabled=True
+        self.now[0]+=41
+        self.run_once()
+        self.assertEqual(len(self.manager.calls),1)
+
+    def test_output_selection_updates_supervisor_gate(self):
+        code=Path("touch_radio.py").read_text()
+        self.assertIn("self.bluetooth_auto_restore_enabled = False",code)
+        self.assertIn("self.bluetooth_auto_restore_enabled = True",code)
+
     def test_manual_connection_lock_defers_worker(self):
         self.manager.bluetooth_lock.acquire()
         try:
