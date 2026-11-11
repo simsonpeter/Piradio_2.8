@@ -51,10 +51,20 @@ class SmartRemoteV2Tests(unittest.TestCase):
             "bible-book", "bible-chapter", "bible-play", "bible-bookmarks",
             "youtube-query", "youtube-results", "video-controls",
             "video-seek", "video-minimize", "video-restore",
+            "video-volume", "video-volume-label", "video-volume-up",
+            "video-volume-down",
             "weather-forecast", "online-dot", "toast",
         ):
             with self.subTest(id=name):
                 self.assertIn(name, parser.ids)
+
+    def test_cinema_volume_uses_shared_pi_volume_not_phone_audio(self):
+        source = REMOTE_V2_HTML
+        self.assertIn('post("/api/youtube/video",{action:"volume",level:level})', source)
+        self.assertIn('async function setCinemaVolume(value)', source)
+        self.assertIn('state.cinemaVolumeEditing', source)
+        self.assertIn('text("video-volume-label",level+"%")', source)
+        self.assertIn('text("volume-label",volume+"%")', source)
 
     def test_old_photo_and_cast_portals_are_preserved(self):
         parser = RemoteHtmlParser()
