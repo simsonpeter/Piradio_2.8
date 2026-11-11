@@ -75,3 +75,15 @@ def cinema_remote_state(status):
         "position": min(position, duration) if duration else position,
         "seekable": seekable,
     }
+
+
+def validate_cinema_volume(level):
+    """Accept a whole-number Pi volume percentage from the phone remote.
+
+    Reject booleans, negative levels, malformed values and oversized inputs.
+    Changing the video volume uses PiRadio's central volume handler, so the
+    Pi touchscreen and other remotes remain synchronised.
+    """
+    if type(level) is not int or not 0 <= level <= 100:
+        raise ValueError("Volume must be a whole number from 0 to 100")
+    return level
