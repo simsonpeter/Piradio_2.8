@@ -18,6 +18,7 @@ except ImportError:
 BANDS = 24
 SAMPLE_RATE = 16000
 FRAME_SAMPLES = 2048
+RETRY_SECONDS = 20
 FREQUENCIES = (45, 60, 78, 100, 130, 170, 220, 285, 370, 480,
                620, 800, 1030, 1320, 1700, 2200, 2800, 3500, 4300,
                5100, 5900, 6600, 7200, 7800)
@@ -53,10 +54,12 @@ def monitor_command(sink):
 
 class AudioSpectrumMonitor:
     def __init__(self, run=subprocess.run, popen=subprocess.Popen,
-                 executable=shutil.which):
+                 executable=shutil.which, clock=time.monotonic):
         self._run = run
         self._popen = popen
         self._executable = executable
+        self._clock = clock
+        self._next_attempt = 0.0
         self._lock = threading.Lock()
         self._process = None
         self._active = False
@@ -69,18 +72,20 @@ class AudioSpectrumMonitor:
             return {"levels": self._levels, "active": self._active,
                     "message": self._message}
 
-    def _set(self, levels, message, active=None):
+    def _failure(self, generation, message):
+        """Ignore late errors from monitor workers that have been stopped."""
         with self._lock:
-            self._levels = tuple(levels)
-            self._message = message
-            if active is not None:
-                self._active = active
+            if self._generation == generation:
+                self._levels = tuple([0.0] * BANDS)
+                self._message = message
+                self._active = False
 
     def start(self):
         with self._lock:
-            if self._active:
+            if self._active or self._clock() < self._next_attempt:
                 return
             self._active = True
+            self._next_attempt = self._clock() + RETRY_SECONDS
             self._generation += 1
             generation = self._generation
             self._message = "Connecting to system audio monitor"
@@ -95,6 +100,8 @@ class AudioSpectrumMonitor:
             self._process = None
             self._levels = tuple([0.0] * BANDS)
             self._message = "Visualizer stopped"
+            # Explicitly leaving and reopening allows an immediate retry.
+            self._next_attempt = 0.0
         if process is not None:
             try:
                 process.terminate()
@@ -103,10 +110,10 @@ class AudioSpectrumMonitor:
 
     def _worker(self, generation):
         if np is None:
-            self._set([0.0] * BANDS, "Install python3-numpy for spectrum", False)
+            self._failure(generation, "Install python3-numpy for spectrum")
             return
         if not self._executable("parec") or not self._executable("pactl"):
-            self._set([0.0] * BANDS, "PulseAudio monitor unavailable (parec/pactl)", False)
+            self._failure(generation, "PulseAudio monitor unavailable (parec/pactl)")
             return
         process = None
         try:
@@ -137,11 +144,7 @@ class AudioSpectrumMonitor:
                         break
                     self._levels = levels
         except (OSError, RuntimeError, subprocess.TimeoutExpired, ValueError) as error:
-            with self._lock:
-                if self._generation == generation:
-                    self._levels = tuple([0.0] * BANDS)
-                    self._message = str(error)[:76] or "Audio monitor unavailable"
-                    self._active = False
+            self._failure(generation, str(error)[:76] or "Audio monitor unavailable")
         finally:
             if process is not None:
                 try:
