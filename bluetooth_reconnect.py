@@ -35,6 +35,12 @@ class BluetoothReconnectSupervisor:
                 self._message = "No preferred Bluetooth speaker"
                 self._failures = 0
             return
+        # Selecting Auto, HDMI or analog on purpose must not be undone by
+        # the next background Bluetooth health check.
+        if not getattr(self.manager, "bluetooth_auto_restore_enabled", True):
+            with self._lock:
+                self._message = "Auto-reconnect paused (manual audio selection)"
+            return
         now = self.clock() if now is None else now
         with self._lock:
             if self._running or now < self._next:
