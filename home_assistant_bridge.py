@@ -219,6 +219,13 @@ class HomeAssistantBridge:
             if not 200 <= response.status_code < 300:
                 raise RuntimeError("Device command rejected")
             with self._lock:
+                # Optimistic confirmation from Home Assistant's successful
+                # service response; periodic state polling still reconciles
+                # the real device state on the next frame.
+                for item in self._items:
+                    if item["id"] == entity_id:
+                        item["state"] = "off" if action == "turn_off" else "on"
+                        break
                 self._next_check = 0
                 self._error = ""
         except (requests.RequestException, ValueError, RuntimeError, PermissionError, OSError):
