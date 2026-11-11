@@ -30,6 +30,9 @@ MAX_UPLOAD = 128 * 1024 * 1024
 MAX_FILE = 20 * 1024 * 1024
 MAX_GALLERY_BYTES = 1024 * 1024 * 1024
 DURATIONS = (5, 8, 12, 20, 30)
+ALL_ALBUMS = "All Photos"
+TRANSITIONS = {"fade": 0.6, "slow_fade": 1.5, "instant": 0.0}
+ALBUM_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,23}$")
 DEFAULTS = {
     "interval": 8,
     "shuffle": True,
@@ -70,6 +73,11 @@ class PhotoFrameLibrary:
         self.lock = threading.RLock()
         self.options = dict(DEFAULTS)
         self._load_options()
+        self.album_settings_path = self.settings_path.with_name(
+            self.settings_path.stem + "-albums.json")
+        self.active_album = ALL_ALBUMS
+        self.transition = "fade"
+        self._load_album_options()
         self.pairing = False
         self.pin = None
         self.pin_expires = 0
@@ -111,10 +119,106 @@ class PhotoFrameLibrary:
                 tmp.unlink(missing_ok=True)
             return dict(self.options)
 
+    def _load_album_options(self):
+        try:
+            data = json.loads(self.album_settings_path.read_text(encoding="utf-8"))
+            choice = data.get("album", ALL_ALBUMS)
+            if choice == ALL_ALBUMS or (
+                    isinstance(choice, str) and ALBUM_PATTERN.fullmatch(choice)):
+                self.active_album = choice
+            transition = data.get("transition", "fade")
+            if transition in TRANSITIONS:
+                self.transition = transition
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+
+    def _save_album_options(self):
+        tmp = self.album_settings_path.with_suffix(".tmp")
+        try:
+            tmp.write_text(json.dumps({"album": self.active_album,
+                                       "transition": self.transition}),
+                           encoding="utf-8")
+            os.chmod(tmp, 0o600)
+            tmp.replace(self.album_settings_path)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    def list_albums(self):
+        """Never follow symlinks or interpret phone-supplied paths."""
+        try:
+            albums = sorted(
+                (p.name for p in self.root.iterdir()
+                 if p.is_dir() and not p.is_symlink()
+                 and ALBUM_PATTERN.fullmatch(p.name)),
+                key=str.lower,
+            )[:12]
+        except OSError:
+            albums = []
+        return [ALL_ALBUMS] + albums
+
+    def create_album(self, name):
+        if (not isinstance(name, str) or not ALBUM_PATTERN.fullmatch(name)
+                or name == ALL_ALBUMS):
+            raise ValueError("Album name must be 1-24 letters, digits, spaces, _ or -")
+        with self.lock:
+            existing = self.list_albums()
+            if name not in existing and len(existing) - 1 >= 12:
+                raise ValueError("Maximum 12 albums")
+            folder = self.root / name
+            if folder.is_symlink() or (folder.exists() and not folder.is_dir()):
+                raise ValueError("Invalid album folder")
+            folder.mkdir(exist_ok=True)
+            self.active_album = name
+            self._save_album_options()
+            return self.album_status()
+
+    def choose_album(self, name):
+        with self.lock:
+            if not isinstance(name, str) or name not in self.list_albums():
+                raise ValueError("Choose an existing album")
+            self.active_album = name
+            self._save_album_options()
+            return self.album_status()
+
+    def set_transition(self, style):
+        with self.lock:
+            if not isinstance(style, str) or style not in TRANSITIONS:
+                raise ValueError("Choose a supported transition")
+            self.transition = style
+            self._save_album_options()
+            return self.album_status()
+
+    def album_status(self):
+        return {"albums": self.list_albums(), "album": self.active_album,
+                "transition": self.transition}
+
+    def all_photos(self):
+        """Aggregate legacy root photos and immediate named album folders."""
+        try:
+            folders = [self.root] + [
+                self.root / name for name in self.list_albums()[1:]
+            ]
+            photos = []
+            for folder in folders:
+                for p in folder.iterdir():
+                    if (p.is_file() and not p.is_symlink()
+                            and p.suffix.lower() in ALLOWED):
+                        photos.append(p)
+            return sorted(photos, key=lambda p: (p.parent.name.lower(), p.name.lower()))[:MAX_PHOTOS]
+        except OSError:
+            return []
+
     def list_photos(self):
+        """Existing callers see all photos until an album is chosen."""
+        if self.active_album == ALL_ALBUMS:
+            return self.all_photos()
+        folder = self.root / self.active_album
+        if (self.active_album not in self.list_albums()
+                or folder.is_symlink()):
+            return []
         try:
             return sorted(
-                (p for p in self.root.iterdir() if p.is_file()
+                (p for p in folder.iterdir() if p.is_file()
                  and not p.is_symlink() and p.suffix.lower() in ALLOWED),
                 key=lambda p: p.name.lower(),
             )[:MAX_PHOTOS]
@@ -178,7 +282,8 @@ class PhotoFrameLibrary:
     def add_photos(self, uploads):
         if not uploads or len(uploads) > 20:
             raise ValueError("Select 1–20 image files")
-        existing = self.list_photos()
+        # Gallery quota applies to every album, not just the selected album.
+        existing = self.all_photos()
         if len(existing) + len(uploads) > MAX_PHOTOS:
             raise ValueError("Gallery limit: 300 photos")
         used = sum(p.stat().st_size for p in existing)
@@ -192,7 +297,11 @@ class PhotoFrameLibrary:
                 suffix = Path(basename).suffix.lower()
                 if suffix not in ALLOWED:
                     raise ValueError("Only JPEG, PNG, WebP and GIF images are supported")
-                target = self.root / (secrets.token_hex(10) + "_" + basename)
+                folder = (self.root if self.active_album == ALL_ALBUMS
+                          else self.root / self.active_album)
+                if folder.is_symlink() or not folder.is_dir():
+                    raise ValueError("Choose a valid photo album")
+                target = folder / (secrets.token_hex(10) + "_" + basename)
                 # A temporary file avoids exposing a partially written image.
                 temporary = self.root / (secrets.token_hex(12) + ".upload")
                 header = b""
@@ -276,7 +385,9 @@ def register_frame_routes(app, library):
         return jsonify({
             "success": True,
             "photos": len(library.list_photos()),
+            "total_photos": len(library.all_photos()),
             "settings": dict(library.options),
+            **library.album_status(),
         })
 
     @app.route("/api/frame/upload", methods=["POST"])
@@ -300,6 +411,28 @@ def register_frame_routes(app, library):
             library.request_command("refresh")
             return jsonify({"success": True, "settings": options})
         except (OSError, ValueError) as error:
+            return jsonify({"success": False, "error": str(error)}), 400
+
+    @app.route("/api/frame/albums", methods=["POST"])
+    def photo_frame_albums():
+        if not library.authorize(request):
+            return unauthorized()
+        data = request.get_json(silent=True) or {}
+        action = data.get("action") if isinstance(data, dict) else None
+        try:
+            if action == "create":
+                status = library.create_album(data.get("name"))
+            elif action == "select":
+                status = library.choose_album(data.get("album"))
+            elif action == "transition":
+                status = library.set_transition(data.get("style"))
+            else:
+                raise ValueError("Unsupported album action")
+            library.request_command("refresh")
+            return jsonify({"success": True, **status,
+                            "photos": len(library.list_photos()),
+                            "total_photos": len(library.all_photos())})
+        except (ValueError, OSError) as error:
             return jsonify({"success": False, "error": str(error)}), 400
 
     @app.route("/api/frame/control", methods=["POST"])
@@ -423,7 +556,10 @@ class PhotoFrameRenderer:
                     # Skip corrupt image on next interval; never crash Pygame.
                     self.change_at = now + 2
                     return
-                self.previous = self.image
+                self.previous = (
+                    self.image if TRANSITIONS.get(self.library.transition, 0.6) > 0
+                    else None
+                )
                 self.image = pygame.image.fromstring(pixels, (800,480), "RGB")
                 self.path = source
                 self.image_changed_at = now
@@ -449,7 +585,9 @@ class PhotoFrameRenderer:
         if self.image is not None:
             surface.blit(self.image, (0,0))
             if self.previous is not None:
-                ratio = (now - self.image_changed_at) / 0.6
+                duration = TRANSITIONS.get(self.library.transition, 0.6)
+                ratio = ((now - self.image_changed_at) / duration
+                         if duration else 1.0)
                 if ratio < 1:
                     previous = self.previous.copy()
                     previous.set_alpha(int(255 * max(0,1-ratio)))
