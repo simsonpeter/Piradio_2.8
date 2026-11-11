@@ -35,6 +35,7 @@ from landscape_smart_home import (
     draw as draw_smart_home, hit as smart_home_hit,
 )
 from audio_visualizer import AudioSpectrumMonitor
+from bluetooth_reconnect import BluetoothReconnectSupervisor
 from landscape_audio_visualizer import (
     draw as draw_audio_visualizer, hit as audio_visualizer_hit,
 )
@@ -131,11 +132,8 @@ class AudioOutputManager:
         self.default_bluetooth_address = None
         self.load_settings()
         self.scan_outputs()
-        if self.default_bluetooth_address:
-            threading.Thread(
-                target=self._restore_bluetooth_default,
-                daemon=True
-            ).start()
+        # The lightweight supervisor below handles startup and later
+        # disconnects without a second competing retry worker.
 
     def _run(self, command, timeout=15, input_text=None):
         try:
@@ -540,6 +538,7 @@ class AudioOutputManager:
             return False
 
 audio_manager = AudioOutputManager()
+bluetooth_reconnect = BluetoothReconnectSupervisor(audio_manager)
 vol_level = 80
 last_unmuted_volume = 80
 
@@ -7047,6 +7046,10 @@ def draw_bluetooth_screen(now):
             screen, f_sm, "No devices loaded", muted_ink_on(body), empty_rect
         )
 
+    reconnect_label = bluetooth_reconnect.snapshot()["message"]
+    small_status = f_tiny.render(fit_label(reconnect_label, 40), True, UI_MUTED)
+    screen.blit(small_status,
+                (160 - small_status.get_width() // 2, 415))
     labeled_button(
         screen, btn_bluetooth_back, UI_BLUE, f_sm, "‹  SETTINGS", 16
     )
@@ -7752,6 +7755,7 @@ immersive_swipe_start = None
 while True:
     now = time.time()
     home_assistant.tick()
+    bluetooth_reconnect.tick()
     if active_page == "visualizer" and not visualizer_running:
         audio_spectrum_monitor.start()
         visualizer_running = True
